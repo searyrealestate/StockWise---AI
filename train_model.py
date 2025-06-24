@@ -13,7 +13,7 @@ from sklearn.linear_model import SGDClassifier, LogisticRegression
 
 
 def version():
-    v = "SW version: 0.0.2"
+    v = "SW version: 0.0.3"
     print(v)
     return v
 
@@ -75,6 +75,7 @@ def predict_live(symbol, model, window=50):
     end_date = datetime.datetime.today()
     start_date = end_date - datetime.timedelta(days=90)
     df = yf.download(symbol, start=start_date, end=end_date, auto_adjust=True)
+    df = df.reset_index().set_index("Date")
 
     # Ensure there's enough data to compute rolling features
     if len(df) < window:
@@ -142,20 +143,57 @@ def compute_macd(close, fast=12, slow=26, signal=9):
 
 
 def load_and_prepare_data(symbol, start_date="2022-01-01", end_date="2024-12-31"):
+    # Download main symbol data and flatten index
     df = yf.download(symbol, start=start_date, end=end_date, auto_adjust=True)
+    df = df.reset_index().set_index("Date")
 
+    # Core technical indicators
     df["MA20"] = df["Close"].rolling(window=20).mean()
     df["MA50"] = df["Close"].rolling(window=50).mean()
     df["Volatility"] = df["Close"].rolling(window=10).std()
     df["RSI"] = compute_rsi(df["Close"])
-
-
     df["MACD"], df["MACD_Signal"], df["MACD_Hist"] = compute_macd(df["Close"])
 
+    # === Enriched Features ===
+
+    # Candlestick patterns
+    df["Bullish_Engulfing"] = (
+        (df["Close"] > df["Open"]) &
+        (df["Open"].shift(1) > df["Close"].shift(1))
+    ).astype(int)
+
+    df["Hammer"] = (
+        ((df["High"] - df["Low"]) > 3 * abs(df["Open"] - df["Close"])) &
+        (df["Close"] > df["Open"])
+    ).astype(int)
+
+    # Price position relative to recent range
+    df["Pct_from_20d_high"] = (
+        (df["Close"] - df["Close"].rolling(20).max()) /
+        df["Close"].rolling(20).max()
+    )
+
+    df["Pct_from_20d_low"] = (
+        (df["Close"] - df["Close"].rolling(20).min()) /
+        df["Close"].rolling(20).min()
+    )
+
+    # On-Balance Volume
+    df["OBV"] = (np.sign(df["Close"].diff()) * df["Volume"]).fillna(0).cumsum()
+    df["OBV_10_MA"] = df["OBV"].rolling(window=10).mean()
+
+    # Correlation with SPY (market context)
+    spy = yf.download("^GSPC", start=start_date, end=end_date, auto_adjust=True)
+    spy = spy.reset_index().set_index("Date")
+    spy["SPY_Return"] = spy["Close"].pct_change()
+    df["SPY_Return"] = spy["SPY_Return"]
+    df["Correl_with_SPY_10"] = df["Close"].pct_change().rolling(10).corr(df["SPY_Return"])
+
+    # Future return target
     df["Future_Return"] = df["Close"].shift(-15) / df["Close"] - 1
     df["Target"] = (df["Future_Return"] > 0.05).astype(int)
 
-    # Lag features: yesterday's signals
+    # Lag features
     df["RSI_lag1"] = df["RSI"].shift(1)
     df["MACD_lag1"] = df["MACD"].shift(1)
     df["MACD_Signal_lag1"] = df["MACD_Signal"].shift(1)
@@ -164,14 +202,14 @@ def load_and_prepare_data(symbol, start_date="2022-01-01", end_date="2024-12-31"
 
     return df.dropna()
 
-
 def train_model(df):
-    import matplotlib.pyplot as plt
 
     # Define features
     features = [
         "MA20", "MA50", "Volatility", "RSI", "MACD", "MACD_Signal", "MACD_Hist",
-        "RSI_lag1", "MACD_lag1", "MACD_Signal_lag1", "Close_lag1", "Return_lag1"
+        "RSI_lag1", "MACD_lag1", "MACD_Signal_lag1", "Close_lag1", "Return_lag1",
+        "Bullish_Engulfing", "Hammer", "Pct_from_20d_high", "Pct_from_20d_low",
+        "OBV", "OBV_10_MA", "Correl_with_SPY_10"
     ]
 
     # Split features and labels
