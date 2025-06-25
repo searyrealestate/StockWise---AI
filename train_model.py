@@ -23,7 +23,7 @@ enriched_features = original_features + [
 
 
 def version():
-    v = "SW version: 0.0.3"
+    v = "SW version: 0.0.5"
     print(v)
     return v
 
@@ -305,9 +305,133 @@ def train_model(df):
     return model
 
 
+def feature_drop_test(df, base_features, new_features):
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import accuracy_score
+    from xgboost import XGBClassifier
+    from imblearn.over_sampling import SMOTE
+
+    print("=== Feature Drop Impact Test ===")
+
+    # Baseline with all enriched features
+    full_set = base_features + new_features
+
+    def train(features):
+        X = df[features]
+        y = df["Target"]
+        sm = SMOTE(random_state=42)
+        X_res, y_res = sm.fit_resample(X, y)
+        X_train, X_test, y_train, y_test = train_test_split(
+            X_res, y_res, test_size=0.2, random_state=42
+        )
+        model = XGBClassifier(
+            n_estimators=200, max_depth=4, learning_rate=0.1,
+            subsample=0.9, colsample_bytree=0.9,
+            eval_metric="logloss", use_label_encoder=False,
+            random_state=42
+        )
+        model.fit(X_train, y_train)
+        return accuracy_score(y_test, model.predict(X_test))
+
+    base_acc = train(full_set)
+    print(f"\nFull enriched feature set accuracy: {base_acc:.4f}")
+
+    # Drop each feature one-by-one
+    drops = {}
+    for f in new_features:
+        reduced = [feat for feat in full_set if feat != f]
+        acc = train(reduced)
+        delta = base_acc - acc
+        drops[f] = delta
+        print(f"Dropped {f:25s} → accuracy: {acc:.4f} | Δ: {delta:+.4f}")
+
+    # Optional: print sorted impact
+    print("\n=== Sorted Impact (Descending) ===")
+    for feat, delta in sorted(drops.items(), key=lambda x: -x[1]):
+        print(f"{feat:25s} → Δ accuracy: {delta:+.4f}")
+
+
+def rolling_window_backtest(df, features, window_months=6, test_months=1):
+    import matplotlib.pyplot as plt
+    from dateutil.relativedelta import relativedelta
+    from sklearn.metrics import accuracy_score
+    from xgboost import XGBClassifier
+    from imblearn.over_sampling import SMOTE
+
+    df = df.copy()
+    df.index = pd.to_datetime(df.index)
+    df = df.sort_index()
+    start = df.index.min() + relativedelta(months=window_months + test_months)
+    end = df.index.max() - relativedelta(months=test_months)
+
+    current = start
+    results = []
+
+    while current <= end:
+        train_end = current
+        test_start = current
+        test_end = test_start + relativedelta(months=test_months)
+
+        train_data = df[df.index < train_end]
+        test_data = df[(df.index >= test_start) & (df.index < test_end)]
+
+        if len(train_data) < 150 or len(test_data) < 15:
+            current += relativedelta(months=1)
+            print(f"Skipping → Train: {len(train_data)} | Test: {len(test_data)} | Date: {test_end.strftime('%Y-%m')}")
+            continue
+
+        X_train = train_data[features]
+        y_train = train_data["Target"]
+        X_test = test_data[features]
+        y_test = test_data["Target"]
+
+        sm = SMOTE(random_state=42)
+        X_train_res, y_train_res = sm.fit_resample(X_train, y_train)
+
+        model = XGBClassifier(
+            n_estimators=200, max_depth=4, learning_rate=0.1,
+            subsample=0.9, colsample_bytree=0.9,
+            eval_metric="logloss", use_label_encoder=False,
+            random_state=42
+        )
+        model.fit(X_train_res, y_train_res)
+        y_pred = model.predict(X_test)
+        acc = accuracy_score(y_test, y_pred)
+
+        results.append((test_end.strftime("%Y-%m"), acc))
+        print(f"{test_end.strftime('%Y-%m')} → Accuracy: {acc:.4f}")
+
+        current += relativedelta(months=1)
+
+    if not results:
+        print("No valid rolling windows found. Try decreasing window size or using more data.")
+        return
+
+    # Plot results
+    months, accs = zip(*results)
+    plt.figure(figsize=(10, 4))
+    plt.plot(months, accs, marker="o")
+    plt.title("Rolling Window Accuracy Over Time")
+    plt.ylabel("Accuracy")
+    plt.xticks(rotation=45)
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+
 if __name__ == "__main__":
     df = load_and_prepare_data("AAPL")
-    compare_models(df)
+    rolling_window_backtest(df, features=enriched_features)
+
+    # feature_drop_test(
+    #     df,
+    #     base_features=original_features,
+    #     new_features=[
+    #         "Bullish_Engulfing", "Hammer", "Pct_from_20d_high", "Pct_from_20d_low",
+    #         "OBV", "OBV_10_MA", "Correl_with_SPY_10"
+    #     ]
+    # )
+    # compare_models(df)
     # model = train_model(df)
     # # train_multiple_models(df)
     # predict_live("AAPL", model)
