@@ -11,6 +11,16 @@ from xgboost import XGBClassifier
 import matplotlib.pyplot as plt
 from sklearn.linear_model import SGDClassifier, LogisticRegression
 
+original_features = [
+        "MA20", "MA50", "Volatility", "RSI", "MACD", "MACD_Signal", "MACD_Hist",
+        "RSI_lag1", "MACD_lag1", "MACD_Signal_lag1", "Close_lag1", "Return_lag1"
+    ]
+
+enriched_features = original_features + [
+    "Bullish_Engulfing", "Hammer", "Pct_from_20d_high", "Pct_from_20d_low",
+    "OBV", "OBV_10_MA", "Correl_with_SPY_10"
+]
+
 
 def version():
     v = "SW version: 0.0.3"
@@ -202,8 +212,41 @@ def load_and_prepare_data(symbol, start_date="2022-01-01", end_date="2024-12-31"
 
     return df.dropna()
 
-def train_model(df):
 
+def compare_models(df):
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import accuracy_score, classification_report
+    from xgboost import XGBClassifier
+    from imblearn.over_sampling import SMOTE
+
+    def run_model(feature_set, name):
+        X = df[feature_set]
+        y = df["Target"]
+
+        smote = SMOTE(random_state=42)
+        X_res, y_res = smote.fit_resample(X, y)
+        X_train, X_test, y_train, y_test = train_test_split(X_res, y_res, test_size=0.2, random_state=42)
+
+        model = XGBClassifier(
+            n_estimators=200, max_depth=4, learning_rate=0.1,
+            subsample=0.9, colsample_bytree=0.9,
+            eval_metric="logloss", use_label_encoder=False,
+            random_state=42
+        )
+        model.fit(X_train, y_train)
+        y_pred = model.predict(X_test)
+        acc = accuracy_score(y_test, y_pred)
+
+        print(f"\n=== {name} ===")
+        print(f"Accuracy: {acc:.4f}")
+        print(classification_report(y_test, y_pred))
+
+    # Run both comparisons
+    run_model(original_features, "Baseline Feature Set")
+    run_model(enriched_features, "Enriched Feature Set")
+
+
+def train_model(df):
     # Define features
     features = [
         "MA20", "MA50", "Volatility", "RSI", "MACD", "MACD_Signal", "MACD_Hist",
@@ -264,7 +307,8 @@ def train_model(df):
 
 if __name__ == "__main__":
     df = load_and_prepare_data("AAPL")
-    model = train_model(df)
-    # train_multiple_models(df)
-    predict_live("AAPL", model)
+    compare_models(df)
+    # model = train_model(df)
+    # # train_multiple_models(df)
+    # predict_live("AAPL", model)
 
