@@ -13,6 +13,8 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 from dateutil.relativedelta import relativedelta
+import uuid
+from plotly.subplots import make_subplots
 
 debug = False
 
@@ -30,7 +32,7 @@ enriched_features = original_features + [
 
 
 def version():
-    v = "SW version: 0.0.8"
+    v = "SW version: 0.0.9"
     st.write(v)
     return v
 
@@ -309,30 +311,31 @@ def train_model(df, plot_type=0):
 
     y_pred_eval = model.predict(X_eval)
 
-    with st.expander("XGBClassifier", expanded=True):
-        st.write("=== Performance Report ===")
-        st.write(classification_report(y_eval, y_pred_eval))
-        st.write("Accuracy:", accuracy_score(y_eval, y_pred_eval))
+    if debug:
+        with st.expander("XGBClassifier", expanded=True):
+            st.write("=== Performance Report ===")
+            st.write(classification_report(y_eval, y_pred_eval))
+            st.write("Accuracy:", accuracy_score(y_eval, y_pred_eval))
 
-        if plot_type in ["All", "Feature Importance"]:
-            importance = model.feature_importances_
-            importance_df = pd.DataFrame({
-                "Feature": features,
-                "Importance": importance
-            }).sort_values(by="Importance", ascending=True)
+            if plot_type in ["All", "Feature Importance"]:
+                importance = model.feature_importances_
+                importance_df = pd.DataFrame({
+                    "Feature": features,
+                    "Importance": importance
+                }).sort_values(by="Importance", ascending=True)
 
-            fig = px.bar(
-                importance_df,
-                x="Importance",
-                y="Feature",
-                orientation="h",
-                title="🔍 Feature Importance (XGBoost)",
-                labels={"Importance": "Importance Score", "Feature": "Input Feature"},
-                height=600
-            )
+                fig = px.bar(
+                    importance_df,
+                    x="Importance",
+                    y="Feature",
+                    orientation="h",
+                    title="🔍 Feature Importance (XGBoost)",
+                    labels={"Importance": "Importance Score", "Feature": "Input Feature"},
+                    height=600
+                )
 
-            fig.update_layout(margin=dict(l=0, r=0, t=40, b=0))
-            st.plotly_chart(fig, use_container_width=True)
+                fig.update_layout(margin=dict(l=0, r=0, t=40, b=0))
+                st.plotly_chart(fig, use_container_width=True, key=f"plot_{uuid.uuid4()}")
 
     # Predict and assign scalar values
     df["Predicted"] = pd.Series(model.predict(X), index=df.index).astype(int)
@@ -485,7 +488,7 @@ def plot_price_with_signals(df, symbol="AAPL"):
         hovermode="x unified"
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key=f"plot_{uuid.uuid4()}")
 
 
 def plot_prediction_confidence(df):
@@ -523,7 +526,7 @@ def plot_prediction_confidence(df):
     fig.update_traces(marker=dict(size=8))
     fig.update_layout(hovermode="x unified")
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key=f"plot_{uuid.uuid4()}")
 
 
 def plot_signal_comparison(df, symbol="AAPL"):
@@ -576,7 +579,7 @@ def plot_signal_comparison(df, symbol="AAPL"):
         hovermode="x unified"
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key=f"plot_{uuid.uuid4()}")
 
 
 def page_config(page_title, page_icon=":desert_island:"):
@@ -591,9 +594,40 @@ def page_config(page_title, page_icon=":desert_island:"):
     )
 
 
+def evaluate_exit(entry_price, future_prices, method="tp_sl", **kwargs):
+    """
+    Exit strategy logic: decides when to sell a trade.
+    """
+    if method == "tp_sl":
+        tp_pct = kwargs.get("take_profit_pct", 0.07)
+        sl_pct = kwargs.get("stop_loss_pct", 0.03)
+        for i, price in enumerate(future_prices):
+            change_pct = (price - entry_price) / entry_price
+            if change_pct >= tp_pct:
+                return i, price, "TP"
+            elif change_pct <= -sl_pct:
+                return i, price, "SL"
+
+    elif method == "trailing_stop":
+        trail_pct = kwargs.get("trail_pct", 0.03)
+        peak = entry_price
+        for i, price in enumerate(future_prices):
+            peak = max(peak, price)
+            drop_pct = (price - peak) / peak
+            if drop_pct <= -trail_pct:
+                return i, price, "Trailing Stop"
+
+    return len(future_prices) - 1, future_prices[-1], "Timed"
+
+
 def simulate_trades(df, symbol, take_profit_pct=0.07, stop_loss_pct=0.03,
                     max_hold_days=15, min_confidence=0.5,
-                    show_plot=True):
+                    show_plot=True, exit_method="tp_sl", trade_size_usd=10_000):
+    # Cost configuration
+    TRADING_FEE_BUY_PCT = 0.001
+    TRADING_FEE_SELL_PCT = 0.001
+    CAPITAL_GAINS_TAX_PCT = 0.25
+
     if debug:
         st.write("🚧 simulate_trades started")
         st.write("Columns in df:", df.columns.tolist())
@@ -611,115 +645,391 @@ def simulate_trades(df, symbol, take_profit_pct=0.07, stop_loss_pct=0.03,
 
     close_col = f"Close_{symbol}"
 
-    for i in range(len(df)):
+    for i in range(len(df) - max_hold_days - 1):
         row = df.iloc[i]
         entry_idx = df.index[i]
 
         try:
-            pred = row["Predicted"].item() if hasattr(row["Predicted"], "item") else float(row["Predicted"])
-            prob = row["Prob"].item() if hasattr(row["Prob"], "item") else float(row["Prob"])
-        except Exception as e:
-            if debug:
-                st.warning(f"❌ Row {i} - conversion issue: {e}")
-                st.text(f"🔬 Raw Predicted: {row['Predicted']} | Prob: {row['Prob']}")
+            pred = float(row["Predicted"])
+            prob = float(row["Prob"])
+        except:
             continue
-
-        if debug and i < 3:
-            st.text(f"🧪 Row {i} → Pred: {pred}, Prob: {prob}")
 
         if pred != 1 or prob < min_confidence:
             continue
 
         try:
-            entry_price = row[close_col]
-        except KeyError:
-            st.warning(f"❗️ Column {close_col} not found in row {i}")
+            entry_price = float(row[close_col])
+        except:
             continue
 
-        entry_date = entry_idx
-        exit_price = None
-        exit_date = None
-        outcome = "Open"
+        quantity = trade_size_usd / entry_price
 
-        for hold_day in range(1, max_hold_days + 1):
-            try:
-                next_idx = df.index.get_loc(entry_idx) + hold_day
-                if next_idx >= len(df):
-                    break
-                future_row = df.iloc[next_idx]
-                future_price = future_row[close_col]
+        future_prices = df.iloc[i + 1: i + max_hold_days + 1][close_col].values
+        if len(future_prices) == 0:
+            continue
 
-                entry_price = entry_price.item() if hasattr(entry_price, "item") else entry_price
-                future_price = future_price.item() if hasattr(future_price, "item") else future_price
+        exit_offset, exit_price, reason = evaluate_exit(
+            entry_price,
+            future_prices,
+            method=exit_method,
+            take_profit_pct=take_profit_pct,
+            stop_loss_pct=stop_loss_pct
+        )
 
-                change_pct = (future_price - entry_price) / entry_price
+        exit_idx = i + 1 + exit_offset
+        if exit_idx >= len(df):
+            continue
 
-                if change_pct >= take_profit_pct:
-                    exit_price = future_price
-                    exit_date = future_row.name
-                    outcome = "TP"
-                    break
-                elif change_pct <= -stop_loss_pct:
-                    exit_price = future_price
-                    exit_date = future_row.name
-                    outcome = "SL"
-                    break
-            except Exception as e:
-                if debug:
-                    st.warning(f"❗️ Exit scan error at row {i}: {e}")
-                continue
+        exit_date = df.index[exit_idx]
+        holding_days = (exit_date - entry_idx).days
 
-        if exit_price is None:
-            try:
-                final_idx = df.index.get_loc(entry_idx) + max_hold_days
-                if final_idx < len(df):
-                    final_row = df.iloc[final_idx]
-                    exit_price = final_row[close_col]
-                    exit_date = final_row.name
-                    outcome = "Timed"
-                else:
-                    continue
-            except Exception as e:
-                if debug:
-                    st.warning(f"🧯 Final exit error at row {i}: {e}")
-                continue
+        # === Cost & Return Calculation ===
+        buy_fee = entry_price * TRADING_FEE_BUY_PCT * quantity
+        sell_fee = exit_price * TRADING_FEE_SELL_PCT * quantity
+        gross_profit = (exit_price - entry_price) * quantity
+        net_profit_before_tax = gross_profit - buy_fee - sell_fee
+        tax = CAPITAL_GAINS_TAX_PCT * net_profit_before_tax if net_profit_before_tax > 0 else 0
+        net_profit_after_tax = net_profit_before_tax - tax
 
-        ret_pct = (exit_price - entry_price) / entry_price
-        holding_days = (exit_date - entry_date).days
+        gross_return_pct = (gross_profit / entry_price) * 100
+        net_return_pct = (net_profit_after_tax / (entry_price * quantity)) * 100
 
         trades.append({
-            "Entry Date": entry_date,
+            "Entry Date": entry_idx,
             "Exit Date": exit_date,
             "Entry Price": round(entry_price, 2),
             "Exit Price": round(exit_price, 2),
-            "Return %": round(ret_pct * 100, 2),
+            "Outcome": reason,
             "Days Held": holding_days,
-            "Outcome": outcome
+            "Gross Return %": round(gross_return_pct, 2),
+            "Net Return %": round(net_return_pct, 2),
+            "Buy Fee": round(buy_fee, 2),
+            "Sell Fee": round(sell_fee, 2),
+            "Tax Paid": round(tax, 2),
+            "Net Profit ($)": round(net_profit_after_tax, 2)
         })
 
     trades_df = pd.DataFrame(trades)
 
-    st.subheader("📄 Trade Log")
-    st.dataframe(trades_df)
+    if not trades_df.empty:
+        total_trades = len(trades_df)
+        gross_total_return = trades_df["Gross Return %"].sum()
+        net_total_return = trades_df["Net Return %"].sum()
+        total_fees = trades_df["Buy Fee"].sum() + trades_df["Sell Fee"].sum()
+        total_tax = trades_df["Tax Paid"].sum()
+        win_rate = (trades_df["Net Return %"] > 0).mean() * 100
+        avg_net_return = trades_df["Net Return %"].mean()
+
+        st.markdown("### 📈 Strategy Summary")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("📌 Total Trades", total_trades)
+        col2.metric("📈 Gross Return (%)", f"{gross_total_return:.2f}")
+        col3.metric("💰 Net Return (%)", f"{net_total_return:.2f}")
+
+        col4, col5, col6 = st.columns(3)
+        col4.metric("🏆 Win Rate (%)", f"{win_rate:.2f}")
+        col5.metric("📊 Avg Net Return", f"{avg_net_return:.2f}%")
+        col6.metric("🧾 Tax Paid", f"{total_tax:.2f}")
+
+        st.caption(f"💸 Total Fees Paid: {total_fees:.2f}")
+
+    with st.expander("📄 Trade Log (Net of Costs & Taxes)", expanded=True):
+        st.dataframe(trades_df)
 
     if show_plot and not trades_df.empty:
-        trades_df["Cumulative Return"] = (1 + trades_df["Return %"] / 100).cumprod()
+        trades_df["Cumulative Net Return"] = (1 + trades_df["Net Return %"] / 100).cumprod()
         fig = px.line(
             trades_df,
             x="Exit Date",
-            y="Cumulative Return",
-            title="Cumulative Return from Simulated Trades",
+            y="Cumulative Net Return",
+            title="📈 Cumulative Net Return (After Fees & Taxes)",
             markers=True
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key=f"plot_{uuid.uuid4()}")
 
     st.session_state.df = df
-
-    if debug:
-        st.success(f"✅ Simulated {len(trades_df)} trades")
-
     return trades_df
 
+
+# def test_volume_chart(df, volume_col):
+#     import plotly.graph_objects as go
+#     import streamlit as st
+#
+#     df = df.sort_index()
+#     df = df[~df.index.duplicated()]
+#     df[volume_col] = pd.to_numeric(df[volume_col], errors="coerce").fillna(0)
+#
+#     # st.write("🔍 Volume stats:", df[volume_col].describe())
+#
+#     fig = go.Figure()
+#     fig.add_trace(go.Bar(
+#         x=df.index,
+#         y=df[volume_col],
+#         name="Volume",
+#         marker_color="gray",
+#         width=0.8
+#     ))
+#
+#     fig.update_layout(
+#         title="Volume Only Test",
+#         xaxis_title="Date",
+#         yaxis_title="Volume",
+#         bargap=0.01,
+#         height=400
+#     )
+#
+#     st.plotly_chart(fig, use_container_width=True, key="volume_only_test")
+
+
+def plot_price_volume_domain(df, trades_df, symbol):
+    close_col = f"Close_{symbol}"
+    open_col = f"Open_{symbol}"
+    high_col = f"High_{symbol}"
+    low_col = f"Low_{symbol}"
+    volume_col = f"Volume_{symbol}"
+
+    df = df.sort_index()
+    df = df[~df.index.duplicated()]
+    df[volume_col] = pd.to_numeric(df[volume_col], errors="coerce").fillna(0)
+
+    volume_colors = [
+        "rgba(0,200,0,0.4)" if c >= o else "rgba(200,0,0,0.4)"
+        for c, o in zip(df[close_col], df[open_col])
+    ]
+
+    fig = go.Figure()
+
+    # 🕯️ Candlestick chart
+    fig.add_trace(go.Candlestick(
+        x=df.index,
+        open=df[open_col],
+        high=df[high_col],
+        low=df[low_col],
+        close=df[close_col],
+        name="Price",
+        increasing_line_color="green",
+        decreasing_line_color="red",
+        xaxis="x",
+        yaxis="y"
+    ))
+
+    # 📊 Volume bars
+    fig.add_trace(go.Bar(
+        x=df.index,
+        y=df[volume_col],
+        marker_color=volume_colors,
+        name="Volume",
+        xaxis="x2",
+        yaxis="y2"
+    ))
+
+    # 📈 Cumulative net return
+    if not trades_df.empty and "Net Return %" in trades_df.columns:
+        trades_df["Exit Date"] = pd.to_datetime(trades_df["Exit Date"])
+        trades_sorted = trades_df.sort_values("Exit Date").copy()
+        trades_sorted["Cumulative"] = (1 + trades_sorted["Net Return %"].fillna(0) / 100).cumprod()
+        equity_curve = (
+            trades_sorted[["Exit Date", "Cumulative"]]
+            .drop_duplicates("Exit Date")
+            .set_index("Exit Date")
+        )
+        full_range = pd.date_range(start=df.index.min(), end=df.index.max(), freq="D")
+        equity_curve = equity_curve.reindex(full_range).ffill().fillna(1.0)
+        equity_curve.iloc[0] = 1.0
+
+        fig.add_trace(go.Scatter(
+            x=equity_curve.index,
+            y=equity_curve["Cumulative"],
+            mode="lines+markers",
+            name="Net Return ×",
+            line=dict(color="dodgerblue", dash="dot", width=2),
+            marker=dict(size=4),
+            xaxis="x",
+            yaxis="y3",
+            hovertemplate="Return: %{y:.2f}×<br>%{x|%b %d, %Y}<extra></extra>"
+        ))
+
+    # 🔺 Entry markers
+    if not trades_df.empty and "Entry Date" in trades_df.columns:
+        fig.add_trace(go.Scatter(
+            x=trades_df["Entry Date"],
+            y=trades_df["Entry Price"],
+            mode="markers",
+            name="Entry",
+            marker=dict(symbol="triangle-up", size=10, color="#00FFFF"),
+            xaxis="x",
+            yaxis="y",
+            hovertemplate="🟢 Entry: %{x|%b %d, %Y}<br>Price: %{y:.2f}<extra></extra>"
+        ))
+
+    # 🔻 Exit markers
+    if not trades_df.empty and "Exit Date" in trades_df.columns:
+        fig.add_trace(go.Scatter(
+            x=trades_df["Exit Date"],
+            y=trades_df["Exit Price"],
+            mode="markers",
+            name="Exit",
+            marker=dict(symbol="triangle-down", size=10, color="#FFD700"),
+            xaxis="x",
+            yaxis="y",
+            hovertemplate="🔴 Exit: %{x|%b %d, %Y}<br>Price: %{y:.2f}<extra></extra>"
+        ))
+
+    # 🎛 Layout with stacked domains and linked axes
+    fig.update_layout(
+        height=750,
+        margin=dict(l=50, r=50, t=60, b=40),
+        hovermode="x unified",
+        xaxis=dict(domain=[0, 1], anchor="y", rangeslider=dict(visible=True), type="date"),
+        yaxis=dict(domain=[0.4, 1], title="Price"),
+        xaxis2=dict(domain=[0, 1], anchor="y2", matches="x"),
+        yaxis2=dict(domain=[0, 0.25], title="Volume", showgrid=True),
+        yaxis3=dict(overlaying="y", side="right", showgrid=False, title="Net Return ×"),
+        legend=dict(orientation="h", x=0, y=1.05)
+    )
+
+    st.plotly_chart(fig, use_container_width=True, key="domain_price_volume_with_trades")
+
+
+def plot_backtest_price(df, trades_df, symbol):
+    close_col = f"Close_{symbol}"
+    open_col = f"Open_{symbol}"
+    high_col = f"High_{symbol}"
+    low_col = f"Low_{symbol}"
+    volume_col = f"Volume_{symbol}"
+
+    # 📦 Clean volume column and index
+    df = df.sort_index()
+    df = df[~df.index.duplicated()]
+    df[volume_col] = pd.to_numeric(df[volume_col], errors="coerce").fillna(0)
+
+    # 🎨 Volume bar color logic
+    volume_colors = [
+        "rgba(0,200,0,0.4)" if c >= o else "rgba(200,0,0,0.4)"
+        for c, o in zip(df[close_col], df[open_col])
+    ]
+
+    # 📊 Set up subplots
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.02,
+        row_heights=[0.75, 0.25],
+        specs=[[{"secondary_y": True}], [{}]]
+    )
+
+    # 🕯️ Candlestick chart (row 1)
+    fig.add_trace(go.Candlestick(
+        x=df.index,
+        open=df[open_col],
+        high=df[high_col],
+        low=df[low_col],
+        close=df[close_col],
+        name="Price",
+        increasing_line_color="green",
+        decreasing_line_color="red"
+    ), row=1, col=1)
+
+    # 📊 Volume bars (row 2)
+    fig.add_trace(go.Bar(
+        x=df.index,
+        y=df[volume_col],
+        name="Volume",
+        marker_color=volume_colors
+    ), row=2, col=1)
+
+    # 🔧 Force bar visuals
+    fig.update_traces(width=0.8, marker_line_width=0, selector=dict(type="bar"))
+
+    # ✅ Explicit y-axis settings for volume panel
+    fig.update_yaxes(
+        title_text="Volume",
+        row=2, col=1,
+        range=[0, df[volume_col].max() * 1.1],
+        showgrid=True
+    )
+
+    if not trades_df.empty:
+        for col in ["Confidence", "Net Return %", "Hold Days", "Outcome"]:
+            if col not in trades_df.columns:
+                trades_df[col] = None
+
+        # 🔺 Entry markers
+        fig.add_trace(go.Scatter(
+            x=trades_df["Entry Date"],
+            y=trades_df["Entry Price"],
+            mode="markers",
+            name="Entry",
+            marker=dict(symbol="triangle-up", size=10, color="#00FFFF"),
+            hovertemplate="🟢 Entry: %{x|%b %d, %Y}<br>Price: %{y:.2f}<br>Confidence: %{customdata[0]:.2f}<extra></extra>",
+            customdata=trades_df[["Confidence"]].fillna(0).values
+        ), row=1, col=1)
+
+        # 🔻 Exit markers
+        fig.add_trace(go.Scatter(
+            x=trades_df["Exit Date"],
+            y=trades_df["Exit Price"],
+            mode="markers",
+            name="Exit",
+            marker=dict(symbol="triangle-down", size=10, color="#FFD700"),
+            hovertemplate="🔴 Exit: %{x|%b %d, %Y}<br>Price: %{y:.2f}<br>Return: %{customdata[0]:.2f}%<br>Days Held: %{customdata[1]}<br>Outcome: %{customdata[2]}<extra></extra>",
+            customdata=trades_df[["Net Return %", "Hold Days", "Outcome"]].fillna(0).values
+        ), row=1, col=1)
+
+        # 📈 Cumulative Net Return overlay
+        trades_sorted = trades_df.sort_values("Exit Date").copy()
+        trades_sorted["Cumulative"] = (1 + trades_sorted["Net Return %"].fillna(0) / 100).cumprod()
+        equity_curve = (
+            trades_sorted[["Exit Date", "Cumulative"]]
+            .drop_duplicates(subset="Exit Date")
+            .set_index("Exit Date")
+        )
+        full_range = pd.date_range(start=df.index.min(), end=df.index.max(), freq="D")
+        equity_curve = equity_curve.reindex(full_range).ffill().fillna(1.0)
+        equity_curve.iloc[0] = 1.0
+
+        fig.add_trace(go.Scatter(
+            x=equity_curve.index,
+            y=equity_curve["Cumulative"],
+            mode="lines+markers",
+            name="Net Return ×",
+            line=dict(color="#1f77b4", dash="dot", width=2),
+            marker=dict(size=4),
+            hovertemplate="Return: %{y:.2f}×<br>%{x|%b %d, %Y}<extra></extra>"
+        ), row=1, col=1, secondary_y=True)
+
+    # 🧭 Layout settings
+    fig.update_layout(
+        title=f"{symbol} Candlestick with Trades, Return & Volume",
+        xaxis=dict(
+            title="Date",
+            rangeselector=dict(
+                buttons=[
+                    dict(count=7, label="1w", step="day", stepmode="backward"),
+                    dict(count=1, label="1m", step="month", stepmode="backward"),
+                    dict(step="all")
+                ]
+            ),
+            rangeslider=dict(visible=True),
+            type="date"
+        ),
+        yaxis=dict(title="Price"),
+        yaxis2=dict(title="Net Return ×", overlaying="y", side="right", showgrid=False),
+        hovermode="x unified",
+        height=750,
+        bargap=0.01,
+        margin=dict(l=50, r=50, t=60, b=40)
+    )
+
+    st.plotly_chart(fig, use_container_width=True, key="stacked_trade_chart")
+
+
+
+if "model" not in st.session_state:
+    st.session_state.model = None
+if "df" not in st.session_state:
+    st.session_state.df = None
 
 if "model" not in st.session_state:
     st.session_state.model = None
@@ -729,40 +1039,72 @@ if "df" not in st.session_state:
 if __name__ == "__main__":
     page_config("Stock Model Dashboard")
 
-    # st.sidebar.write("📊 Available Plot Modes:")
-    # st.sidebar.write("- All = Feature Importance, Confidence Heatmap, Signal Accuracy")
-    # st.sidebar.write("- Feature Importance = XGBoost feature weights")
-    # st.sidebar.write("- Confidence Heatmap = Model probability over time")
-    # st.sidebar.write("- Signal Accuracy = Price overlay with signals")
+    admin_mode = st.sidebar.checkbox("🛠️ Admin Mode")
+    if admin_mode:
+        st.sidebar.markdown("#### Historical Backtest Window")
+        backtest_start = st.sidebar.date_input("From", value=datetime.date(2023, 1, 1))
+        backtest_end = st.sidebar.date_input("To", value=datetime.date(2023, 1, 30))
 
     if debug:
         plot_option = st.sidebar.radio("Choose a Plot", ["All", "Feature Importance", "Confidence Heatmap", "Signal Accuracy"])
     else:
-        plot_option = st.sidebar.radio("Choose a Plot", ["All", "Feature Importance"])
+        plot_option = None
 
     st.sidebar.subheader("🧠 Trade Simulation Settings")
-    take_profit = st.sidebar.slider("Take Profit (%)", 1, 20, value=7,
-                                    help="Sell when price gains this much from entry") / 100
-    stop_loss = st.sidebar.slider("Stop Loss (%)", 1, 20, value=3,
-                                  help="Sell when price drops this much from entry") / 100
-    max_hold = st.sidebar.slider("Max Hold Days", 5, 30, value=15,
-                                 help="Sell after this many days if no target or stop is hit")
-    min_conf = st.sidebar.slider("Minimum Confidence", 0.0, 1.0, value=0.5, step=0.05,
-                                 help="Only simulate trades with prediction confidence above this")
+    take_profit = st.sidebar.slider("Take Profit (%)", 1, 20, value=7) / 100
+    stop_loss = st.sidebar.slider("Stop Loss (%)", 1, 20, value=3) / 100
+    max_hold = st.sidebar.slider("Max Hold Days", 5, 30, value=15)
+    min_conf = st.sidebar.slider("Minimum Confidence", 0.0, 1.0, value=0.5, step=0.05)
 
     col1, col2 = st.sidebar.columns(2)
     symbol = col1.text_input("Enter stock symbol", value="AAPL")
     run_simulate = st.sidebar.button("Run & Simulate")
 
-
     if run_simulate:
+        # Load + train
         df = load_and_prepare_data(symbol)
-        df_copy = df.copy()
-        model, df_updated = train_model(df_copy, plot_type=plot_option)
+        model, df_updated = train_model(df.copy(), plot_type=plot_option)
+
+        # Apply time window after prediction
+        if admin_mode:
+            df_slice = df_updated[
+                (df_updated.index >= pd.to_datetime(backtest_start)) &
+                (df_updated.index <= pd.to_datetime(backtest_end))
+            ]
+            st.markdown(
+                f"🕰️ **Backtest Mode Active**: Simulating between **{backtest_start}** and **{backtest_end}**"
+            )
+        else:
+            df_slice = df_updated
+
+        # Run simulation
+        trades_df = simulate_trades(
+            df_slice,
+            symbol=symbol,
+            take_profit_pct=take_profit,
+            stop_loss_pct=stop_loss,
+            max_hold_days=max_hold,
+            min_confidence=min_conf,
+            show_plot=True
+        )
+
+        if debug:
+            st.write("✅ Trades found:", len(trades_df))
+            st.write("🧬 trades_df columns:", trades_df.columns.tolist())
+
+        # st.write("🔍 Volume sample:", df[[f"Volume_{symbol}"]].head())
+        # st.write("📊 Volume stats:", df[f"Volume_{symbol}"].describe())
+
+        # Plot results
+        # plot_backtest_price(df, trades_df, symbol)
+        plot_price_volume_domain(df, trades_df, symbol)
+        # test_volume_chart(df, f"Volume_{symbol}")
+
+        # Save latest results to session
         st.session_state.df = df_updated
         st.session_state.model = model
 
-    if st.session_state.df is not None and st.session_state.model is not None:
+    elif st.session_state.df is not None and st.session_state.model is not None:
         df = st.session_state.df
 
         if plot_option in ["All", "Confidence Heatmap"]:
@@ -775,18 +1117,6 @@ if __name__ == "__main__":
                     st.write("🧬 df.columns:", df.columns.tolist())
                 plot_price_with_signals(df, symbol=symbol)
 
-
-        if run_simulate:
-            with st.expander("Simulated Trades", expanded=True):
-                simulate_trades(
-                    df,
-                    symbol=symbol,
-                    take_profit_pct=take_profit,
-                    stop_loss_pct=stop_loss,
-                    max_hold_days=max_hold,
-                    min_confidence=min_conf,
-                    show_plot=True
-                )
     else:
-        st.sidebar.info("Press 'Run' to load data and train the model first.")
+        st.sidebar.info("Press 'Run & Simulate' to begin.")
 
