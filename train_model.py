@@ -10,8 +10,11 @@ import matplotlib.pyplot as plt
 from sklearn.linear_model import SGDClassifier, LogisticRegression
 import datetime
 import streamlit as st
+import plotly.express as px
+import plotly.graph_objects as go
+from dateutil.relativedelta import relativedelta
 
-debug = False
+debug = True
 
 plt.close('all')  # clears old plots
 
@@ -27,7 +30,7 @@ enriched_features = original_features + [
 
 
 def version():
-    v = "SW version: 0.0.6"
+    v = "SW version: 0.0.7"
     st.write(v)
     return v
 
@@ -145,6 +148,7 @@ def compute_rsi(close, window=14):
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
+
 def compute_macd(close, fast=12, slow=26, signal=9):
     # Manual MACD Calculation
     ema_fast = close.ewm(span=fast, adjust=False).mean()
@@ -213,6 +217,16 @@ def load_and_prepare_data(symbol, start_date="2022-01-01", end_date="2024-12-31"
     df["Close_lag1"] = df["Close"].shift(1)
     df["Return_lag1"] = df["Close"].pct_change().shift(1)
 
+    # if isinstance(df.columns, pd.MultiIndex):
+    #     df.columns = ['_'.join(filter(None, map(str, col))).strip() if isinstance(col, tuple) else col for col in
+    #                   df.columns]
+    # 🔧 Final flatten to ensure all columns are usable downstream
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = ['_'.join(filter(None, map(str, col))) if isinstance(col, tuple) else col for col in df.columns]
+
+    if debug:
+        st.write("✅ Column names after flattening in load_and_prepare_data():", df.columns.tolist())
+
     return df.dropna()
 
 
@@ -254,63 +268,68 @@ def compare_models(df):
 
 def train_model(df, plot_type=0):
 
-    # Define features
-    features = [
+    # # 🔧 Flatten columns if MultiIndex (e.g., ('Price', 'Close') → 'Price_Close')
+    # if isinstance(df.columns, pd.MultiIndex):
+    #     df.columns = ['_'.join(col).strip() if isinstance(col, tuple) else col for col in df.columns]
+
+    # if debug:
+    #     st.write("✅ After flattening:", df.columns.tolist())
+
+    expected_features = [
         "MA20", "MA50", "Volatility", "RSI", "MACD", "MACD_Signal", "MACD_Hist",
         "RSI_lag1", "MACD_lag1", "MACD_Signal_lag1", "Close_lag1", "Return_lag1",
         "Bullish_Engulfing", "Hammer", "Pct_from_20d_high", "Pct_from_20d_low",
         "OBV", "OBV_10_MA", "Correl_with_SPY_10"
     ]
+    features = [f for f in expected_features if f in df.columns]
 
-    # Original (unbalanced) data for time-aligned predictions
-    X_orig = df[features]
-    y_orig = df["Target"]
-    X_train_orig, X_test_orig, y_train_orig, y_test_orig = train_test_split(
-        X_orig, y_orig, test_size=0.2, random_state=42, shuffle=True
-    )
+    if debug:
+        st.write("📌 Using features:", features)
 
-    # Resample and train using balanced data
+    X = df[features]
+    y = df["Target"]
+
+    X_eval, _, y_eval, _ = train_test_split(X, y, test_size=0.8, random_state=42)
+
     smote = SMOTE(random_state=42)
-    X_res, y_res = smote.fit_resample(X_orig, y_orig)
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_res, y_res, test_size=0.2, shuffle=True, random_state=42
-    )
+    X_res, y_res = smote.fit_resample(X, y)
+    X_train, X_test, y_train, y_test = train_test_split(X_res, y_res, test_size=0.2, random_state=42)
 
     model = XGBClassifier(
-        n_estimators=200, max_depth=4, learning_rate=0.1,
-        subsample=0.9, colsample_bytree=0.9,
-        eval_metric="logloss", use_label_encoder=False,
+        n_estimators=200,
+        max_depth=4,
+        learning_rate=0.1,
+        subsample=0.9,
+        colsample_bytree=0.9,
+        eval_metric="logloss",
+        use_label_encoder=False,
         random_state=42
     )
-
     model.fit(X_train, y_train)
 
-    # Evaluate on balanced test set
-    y_pred = model.predict(X_test)
-    with st.expander("XGBClassifier", True):
+    y_pred_eval = model.predict(X_eval)
+
+    with st.expander("XGBClassifier", expanded=True):
         st.write("=== Performance Report ===")
-        st.write(classification_report(y_test, y_pred))
-        st.write("Accuracy:", accuracy_score(y_test, y_pred))
+        st.write(classification_report(y_eval, y_pred_eval))
+        st.write("Accuracy:", accuracy_score(y_eval, y_pred_eval))
 
-    # === Feature Importance Plot ===
-    importance = model.feature_importances_
-    feature_names = [str(col) if not isinstance(col, str) else col for col in X_orig.columns]
+        if plot_type in ["All", "Feature Importance"]:
+            importance = model.feature_importances_
+            fig, ax = plt.subplots(figsize=(8, 6))
+            ax.barh(features, importance)
+            ax.set_title("Feature Importance (XGBoost)")
+            fig.tight_layout()
+            st.pyplot(fig)
 
-    if plot_type in ["All", "Feature Importance"]:
-        fig, ax = plt.subplots(figsize=(8, 6))
-        ax.barh(feature_names, importance)
-        ax.set_title("Feature Importance (XGBoost)")
-        fig.tight_layout()
-        st.pyplot(fig)
+    # Predict and assign scalar values
+    df["Predicted"] = pd.Series(model.predict(X), index=df.index).astype(int)
+    df["Prob"] = pd.Series(model.predict_proba(X)[:, 1], index=df.index).astype(float)
 
-    # === Predict on unbalanced X_test for timeline-aligned plotting ===
-    y_pred_orig = model.predict(X_test_orig)
-    y_prob_orig = model.predict_proba(X_test_orig)[:, 1]
+    if debug:
+        st.write("🎯 Sample predictions:", df[["Predicted", "Prob"]].head())
 
-    df.loc[X_test_orig.index, "Predicted"] = y_pred_orig
-    df.loc[X_test_orig.index, "Prob"] = y_prob_orig
-
-    return model
+    return model, df
 
 
 def feature_drop_test(df, base_features, new_features):
@@ -360,11 +379,7 @@ def feature_drop_test(df, base_features, new_features):
 
 
 def rolling_window_backtest(df, features, window_months=6, test_months=1):
-    import matplotlib.pyplot as plt
     from dateutil.relativedelta import relativedelta
-    from sklearn.metrics import accuracy_score
-    from xgboost import XGBClassifier
-    from imblearn.over_sampling import SMOTE
 
     df = df.copy()
     df.index = pd.to_datetime(df.index)
@@ -429,85 +444,128 @@ def rolling_window_backtest(df, features, window_months=6, test_months=1):
 
 
 def plot_price_with_signals(df, symbol="AAPL"):
-    fig, ax = plt.subplots(figsize=(12, 5))
+    fig = go.Figure()
 
-    # Plot the price line
-    ax.plot(df.index, df["Close"], label="Close Price", color="blue")
+    fig.add_trace(go.Scatter(
+        x=df.index, y=df[f"Close_{symbol}"],
+        mode="lines", name="Close Price", line=dict(color="blue")
+    ))
 
-    # Correct & incorrect buy predictions
     correct = df[(df["Predicted"] == 1) & (df["Target"] == 1)]
     incorrect = df[(df["Predicted"] == 1) & (df["Target"] == 0)]
 
-    ax.scatter(correct.index, correct["Close"], marker="^", color="green", label="Correct Buy Signal", alpha=0.7)
-    ax.scatter(incorrect.index, incorrect["Close"], marker="v", color="red", label="Wrong Buy Signal", alpha=0.7)
+    fig.add_trace(go.Scatter(
+        x=correct.index, y=correct[f"Close_{symbol}"],
+        mode="markers", name="Correct Buy",
+        marker=dict(color="green", symbol="triangle-up", size=10)
+    ))
 
-    ax.set_title(f"{symbol} Price with Buy Predictions")
-    ax.set_xlabel("Date")
-    ax.set_ylabel("Price")
-    ax.legend()
-    ax.grid(True)
-    fig.tight_layout()
+    fig.add_trace(go.Scatter(
+        x=incorrect.index, y=incorrect[f"Close_{symbol}"],
+        mode="markers", name="Wrong Buy",
+        marker=dict(color="red", symbol="triangle-down", size=10)
+    ))
 
-    st.pyplot(fig)
+    fig.update_layout(
+        title=f"{symbol} Price with Buy Predictions",
+        xaxis_title="Date", yaxis_title="Price",
+        legend=dict(x=0, y=1),
+        hovermode="x unified"
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
 
 
-def plot_prediction_confidence(df, debug=False):
+def plot_prediction_confidence(df):
     df = df.copy()
+    # 🔧 Flatten MultiIndex columns if necessary
+    # if isinstance(df.columns, pd.MultiIndex):
+    #     df.columns = ['_'.join(c).strip() if isinstance(c, tuple) else c for c in df.columns]
+    # else:
+    #     df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+    df.columns = [col[0] if isinstance(col, tuple) else col for col in df.columns]
 
     if "Prob" not in df.columns:
         st.warning("Missing 'Prob' column in DataFrame. Make sure model predictions were stored.")
         return
 
-    df["Confidence"] = df["Prob"]  # assume this came from predict_proba
+    df["Confidence"] = df["Prob"]
 
     if debug:
-        st.write("✅ Prob in df:", "Prob" in df.columns)
-        st.write("🔍 Sample Prob values:")
-        st.dataframe(df["Prob"].dropna().head())
+        st.write("✅ 'Prob' present:", "Prob" in df.columns)
+        st.dataframe(df[["Confidence", "Target"]].head())
 
-    fig, ax = plt.subplots(figsize=(12, 5))
-    scatter = ax.scatter(
-        df.index, df["Confidence"],
-        c=df["Target"], cmap="coolwarm",
-        s=40, alpha=0.8
+    df["Target_Label"] = df["Target"].map({0: "No Gain", 1: "Gain"})
+
+    fig = px.scatter(
+        df,
+        x=df.index,
+        y="Confidence",
+        color="Target_Label",
+        title="Prediction Confidence Over Time",
+        labels={"Confidence": "Model Confidence", "color": "Actual Target"},
+        color_discrete_map={"No Gain": "red", "Gain": "green"},
+        opacity=0.7
     )
-    cbar = fig.colorbar(scatter, ax=ax, label="Actual Target (0 = No Gain, 1 = Gain)")
-    ax.set_title("Prediction Confidence Over Time")
-    ax.set_xlabel("Date")
-    ax.set_ylabel("Predicted Probability of Gain")
-    ax.grid(True)
-    fig.tight_layout()
 
-    st.pyplot(fig)
+    fig.update_traces(marker=dict(size=8))
+    fig.update_layout(hovermode="x unified")
+
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def plot_signal_comparison(df, symbol="AAPL"):
-    import matplotlib.pyplot as plt
+    fig = go.Figure()
 
-    plt.figure(figsize=(13, 6))
-    plt.plot(df.index, df["Close"], label="Close Price", color="black")
+    close_col = f"Close_{symbol}"
+
+    fig.add_trace(go.Scatter(
+        x=df.index, y=df[close_col],
+        mode="lines", name="Close Price", line=dict(color="black")
+    ))
 
     # Enriched model signals
     enriched_correct = df[(df["Enriched Feature Set_Predicted"] == 1) & (df["Target"] == 1)]
     enriched_wrong = df[(df["Enriched Feature Set_Predicted"] == 1) & (df["Target"] == 0)]
 
+    fig.add_trace(go.Scatter(
+        x=enriched_correct.index, y=enriched_correct[close_col],
+        mode="markers", name="Enriched Correct",
+        marker=dict(color="green", symbol="triangle-up", size=10)
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=enriched_wrong.index, y=enriched_wrong[close_col],
+        mode="markers", name="Enriched Wrong",
+        marker=dict(color="red", symbol="triangle-down", size=10)
+    ))
+
     # Baseline model signals
     base_correct = df[(df["Baseline Feature Set_Predicted"] == 1) & (df["Target"] == 1)]
     base_wrong = df[(df["Baseline Feature Set_Predicted"] == 1) & (df["Target"] == 0)]
 
-    plt.scatter(base_correct.index, base_correct["Close"], marker="o", color="gray", label="Baseline Correct", alpha=0.5)
-    plt.scatter(base_wrong.index, base_wrong["Close"], marker="o", edgecolor="gray", facecolor="none", label="Baseline Wrong", alpha=0.5)
+    fig.add_trace(go.Scatter(
+        x=base_correct.index, y=base_correct[close_col],
+        mode="markers", name="Baseline Correct",
+        marker=dict(color="gray", symbol="circle", size=8)
+    ))
 
-    plt.scatter(enriched_correct.index, enriched_correct["Close"], marker="^", color="green", label="Enriched Correct", alpha=0.7)
-    plt.scatter(enriched_wrong.index, enriched_wrong["Close"], marker="v", color="red", label="Enriched Wrong", alpha=0.7)
+    fig.add_trace(go.Scatter(
+        x=base_wrong.index, y=base_wrong[close_col],
+        mode="markers", name="Baseline Wrong",
+        marker=dict(color="gray", symbol="x", size=8)
+    ))
 
-    plt.title(f"{symbol} Price with Baseline vs Enriched Model Signals")
-    plt.xlabel("Date")
-    plt.ylabel("Price")
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show(block=True)
+    fig.update_layout(
+        title=f"{symbol} Price with Baseline vs Enriched Model Signals",
+        xaxis_title="Date",
+        yaxis_title="Price",
+        legend=dict(x=0, y=1),
+        hovermode="x unified"
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
 
 def page_config(page_title, page_icon=":desert_island:"):
     st.title(page_title)
@@ -521,31 +579,192 @@ def page_config(page_title, page_icon=":desert_island:"):
     )
 
 
+def simulate_trades(df, symbol, take_profit_pct=0.07, stop_loss_pct=0.03,
+                    max_hold_days=15, min_confidence=0.5,
+                    show_plot=True):
+    if debug:
+        st.write("🚧 simulate_trades started")
+        st.write("Columns in df:", df.columns.tolist())
+
+    if "Predicted" not in df.columns or "Prob" not in df.columns:
+        st.warning("Missing required prediction columns for trade simulation.")
+        return pd.DataFrame()
+
+    trades = []
+    df = df.copy()
+    df = df.sort_index()
+    df.reset_index(drop=False, inplace=True)
+    df.sort_values(by="Date", inplace=True)
+    df.set_index("Date", inplace=True)
+
+    close_col = f"Close_{symbol}"
+
+    for i in range(len(df)):
+        row = df.iloc[i]
+        entry_idx = df.index[i]
+
+        try:
+            pred = row["Predicted"].item() if hasattr(row["Predicted"], "item") else float(row["Predicted"])
+            prob = row["Prob"].item() if hasattr(row["Prob"], "item") else float(row["Prob"])
+        except Exception as e:
+            if debug:
+                st.warning(f"❌ Row {i} - conversion issue: {e}")
+                st.text(f"🔬 Raw Predicted: {row['Predicted']} | Prob: {row['Prob']}")
+            continue
+
+        if debug and i < 3:
+            st.text(f"🧪 Row {i} → Pred: {pred}, Prob: {prob}")
+
+        if pred != 1 or prob < min_confidence:
+            continue
+
+        try:
+            entry_price = row[close_col]
+        except KeyError:
+            st.warning(f"❗️ Column {close_col} not found in row {i}")
+            continue
+
+        entry_date = entry_idx
+        exit_price = None
+        exit_date = None
+        outcome = "Open"
+
+        for hold_day in range(1, max_hold_days + 1):
+            try:
+                next_idx = df.index.get_loc(entry_idx) + hold_day
+                if next_idx >= len(df):
+                    break
+                future_row = df.iloc[next_idx]
+                future_price = future_row[close_col]
+
+                entry_price = entry_price.item() if hasattr(entry_price, "item") else entry_price
+                future_price = future_price.item() if hasattr(future_price, "item") else future_price
+
+                change_pct = (future_price - entry_price) / entry_price
+
+                if change_pct >= take_profit_pct:
+                    exit_price = future_price
+                    exit_date = future_row.name
+                    outcome = "TP"
+                    break
+                elif change_pct <= -stop_loss_pct:
+                    exit_price = future_price
+                    exit_date = future_row.name
+                    outcome = "SL"
+                    break
+            except Exception as e:
+                if debug:
+                    st.warning(f"❗️ Exit scan error at row {i}: {e}")
+                continue
+
+        if exit_price is None:
+            try:
+                final_idx = df.index.get_loc(entry_idx) + max_hold_days
+                if final_idx < len(df):
+                    final_row = df.iloc[final_idx]
+                    exit_price = final_row[close_col]
+                    exit_date = final_row.name
+                    outcome = "Timed"
+                else:
+                    continue
+            except Exception as e:
+                if debug:
+                    st.warning(f"🧯 Final exit error at row {i}: {e}")
+                continue
+
+        ret_pct = (exit_price - entry_price) / entry_price
+        holding_days = (exit_date - entry_date).days
+
+        trades.append({
+            "Entry Date": entry_date,
+            "Exit Date": exit_date,
+            "Entry Price": round(entry_price, 2),
+            "Exit Price": round(exit_price, 2),
+            "Return %": round(ret_pct * 100, 2),
+            "Days Held": holding_days,
+            "Outcome": outcome
+        })
+
+    trades_df = pd.DataFrame(trades)
+
+    st.subheader("📄 Trade Log")
+    st.dataframe(trades_df)
+
+    if show_plot and not trades_df.empty:
+        trades_df["Cumulative Return"] = (1 + trades_df["Return %"] / 100).cumprod()
+        fig = px.line(
+            trades_df,
+            x="Exit Date",
+            y="Cumulative Return",
+            title="Cumulative Return from Simulated Trades",
+            markers=True
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.session_state.df = df
+
+    if debug:
+        st.success(f"✅ Simulated {len(trades_df)} trades")
+
+    return trades_df
+
+
+if "model" not in st.session_state:
+    st.session_state.model = None
+if "df" not in st.session_state:
+    st.session_state.df = None
+
 if __name__ == "__main__":
     page_config("Stock Model Dashboard")
 
-    # 🧭 User controls which plot(s) to show
-    # plot_type = 3  # Change this to 1, 2, or 3 as needed
-    st.sidebar.write("\n📊 Available Plot Modes (set plot_type):")
-    st.sidebar.write("All = All plots (Feature Importance, Prediction Confidence, Signal Accuracy)")
-    st.sidebar.write("Feature Importance = Only Feature Importance")
-    st.sidebar.write("Confidence Heatmap = Only Prediction Confidence (heatmap)")
-    st.sidebar.write("Signal Accuracy = Only Accuracy (price + signal overlay)")
+    st.sidebar.write("📊 Available Plot Modes:")
+    st.sidebar.write("- All = Feature Importance, Confidence Heatmap, Signal Accuracy")
+    st.sidebar.write("- Feature Importance = XGBoost feature weights")
+    st.sidebar.write("- Confidence Heatmap = Model probability over time")
+    st.sidebar.write("- Signal Accuracy = Price overlay with signals")
+
     plot_option = st.sidebar.radio("Choose a plot", ["All", "Feature Importance", "Confidence Heatmap", "Signal Accuracy"])
-    column1, column2 = st.sidebar.columns(2)
-    symbol = column1.text_input("Enter stock symbol", value="AAPL")
+    col1, col2 = st.sidebar.columns(2)
+    symbol = col1.text_input("Enter stock symbol", value="AAPL")
     run_button = st.sidebar.button("Run")
-    if not run_button:
-        st.stop()
-    else:
+
+    if run_button:
         df = load_and_prepare_data(symbol)
+        df_copy = df.copy()
+        model, df_updated = train_model(df_copy, plot_type=plot_option)
+        st.session_state.df = df_updated
+        st.session_state.model = model
 
-        model = train_model(df, plot_type=plot_option)  # Pass plot_type into train_model
+    if st.session_state.df is not None and st.session_state.model is not None:
+        df = st.session_state.df
 
-        if plot_option == "All" or plot_option == "Confidence Heatmap":
-            plot_prediction_confidence(df)
-        if plot_option == "All" or plot_option == "Signal Accuracy":
-            plot_price_with_signals(df, symbol=symbol)
+        if plot_option in ["All", "Confidence Heatmap"]:
+            with st.expander("Prediction Confidence", expanded=False):
+                plot_prediction_confidence(df)
 
-        # rolling_window_backtest(df, features=enriched_features)
+        if plot_option in ["All", "Signal Accuracy"]:
+            with st.expander("Price With Signals", expanded=False):
+                if debug:
+                    st.write("🧬 df.columns:", df.columns.tolist())
+                plot_price_with_signals(df, symbol=symbol)
+
+        st.sidebar.subheader("🧠 Trade Simulation Settings")
+        take_profit = st.sidebar.slider("Take Profit (%)", 1, 20, value=7, help="Sell when price gains this much from entry") / 100
+        stop_loss = st.sidebar.slider("Stop Loss (%)", 1, 20, value=3, help="Sell when price drops this much from entry") / 100
+        max_hold = st.sidebar.slider("Max Hold Days", 5, 30, value=15, help="Sell after this many days if no target or stop is hit")
+        min_conf = st.sidebar.slider("Minimum Confidence", 0.0, 1.0, value=0.5, step=0.05, help="Only simulate trades with prediction confidence above this")
+
+        if st.sidebar.button("Simulate Trades"):
+            with st.expander("Simulated Trades", expanded=True):
+                simulate_trades(
+                    df,
+                    symbol=symbol,
+                    take_profit_pct=take_profit,
+                    stop_loss_pct=stop_loss,
+                    max_hold_days=max_hold,
+                    min_confidence=min_conf,
+                    show_plot=True
+                )
+    else:
+        st.sidebar.info("Press 'Run' to load data and train the model first.")
 
