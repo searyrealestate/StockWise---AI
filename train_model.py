@@ -32,7 +32,7 @@ enriched_features = original_features + [
 
 
 def version():
-    v = "SW version: 0.0.9"
+    v = "SW version: 0.0.10"
     st.write(v)
     return v
 
@@ -782,7 +782,7 @@ def simulate_trades(df, symbol, take_profit_pct=0.07, stop_loss_pct=0.03,
 #     st.plotly_chart(fig, use_container_width=True, key="volume_only_test")
 
 
-def plot_price_volume_domain(df, trades_df, symbol):
+def plot_price_volume_domain(df, trades_df, symbol, zoom_to_return=False):
     close_col = f"Close_{symbol}"
     open_col = f"Open_{symbol}"
     high_col = f"High_{symbol}"
@@ -800,7 +800,7 @@ def plot_price_volume_domain(df, trades_df, symbol):
 
     fig = go.Figure()
 
-    # 🕯️ Candlestick chart
+    # 🕯️ Price candles
     fig.add_trace(go.Candlestick(
         x=df.index,
         open=df[open_col],
@@ -824,34 +824,15 @@ def plot_price_volume_domain(df, trades_df, symbol):
         yaxis="y2"
     ))
 
-    # 📈 Cumulative net return
-    if not trades_df.empty and "Net Return %" in trades_df.columns:
-        trades_df["Exit Date"] = pd.to_datetime(trades_df["Exit Date"])
-        trades_sorted = trades_df.sort_values("Exit Date").copy()
-        trades_sorted["Cumulative"] = (1 + trades_sorted["Net Return %"].fillna(0) / 100).cumprod()
-        equity_curve = (
-            trades_sorted[["Exit Date", "Cumulative"]]
-            .drop_duplicates("Exit Date")
-            .set_index("Exit Date")
-        )
-        full_range = pd.date_range(start=df.index.min(), end=df.index.max(), freq="D")
-        equity_curve = equity_curve.reindex(full_range).ffill().fillna(1.0)
-        equity_curve.iloc[0] = 1.0
+    if not trades_df.empty:
+        # 🧽 Normalize and deduplicate
+        trades_df["Entry Date"] = pd.to_datetime(trades_df["Entry Date"])
+        trades_df["Exit Date"] = pd.to_datetime(trades_df["Exit Date"]).dt.normalize()
+        trades_df = trades_df[~trades_df.duplicated(subset=[
+            "Entry Date", "Exit Date", "Entry Price", "Exit Price", "Net Return %"
+        ])].copy()
 
-        fig.add_trace(go.Scatter(
-            x=equity_curve.index,
-            y=equity_curve["Cumulative"],
-            mode="lines+markers",
-            name="Net Return ×",
-            line=dict(color="dodgerblue", dash="dot", width=2),
-            marker=dict(size=4),
-            xaxis="x",
-            yaxis="y3",
-            hovertemplate="Return: %{y:.2f}×<br>%{x|%b %d, %Y}<extra></extra>"
-        ))
-
-    # 🔺 Entry markers
-    if not trades_df.empty and "Entry Date" in trades_df.columns:
+        # 🔺 Entries
         fig.add_trace(go.Scatter(
             x=trades_df["Entry Date"],
             y=trades_df["Entry Price"],
@@ -863,8 +844,7 @@ def plot_price_volume_domain(df, trades_df, symbol):
             hovertemplate="🟢 Entry: %{x|%b %d, %Y}<br>Price: %{y:.2f}<extra></extra>"
         ))
 
-    # 🔻 Exit markers
-    if not trades_df.empty and "Exit Date" in trades_df.columns:
+        # 🔻 Exits
         fig.add_trace(go.Scatter(
             x=trades_df["Exit Date"],
             y=trades_df["Exit Price"],
@@ -876,20 +856,48 @@ def plot_price_volume_domain(df, trades_df, symbol):
             hovertemplate="🔴 Exit: %{x|%b %d, %Y}<br>Price: %{y:.2f}<extra></extra>"
         ))
 
-    # 🎛 Layout with stacked domains and linked axes
+        # 📈 Cumulative Return
+        trades_df["Return Multiplier"] = 1 + trades_df["Net Return %"].fillna(0) / 100
+        daily_returns = trades_df.groupby("Exit Date")["Return Multiplier"].prod().sort_index()
+        equity_curve = daily_returns.cumprod()
+
+        full_range = pd.date_range(start=df.index.min(), end=df.index.max(), freq="D")
+        equity_curve = equity_curve.reindex(full_range).ffill().fillna(1.0)
+        equity_curve.iloc[0] = 1.0
+
+        if zoom_to_return and (equity_curve > 1.0).any():
+            first_move = equity_curve[equity_curve > 1.0].index.min()
+            fig.update_xaxes(range=[first_move, df.index.max()])
+
+        fig.add_trace(go.Scatter(
+            x=equity_curve.index,
+            y=equity_curve,
+            mode="lines+markers",
+            name="Net Return ×",
+            xaxis="x",
+            yaxis="y3",
+            line=dict(color="dodgerblue", dash="dot", width=2),
+            marker=dict(size=4),
+            hovertemplate="Return: %{y:.2f}×<br>%{x|%b %d, %Y}<extra></extra>"
+        ))
+
+    # 🎛 Layout
     fig.update_layout(
+        title=f"{symbol} Candlestick + Volume + Trades",
         height=750,
         margin=dict(l=50, r=50, t=60, b=40),
         hovermode="x unified",
+        legend=dict(orientation="h", x=0, y=1.05),
         xaxis=dict(domain=[0, 1], anchor="y", rangeslider=dict(visible=True), type="date"),
         yaxis=dict(domain=[0.4, 1], title="Price"),
         xaxis2=dict(domain=[0, 1], anchor="y2", matches="x"),
         yaxis2=dict(domain=[0, 0.25], title="Volume", showgrid=True),
-        yaxis3=dict(overlaying="y", side="right", showgrid=False, title="Net Return ×"),
-        legend=dict(orientation="h", x=0, y=1.05)
+        yaxis3=dict(overlaying="y", side="right", showgrid=False, title="Net Return ×")
     )
 
-    st.plotly_chart(fig, use_container_width=True, key="domain_price_volume_with_trades")
+    st.plotly_chart(fig, use_container_width=True, key="domain_price_volume_trades")
+
+
 
 
 def plot_backtest_price(df, trades_df, symbol):
@@ -1025,7 +1033,6 @@ def plot_backtest_price(df, trades_df, symbol):
     st.plotly_chart(fig, use_container_width=True, key="stacked_trade_chart")
 
 
-
 if "model" not in st.session_state:
     st.session_state.model = None
 if "df" not in st.session_state:
@@ -1095,9 +1102,11 @@ if __name__ == "__main__":
         # st.write("🔍 Volume sample:", df[[f"Volume_{symbol}"]].head())
         # st.write("📊 Volume stats:", df[f"Volume_{symbol}"].describe())
 
+        zoom_to_return = st.sidebar.checkbox("📌 Zoom to first trade", value=True)
+
         # Plot results
         # plot_backtest_price(df, trades_df, symbol)
-        plot_price_volume_domain(df, trades_df, symbol)
+        plot_price_volume_domain(df, trades_df, symbol, zoom_to_return)
         # test_volume_chart(df, f"Volume_{symbol}")
 
         # Save latest results to session
