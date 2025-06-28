@@ -14,7 +14,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from dateutil.relativedelta import relativedelta
 
-debug = True
+debug = False
 
 plt.close('all')  # clears old plots
 
@@ -30,7 +30,7 @@ enriched_features = original_features + [
 
 
 def version():
-    v = "SW version: 0.0.7"
+    v = "SW version: 0.0.8"
     st.write(v)
     return v
 
@@ -316,11 +316,23 @@ def train_model(df, plot_type=0):
 
         if plot_type in ["All", "Feature Importance"]:
             importance = model.feature_importances_
-            fig, ax = plt.subplots(figsize=(8, 6))
-            ax.barh(features, importance)
-            ax.set_title("Feature Importance (XGBoost)")
-            fig.tight_layout()
-            st.pyplot(fig)
+            importance_df = pd.DataFrame({
+                "Feature": features,
+                "Importance": importance
+            }).sort_values(by="Importance", ascending=True)
+
+            fig = px.bar(
+                importance_df,
+                x="Importance",
+                y="Feature",
+                orientation="h",
+                title="🔍 Feature Importance (XGBoost)",
+                labels={"Importance": "Importance Score", "Feature": "Input Feature"},
+                height=600
+            )
+
+            fig.update_layout(margin=dict(l=0, r=0, t=40, b=0))
+            st.plotly_chart(fig, use_container_width=True)
 
     # Predict and assign scalar values
     df["Predicted"] = pd.Series(model.predict(X), index=df.index).astype(int)
@@ -717,18 +729,33 @@ if "df" not in st.session_state:
 if __name__ == "__main__":
     page_config("Stock Model Dashboard")
 
-    st.sidebar.write("📊 Available Plot Modes:")
-    st.sidebar.write("- All = Feature Importance, Confidence Heatmap, Signal Accuracy")
-    st.sidebar.write("- Feature Importance = XGBoost feature weights")
-    st.sidebar.write("- Confidence Heatmap = Model probability over time")
-    st.sidebar.write("- Signal Accuracy = Price overlay with signals")
+    # st.sidebar.write("📊 Available Plot Modes:")
+    # st.sidebar.write("- All = Feature Importance, Confidence Heatmap, Signal Accuracy")
+    # st.sidebar.write("- Feature Importance = XGBoost feature weights")
+    # st.sidebar.write("- Confidence Heatmap = Model probability over time")
+    # st.sidebar.write("- Signal Accuracy = Price overlay with signals")
 
-    plot_option = st.sidebar.radio("Choose a plot", ["All", "Feature Importance", "Confidence Heatmap", "Signal Accuracy"])
+    if debug:
+        plot_option = st.sidebar.radio("Choose a Plot", ["All", "Feature Importance", "Confidence Heatmap", "Signal Accuracy"])
+    else:
+        plot_option = st.sidebar.radio("Choose a Plot", ["All", "Feature Importance"])
+
+    st.sidebar.subheader("🧠 Trade Simulation Settings")
+    take_profit = st.sidebar.slider("Take Profit (%)", 1, 20, value=7,
+                                    help="Sell when price gains this much from entry") / 100
+    stop_loss = st.sidebar.slider("Stop Loss (%)", 1, 20, value=3,
+                                  help="Sell when price drops this much from entry") / 100
+    max_hold = st.sidebar.slider("Max Hold Days", 5, 30, value=15,
+                                 help="Sell after this many days if no target or stop is hit")
+    min_conf = st.sidebar.slider("Minimum Confidence", 0.0, 1.0, value=0.5, step=0.05,
+                                 help="Only simulate trades with prediction confidence above this")
+
     col1, col2 = st.sidebar.columns(2)
     symbol = col1.text_input("Enter stock symbol", value="AAPL")
-    run_button = st.sidebar.button("Run")
+    run_simulate = st.sidebar.button("Run & Simulate")
 
-    if run_button:
+
+    if run_simulate:
         df = load_and_prepare_data(symbol)
         df_copy = df.copy()
         model, df_updated = train_model(df_copy, plot_type=plot_option)
@@ -748,13 +775,8 @@ if __name__ == "__main__":
                     st.write("🧬 df.columns:", df.columns.tolist())
                 plot_price_with_signals(df, symbol=symbol)
 
-        st.sidebar.subheader("🧠 Trade Simulation Settings")
-        take_profit = st.sidebar.slider("Take Profit (%)", 1, 20, value=7, help="Sell when price gains this much from entry") / 100
-        stop_loss = st.sidebar.slider("Stop Loss (%)", 1, 20, value=3, help="Sell when price drops this much from entry") / 100
-        max_hold = st.sidebar.slider("Max Hold Days", 5, 30, value=15, help="Sell after this many days if no target or stop is hit")
-        min_conf = st.sidebar.slider("Minimum Confidence", 0.0, 1.0, value=0.5, step=0.05, help="Only simulate trades with prediction confidence above this")
 
-        if st.sidebar.button("Simulate Trades"):
+        if run_simulate:
             with st.expander("Simulated Trades", expanded=True):
                 simulate_trades(
                     df,
