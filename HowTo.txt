@@ -1,0 +1,16 @@
+Before commit - run the following commands:
+pip install -r requirements.txt
+pip freeze > requirements.txt
+
+# GitHub commands
+# see all branches
+git branch -a
+
+# Switch between branches
+git checkout <branch_name>
+
+# Copy a commit from one branch to another
+git cherry-pick <commit_hash>
+
+# check commit number
+git rev-parse HEAD

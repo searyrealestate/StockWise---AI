@@ -267,21 +267,41 @@ def compare_models(df):
     run_model(original_features, "Baseline Feature Set")
     run_model(enriched_features, "Enriched Feature Set")
 
+def compute_bollinger_bandwidth(df, symbol, window=20, num_std=2):
+    close = df[f"Close_{symbol}"]
+    ma = close.rolling(window).mean()
+    std = close.rolling(window).std()
+    upper = ma + num_std * std
+    lower = ma - num_std * std
+    df["Bollinger_Width"] = (upper - lower) / ma
+    return df
 
-def train_model(df, plot_type=0):
 
-    # # 🔧 Flatten columns if MultiIndex (e.g., ('Price', 'Close') → 'Price_Close')
-    # if isinstance(df.columns, pd.MultiIndex):
-    #     df.columns = ['_'.join(col).strip() if isinstance(col, tuple) else col for col in df.columns]
+def compute_atr(df, symbol, window=14):
+    high = df[f"High_{symbol}"]
+    low = df[f"Low_{symbol}"]
+    close = df[f"Close_{symbol}"]
+    tr = pd.concat([
+        high - low,
+        (high - close.shift()).abs(),
+        (low - close.shift()).abs()
+    ], axis=1).max(axis=1)
+    df["ATR"] = tr.rolling(window=window).mean()
+    return df
 
-    # if debug:
-    #     st.write("✅ After flattening:", df.columns.tolist())
+
+def train_model(df, symbol, plot_type=0):
+    # === Add technical features directly ===
+    df = compute_bollinger_bandwidth(df, symbol)
+    df = compute_atr(df, symbol)
 
     expected_features = [
         "MA20", "MA50", "Volatility", "RSI", "MACD", "MACD_Signal", "MACD_Hist",
         "RSI_lag1", "MACD_lag1", "MACD_Signal_lag1", "Close_lag1", "Return_lag1",
         "Bullish_Engulfing", "Hammer", "Pct_from_20d_high", "Pct_from_20d_low",
-        "OBV", "OBV_10_MA", "Correl_with_SPY_10"
+        "OBV", "OBV_10_MA", "Correl_with_SPY_10",
+        "Volume_Relative", "Volume_Spike", "Turnover",
+        "ATR", "Bollinger_Width"
     ]
     features = [f for f in expected_features if f in df.columns]
 
@@ -290,6 +310,9 @@ def train_model(df, plot_type=0):
 
     X = df[features]
     y = df["Target"]
+
+    X = X.dropna()
+    y = y.loc[X.index]
 
     X_eval, _, y_eval, _ = train_test_split(X, y, test_size=0.8, random_state=42)
 
@@ -330,21 +353,55 @@ def train_model(df, plot_type=0):
                     y="Feature",
                     orientation="h",
                     title="🔍 Feature Importance (XGBoost)",
-                    labels={"Importance": "Importance Score", "Feature": "Input Feature"},
                     height=600
                 )
-
                 fig.update_layout(margin=dict(l=0, r=0, t=40, b=0))
                 st.plotly_chart(fig, use_container_width=True, key=f"plot_{uuid.uuid4()}")
 
-    # Predict and assign scalar values
-    df["Predicted"] = pd.Series(model.predict(X), index=df.index).astype(int)
-    df["Prob"] = pd.Series(model.predict_proba(X)[:, 1], index=df.index).astype(float)
+    df["Predicted"] = pd.Series(model.predict(X), index=X.index).astype(int)
+    df["Prob"] = pd.Series(model.predict_proba(X)[:, 1], index=X.index).astype(float)
+
+    df = add_smart_entry_signal(df, prob_threshold=0.7, max_bollinger_width=0.08, volume_confirm=True, debug=debug)
 
     if debug:
-        st.write("🎯 Sample predictions:", df[["Predicted", "Prob"]].head())
+        st.write("🎯 Sample predictions:", df[["Predicted", "Prob", "Entry_Signal"]].head())
 
     return model, df
+
+
+
+def add_smart_entry_signal(df, prob_threshold=0.7, max_bollinger_width=0.08, volume_confirm=True, debug=False):
+    """
+    Adds Entry_Signal column to df based on multi-condition filters:
+    - Model confidence (Prob)
+    - Volume confirmation (Volume_Spike)
+    - Volatility compression (Bollinger Width)
+
+    Parameters:
+        df: pd.DataFrame - your prediction-enhanced dataframe
+        prob_threshold: float - minimum model confidence
+        max_bollinger_width: float - threshold for Bollinger squeeze
+        volume_confirm: bool - require Volume_Spike == 1
+        debug: bool - print out activation stats
+
+    Returns:
+        df: pd.DataFrame with added Entry_Signal column
+    """
+    condition = (
+        (df["Prob"] > prob_threshold) &
+        (df["Bollinger_Width"] < max_bollinger_width)
+    )
+    if volume_confirm and "Volume_Spike" in df.columns:
+        condition &= (df["Volume_Spike"] == 1)
+
+    df["Entry_Signal"] = condition.astype(int)
+
+    if debug:
+        total_signals = df["Entry_Signal"].sum()
+        st.write(f"🎯 Smart Entry Signals: {total_signals} triggered")
+        st.write(df[["Prob", "Bollinger_Width", "Volume_Spike", "Entry_Signal"]].head(10))
+
+    return df
 
 
 def feature_drop_test(df, base_features, new_features):
@@ -621,134 +678,63 @@ def evaluate_exit(entry_price, future_prices, method="tp_sl", **kwargs):
 
 
 def simulate_trades(df, symbol, take_profit_pct=0.07, stop_loss_pct=0.03,
-                    max_hold_days=15, min_confidence=0.5,
-                    show_plot=True, exit_method="tp_sl", trade_size_usd=10_000):
-    # Cost configuration
-    TRADING_FEE_BUY_PCT = 0.001
-    TRADING_FEE_SELL_PCT = 0.001
-    CAPITAL_GAINS_TAX_PCT = 0.25
-
-    if debug:
-        st.write("🚧 simulate_trades started")
-        st.write("Columns in df:", df.columns.tolist())
-
-    if "Predicted" not in df.columns or "Prob" not in df.columns:
-        st.warning("Missing required prediction columns for trade simulation.")
-        return pd.DataFrame()
-
+                    max_hold_days=15, min_confidence=0.5, show_plot=True):
     trades = []
     df = df.copy()
-    df = df.sort_index()
-    df.reset_index(drop=False, inplace=True)
-    df.sort_values(by="Date", inplace=True)
-    df.set_index("Date", inplace=True)
 
-    close_col = f"Close_{symbol}"
+    # Filter only smart entries
+    entries = df[df["Entry_Signal"] == 1]
 
-    for i in range(len(df) - max_hold_days - 1):
-        row = df.iloc[i]
-        entry_idx = df.index[i]
-
-        try:
-            pred = float(row["Predicted"])
-            prob = float(row["Prob"])
-        except:
+    for entry_time, row in entries.iterrows():
+        if row["Prob"] < min_confidence:
             continue
 
-        if pred != 1 or prob < min_confidence:
-            continue
+        entry_price = row[f"Close_{symbol}"]
+        hold_days = 0
+        exit_reason = "MaxHold"
+        exit_time = None
+        exit_price = entry_price
 
-        try:
-            entry_price = float(row[close_col])
-        except:
-            continue
+        # Simulate forward for max_hold_days
+        forward_df = df.loc[entry_time:].iloc[1:max_hold_days+1]
+        for future_time, f_row in forward_df.iterrows():
+            hold_days += 1
+            price = f_row[f"Close_{symbol}"]
 
-        quantity = trade_size_usd / entry_price
+            if price >= entry_price * (1 + take_profit_pct):
+                exit_price = price
+                exit_reason = "TakeProfit"
+                exit_time = future_time
+                break
+            elif price <= entry_price * (1 - stop_loss_pct):
+                exit_price = price
+                exit_reason = "StopLoss"
+                exit_time = future_time
+                break
+        else:
+            # Exited by time
+            exit_price = forward_df[f"Close_{symbol}"].iloc[-1]
+            exit_time = forward_df.index[-1]
 
-        future_prices = df.iloc[i + 1: i + max_hold_days + 1][close_col].values
-        if len(future_prices) == 0:
-            continue
-
-        exit_offset, exit_price, reason = evaluate_exit(
-            entry_price,
-            future_prices,
-            method=exit_method,
-            take_profit_pct=take_profit_pct,
-            stop_loss_pct=stop_loss_pct
-        )
-
-        exit_idx = i + 1 + exit_offset
-        if exit_idx >= len(df):
-            continue
-
-        exit_date = df.index[exit_idx]
-        holding_days = (exit_date - entry_idx).days
-
-        # === Cost & Return Calculation ===
-        buy_fee = entry_price * TRADING_FEE_BUY_PCT * quantity
-        sell_fee = exit_price * TRADING_FEE_SELL_PCT * quantity
-        gross_profit = (exit_price - entry_price) * quantity
-        net_profit_before_tax = gross_profit - buy_fee - sell_fee
-        tax = CAPITAL_GAINS_TAX_PCT * net_profit_before_tax if net_profit_before_tax > 0 else 0
-        net_profit_after_tax = net_profit_before_tax - tax
-
-        gross_return_pct = (gross_profit / entry_price) * 100
-        net_return_pct = (net_profit_after_tax / (entry_price * quantity)) * 100
-
+        net_return = (exit_price / entry_price - 1) * 100
         trades.append({
-            "Entry Date": entry_idx,
-            "Exit Date": exit_date,
-            "Entry Price": round(entry_price, 2),
-            "Exit Price": round(exit_price, 2),
-            "Outcome": reason,
-            "Days Held": holding_days,
-            "Gross Return %": round(gross_return_pct, 2),
-            "Net Return %": round(net_return_pct, 2),
-            "Buy Fee": round(buy_fee, 2),
-            "Sell Fee": round(sell_fee, 2),
-            "Tax Paid": round(tax, 2),
-            "Net Profit ($)": round(net_profit_after_tax, 2)
+            "Entry Time": entry_time,
+            "Entry Price": entry_price,
+            "Exit Time": exit_time,
+            "Exit Price": exit_price,
+            "Hold Days": hold_days,
+            "Exit Reason": exit_reason,
+            "Net Return %": net_return,
+            "Confidence": row["Prob"]
         })
 
-    trades_df = pd.DataFrame(trades)
-
-    if not trades_df.empty:
-        total_trades = len(trades_df)
-        gross_total_return = trades_df["Gross Return %"].sum()
-        net_total_return = trades_df["Net Return %"].sum()
-        total_fees = trades_df["Buy Fee"].sum() + trades_df["Sell Fee"].sum()
-        total_tax = trades_df["Tax Paid"].sum()
-        win_rate = (trades_df["Net Return %"] > 0).mean() * 100
-        avg_net_return = trades_df["Net Return %"].mean()
-
-        st.markdown("### 📈 Strategy Summary")
-        col1, col2, col3 = st.columns(3)
-        col1.metric("📌 Total Trades", total_trades)
-        col2.metric("📈 Gross Return (%)", f"{gross_total_return:.2f}")
-        col3.metric("💰 Net Return (%)", f"{net_total_return:.2f}")
-
-        col4, col5, col6 = st.columns(3)
-        col4.metric("🏆 Win Rate (%)", f"{win_rate:.2f}")
-        col5.metric("📊 Avg Net Return", f"{avg_net_return:.2f}%")
-        col6.metric("🧾 Tax Paid", f"{total_tax:.2f}")
-
-        st.caption(f"💸 Total Fees Paid: {total_fees:.2f}")
-
-    with st.expander("📄 Trade Log (Net of Costs & Taxes)", expanded=True):
-        st.dataframe(trades_df)
+    trades_df = pd.DataFrame(trades).set_index("Entry Time")
 
     if show_plot and not trades_df.empty:
-        trades_df["Cumulative Net Return"] = (1 + trades_df["Net Return %"] / 100).cumprod()
-        fig = px.line(
-            trades_df,
-            x="Exit Date",
-            y="Cumulative Net Return",
-            title="📈 Cumulative Net Return (After Fees & Taxes)",
-            markers=True
-        )
-        st.plotly_chart(fig, use_container_width=True, key=f"plot_{uuid.uuid4()}")
+        st.line_chart(df[f"Close_{symbol}"])
+        st.write("✅ Trades simulated:", len(trades_df))
+        st.dataframe(trades_df.tail())
 
-    st.session_state.df = df
     return trades_df
 
 
@@ -780,6 +766,72 @@ def simulate_trades(df, symbol, take_profit_pct=0.07, stop_loss_pct=0.03,
 #     )
 #
 #     st.plotly_chart(fig, use_container_width=True, key="volume_only_test")
+def apply_realistic_fees(trades_df, tax_rate=0.25, per_share_fee=0.01, min_fee=2.5):
+    """
+    Adds real-world brokerage fees and capital gains tax to simulated trades.
+
+    Parameters:
+        trades_df : pd.DataFrame — trades with at least 'Net Return %' and 'Shares'
+        tax_rate : float — capital gains tax on profits (default: 25%)
+        per_share_fee : float — per-share execution fee (default: $0.01)
+        min_fee : float — minimum fee per side (buy/sell) per trade
+
+    Returns:
+        trades_df : pd.DataFrame — enriched with fee and tax columns
+    """
+
+    if "Shares" not in trades_df.columns:
+        st.warning("Missing 'Shares' column — assuming 100 shares per trade.")
+        trades_df["Shares"] = 100  # Fallback assumption
+
+    # Buy & Sell Execution Fees
+    trades_df["Buy Fee"] = trades_df["Shares"].apply(lambda x: max(per_share_fee * x, min_fee))
+    trades_df["Sell Fee"] = trades_df["Shares"].apply(lambda x: max(per_share_fee * x, min_fee))
+
+    # Capital Gains Tax: 25% of Net Profit if > 0
+    trades_df["Tax Paid"] = trades_df["Net Return %"].apply(
+        lambda x: x * tax_rate if x > 0 else 0
+    )
+
+    # Adjusted Net Return After Costs
+    trades_df["Net Return After Fees"] = (
+        trades_df["Net Return %"] - trades_df["Tax Paid"]
+        - trades_df["Buy Fee"] - trades_df["Sell Fee"]
+    )
+
+    return trades_df
+
+
+def display_strategy_summary(trades_df):
+    if trades_df.empty:
+        st.info("No trades to summarize.")
+        return
+
+    total_trades = len(trades_df)
+    gross_total_return = trades_df["Net Return %"].sum()
+    net_total_return = trades_df["Net Return After Fees"].sum()
+
+    buy_fees = trades_df["Buy Fee"].sum() if "Buy Fee" in trades_df else 0.0
+    sell_fees = trades_df["Sell Fee"].sum() if "Sell Fee" in trades_df else 0.0
+    total_fees = buy_fees + sell_fees
+
+    total_tax = trades_df["Tax Paid"].sum() if "Tax Paid" in trades_df else 0.0
+    win_rate = (trades_df["Net Return %"] > 0).mean() * 100
+    avg_net_return = trades_df["Net Return After Fees"].mean()
+
+    st.markdown("### 📈 Strategy Summary")
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("📌 Total Trades", total_trades)
+    col2.metric("📈 Gross Return (%)", f"{gross_total_return:.2f}")
+    col3.metric("💰 Net Return After Fees (%)", f"{net_total_return:.2f}")
+
+    col4, col5, col6 = st.columns(3)
+    col4.metric("🏆 Win Rate (%)", f"{win_rate:.2f}")
+    col5.metric("📊 Avg Net After Fees", f"{avg_net_return:.2f}%")
+    col6.metric("🧾 Tax Paid", f"{total_tax:.2f}")
+
+    st.caption(f"💸 Total Fees Paid: {total_fees:.2f}")
 
 
 def plot_price_volume_domain(df, trades_df, symbol, zoom_to_return=False):
@@ -825,9 +877,15 @@ def plot_price_volume_domain(df, trades_df, symbol, zoom_to_return=False):
     ))
 
     if not trades_df.empty:
-        # 🧽 Normalize and deduplicate
-        trades_df["Entry Date"] = pd.to_datetime(trades_df["Entry Date"])
-        trades_df["Exit Date"] = pd.to_datetime(trades_df["Exit Date"]).dt.normalize()
+        # ✅ Ensure required columns exist
+        if "Entry Date" not in trades_df.columns and "Entry Time" in trades_df.columns:
+            trades_df["Entry Date"] = pd.to_datetime(trades_df["Entry Time"])
+        elif "Entry Date" not in trades_df.columns:
+            trades_df["Entry Date"] = trades_df.index
+
+        if "Exit Date" not in trades_df.columns and "Exit Time" in trades_df.columns:
+            trades_df["Exit Date"] = pd.to_datetime(trades_df["Exit Time"]).dt.normalize()
+
         trades_df = trades_df[~trades_df.duplicated(subset=[
             "Entry Date", "Exit Date", "Entry Price", "Exit Price", "Net Return %"
         ])].copy()
@@ -896,8 +954,6 @@ def plot_price_volume_domain(df, trades_df, symbol, zoom_to_return=False):
     )
 
     st.plotly_chart(fig, use_container_width=True, key="domain_price_volume_trades")
-
-
 
 
 def plot_backtest_price(df, trades_df, symbol):
@@ -1032,11 +1088,146 @@ def plot_backtest_price(df, trades_df, symbol):
 
     st.plotly_chart(fig, use_container_width=True, key="stacked_trade_chart")
 
+def add_volume_features_and_labels(
+    df,
+    symbol,
+    window=20,
+    entry_return_threshold=0.05,
+    forward_days=5
+):
+    """
+    Adds volume-based features and entry target labels to a stock DataFrame.
 
-if "model" not in st.session_state:
-    st.session_state.model = None
-if "df" not in st.session_state:
-    st.session_state.df = None
+    Parameters:
+        df : pd.DataFrame
+            Stock data indexed by date.
+        symbol : str
+            The asset symbol (used for column names like 'Close_SYMBOL').
+        window : int
+            Rolling window length for average volume.
+        entry_return_threshold : float
+            Threshold for labeling a 'good entry' (e.g., 0.05 = +5%).
+        forward_days : int
+            How many days to look ahead when labeling.
+        debug : bool
+            Print debug information if True.
+    Returns:
+        pd.DataFrame
+            Enhanced DataFrame with new features and entry labels.
+    """
+    close_col = f"Close_{symbol}"
+    volume_col = f"Volume_{symbol}"
+
+    df = df.copy()
+    df[volume_col] = pd.to_numeric(df[volume_col], errors="coerce").fillna(0)
+
+    # === Volume-based features ===
+    df["Volume_MA"] = df[volume_col].rolling(window=window).mean()
+    df["Volume_Relative"] = df[volume_col] / df["Volume_MA"]
+    df["Volume_Delta"] = df[volume_col].diff()
+    df["Turnover"] = df[close_col] * df[volume_col]
+    df["Volume_Spike"] = (df["Volume_Relative"] > 1.5).astype(int)
+
+    # === Entry target label ===
+    future_return = df[close_col].shift(-forward_days) / df[close_col] - 1
+    # df["Target_Entry"] = (future_return > entry_return_threshold).astype(int)
+    df["Target"] = (future_return > entry_return_threshold).astype(int)
+
+    if debug:
+        st.subheader("🔎 Volume Feature Debug")
+        st.write("📊 Volume stats:", df[volume_col].describe())
+        st.write("📈 Volume_MA stats:", df["Volume_MA"].dropna().describe())
+        st.write("⚡ Relative Volume sample:", df["Volume_Relative"].dropna().head(10))
+        st.write("🔥 Volume Spike counts:", df["Volume_Spike"].value_counts())
+        st.write("🎯 Entry Label Breakdown:", df["Target_Entry"].value_counts(normalize=True))
+
+    return df
+
+
+def compute_atr(df, symbol, window=14):
+    high = df[f"High_{symbol}"]
+    low = df[f"Low_{symbol}"]
+    close = df[f"Close_{symbol}"]
+
+    tr1 = high - low
+    tr2 = (high - close.shift()).abs()
+    tr3 = (low - close.shift()).abs()
+
+    true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    df["ATR"] = true_range.rolling(window=window).mean()
+    return df
+
+
+def compute_bollinger_bandwidth(df, symbol, window=20, num_std=2):
+    close = df[f"Close_{symbol}"]
+    ma = close.rolling(window).mean()
+    std = close.rolling(window).std()
+
+    upper = ma + num_std * std
+    lower = ma - num_std * std
+    bandwidth = (upper - lower) / ma
+
+    df["Bollinger_Width"] = bandwidth
+    return df
+
+# def compare_volume_feature_impact(symbol, take_profit, stop_loss, max_hold, min_conf, debug=False):
+#     st.header("📊 Model Comparison: With vs. Without Volume Features")
+#
+#     # === Base data load
+#     df_base = load_and_prepare_data(symbol)
+#
+#     # === Model A: Without Volume Features
+#     if debug:
+#         st.subheader("🤖 Training Model WITHOUT Volume Features")
+#     model_plain, df_plain = train_model(df_base.copy(), plot_type=None)
+#
+#     trades_plain = simulate_trades(
+#         df_plain, symbol,
+#         take_profit_pct=take_profit,
+#         stop_loss_pct=stop_loss,
+#         max_hold_days=max_hold,
+#         min_confidence=min_conf,
+#         show_plot=False
+#     )
+#
+#     # === Model B: With Volume Features
+#     if debug:
+#         st.subheader("🤖 Training Model WITH Volume Features")
+#     df_with_volume = add_volume_features_and_labels(df_base.copy(), symbol=symbol, debug=debug)
+#     model_volume, df_volume = train_model(df_with_volume.copy(), plot_type=None)
+#
+#     trades_volume = simulate_trades(
+#         df_volume, symbol,
+#         take_profit_pct=take_profit,
+#         stop_loss_pct=stop_loss,
+#         max_hold_days=max_hold,
+#         min_confidence=min_conf,
+#         show_plot=False
+#     )
+#
+#     # === Comparison Output
+#     def summarize(trades, label):
+#         if trades.empty:
+#             st.warning(f"🚫 No trades found for {label}")
+#             return
+#
+#         win_rate = (trades["Net Return %"] > 0).mean() * 100
+#         total_return = trades["Net Return %"].sum()
+#         avg_return = trades["Net Return %"].mean()
+#         num_trades = len(trades)
+#
+#         st.markdown(f"### ⚖️ {label}")
+#         st.write(f"""
+#         - 📈 **Win Rate**: {win_rate:.2f}%
+#         - 💰 **Total Net Return**: {total_return:.2f}%
+#         - 📊 **Avg Return / Trade**: {avg_return:.2f}%
+#         - 📎 **Number of Trades**: {num_trades}
+#         """)
+#
+#     st.subheader("🔍 Performance Comparison")
+#     summarize(trades_plain, label="Baseline Model (No Volume)")
+#     summarize(trades_volume, label="Enhanced Model (With Volume Features)")
+
 
 if "model" not in st.session_state:
     st.session_state.model = None
@@ -1068,11 +1259,14 @@ if __name__ == "__main__":
     run_simulate = st.sidebar.button("Run & Simulate")
 
     if run_simulate:
-        # Load + train
+        # Load and enrich dataset
         df = load_and_prepare_data(symbol)
-        model, df_updated = train_model(df.copy(), plot_type=plot_option)
+        df = add_volume_features_and_labels(df, symbol=symbol)
 
-        # Apply time window after prediction
+        # Train model
+        model, df_updated = train_model(df.copy(), symbol, plot_type=plot_option)
+
+        # Limit to backtest window if enabled
         if admin_mode:
             df_slice = df_updated[
                 (df_updated.index >= pd.to_datetime(backtest_start)) &
@@ -1084,7 +1278,7 @@ if __name__ == "__main__":
         else:
             df_slice = df_updated
 
-        # Run simulation
+        # Simulate trades
         trades_df = simulate_trades(
             df_slice,
             symbol=symbol,
@@ -1095,21 +1289,29 @@ if __name__ == "__main__":
             show_plot=True
         )
 
+        # Add Entry/Exit Dates
+        trades_df["Entry Date"] = trades_df.index
+        trades_df["Exit Date"] = pd.to_datetime(trades_df["Exit Time"]).dt.normalize()
+
+        # ✅ Apply realistic brokerage fees & tax
+        trades_df = apply_realistic_fees(trades_df)
+        # ✅ Show performance summary
+        display_strategy_summary(trades_df)
+
+        # # ✅ Add missing 'Entry Date' column from index
+        # if not trades_df.empty and "Entry Date" not in trades_df.columns:
+        #     trades_df["Entry Date"] = trades_df.index
+
         if debug:
             st.write("✅ Trades found:", len(trades_df))
             st.write("🧬 trades_df columns:", trades_df.columns.tolist())
 
-        # st.write("🔍 Volume sample:", df[[f"Volume_{symbol}"]].head())
-        # st.write("📊 Volume stats:", df[f"Volume_{symbol}"].describe())
-
         zoom_to_return = st.sidebar.checkbox("📌 Zoom to first trade", value=True)
 
-        # Plot results
-        # plot_backtest_price(df, trades_df, symbol)
+        # Plot
         plot_price_volume_domain(df, trades_df, symbol, zoom_to_return)
-        # test_volume_chart(df, f"Volume_{symbol}")
 
-        # Save latest results to session
+        # Persist session state
         st.session_state.df = df_updated
         st.session_state.model = model
 
@@ -1128,4 +1330,3 @@ if __name__ == "__main__":
 
     else:
         st.sidebar.info("Press 'Run & Simulate' to begin.")
-
