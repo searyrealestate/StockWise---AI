@@ -94,7 +94,7 @@ def generate_nasdaq_ticker_lists(train_file="nasdaq_train_100.txt", test_file="n
         raise ValueError(f"Only found {len(tickers)} tickers — expected at least 500.")
 
     train_tickers = tickers[:100]
-    test_tickers = tickers[100:500]
+    test_tickers = tickers[101:500]
 
     with open(train_file, "w") as f:
         f.writelines([t + "\n" for t in train_tickers])
@@ -127,7 +127,9 @@ def download_stock_data(symbol, start_date="2000-01-01"):
         raise ValueError(f"Empty data for {symbol}")
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = [col[0] for col in df.columns]
-    df = df.rename(columns={k: f"{k}_{symbol}" for k in ["Open", "High", "Low", "Close", "Volume"]})
+    # Keep standard column names: Open, High, Low, Close, Volume
+    df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
+
     df["Symbol"] = symbol
     return df
 
@@ -138,8 +140,8 @@ def add_volume_features_and_labels(df, symbol, window=20, threshold=0.05, forwar
     ✅ Label is 1 if 5-day return exceeds threshold.
     """
 
-    close_col = f"Close_{symbol}"
-    volume_col = f"Volume_{symbol}"
+    close_col = "Close"
+    volume_col = "Volume"
     df = df.copy()
     df[volume_col] = pd.to_numeric(df[volume_col], errors="coerce").fillna(0)
 
@@ -196,6 +198,12 @@ def process_ticker_list(tickers, output_dir, train=True):
         try:
             df = download_stock_data(symbol)
             df = add_volume_features_and_labels(df, symbol=symbol, debug=False)
+            expected_cols = ["Open", "High", "Low", "Close", "Volume", "Volume_MA", "Volume_Relative", "Volume_Delta",
+                             "Turnover", "Volume_Spike", "Target"]
+            missing = [col for col in expected_cols if col not in df.columns]
+            if missing:
+                raise ValueError(f"{symbol} is missing columns: {missing}")
+
             df["Symbol"] = symbol
             all_dfs.append(df)
 
