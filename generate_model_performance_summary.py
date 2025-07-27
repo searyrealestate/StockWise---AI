@@ -25,7 +25,7 @@ This section of the Streamlit app provides:
 - Streamlit-rendered charts and tables
 - Optional backtest results for selected scenario
 """
-
+import re
 import os
 import glob
 import joblib
@@ -37,23 +37,30 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go  # make sure this is at the top
 from plotly.subplots import make_subplots
+from datetime import datetime
+
+st.set_page_config(layout="wide")
 
 # --- Session state defaults ---
-if "min_f1" not in st.session_state:
-    st.session_state.min_f1 = 0.2
-if "max_err" not in st.session_state:
-    st.session_state.max_err = 10.0
-if "min_hit" not in st.session_state:
-    st.session_state.min_hit = 0.3
+if hasattr(st, "session_state"):
+    if "min_f1" not in st.session_state:
+        st.session_state.min_f1 = 0.2
+    if "max_err" not in st.session_state:
+        st.session_state.max_err = 10.0
+    if "min_hit" not in st.session_state:
+        st.session_state.min_hit = 0.3
 
 # In sidebar or top of app
 DEBUG_MODE = st.sidebar.checkbox("🐞 Enable Debug Logging", value=False)
+
 
 # === CONFIG ===
 TRAIN_DIR = r"C:\Users\user\PycharmProjects\StockWise\models\NASDAQ-training set"
 TEST_DIR = r"C:\Users\user\PycharmProjects\StockWise\models\NASDAQ-testing set"
 FEATURE_COLS = ["Volume_Relative", "Volume_Delta", "Turnover", "Volume_Spike"]
 REPORT_NAME = "model_performance_summary.csv"
+df_stocks = pd.read_csv("nasdaq_stocks.csv")  # Must contain 'symbol' and 'name' columns
+
 
 # === INITIALIZE SESSION STATE FOR SLIDER RESET ===
 if "reset_filters" not in st.session_state:
@@ -233,9 +240,121 @@ def get_slice_around(df, row_idx, before=20, after=25):
     return df.iloc[start:end].copy()
 
 
-def run_backtest(stock_file, model_name, selected_time, debug=DEBUG_MODE):
+def apply_fees_and_taxes(entry_price, future_price, num_shares):
     """
-        📈 Run Backtest on a Selected Stock and Model
+    💸 Calculate net profit and return after Interactive Israel fees and tax.
+
+    Parameters:
+    - entry_price (float): Buy price per share
+    - future_price (float): Sell price per share
+    - num_shares (int): Number of shares traded
+
+    Returns:
+    - net_profit (float): Profit in USD after fees
+    - net_return (float): Return in % after fees
+    - commission (float): Commission paid
+    - state_tax (float): Tax paid
+    """
+    commission = max(0.01 * num_shares, 2.5)
+    trade_value = entry_price * num_shares
+    state_tax = trade_value * 0.0015
+    gross_profit = (future_price - entry_price) * num_shares
+    net_profit = gross_profit - commission - state_tax
+    net_return = (net_profit / trade_value) * 100
+    return net_profit, net_return, commission, state_tax
+
+
+def save_nasdaq_stock_list(file_format="csv", output_path="nasdaq_stocks"):
+    """
+    📥 Downloads NASDAQ stock list and saves it as CSV or TXT.
+
+    Parameters:
+    - file_format (str): 'csv' or 'txt'
+    - output_path (str): base filename without extension
+
+    Returns:
+    - str: Path to the saved file
+    """
+    # Load from StockAnalysis.com
+    url = "https://stockanalysis.com/list/nasdaq-stocks/"
+    tables = pd.read_html(url)
+    df = tables[0][["Symbol", "Company Name"]]
+    df.columns = ["symbol", "name"]
+
+    # Save to file
+    timestamp = datetime.now().strftime("%Y-%m-%d")
+    if file_format == "csv":
+        file_path = f"{output_path}_{timestamp}.csv"
+        df.to_csv(file_path, index=False)
+    elif file_format == "txt":
+        file_path = f"{output_path}_{timestamp}.txt"
+        with open(file_path, "w", encoding="utf-8") as f:
+            for _, row in df.iterrows():
+                f.write(f"{row['symbol']}\t{row['name']}\n")
+    else:
+        raise ValueError("file_format must be 'csv' or 'txt'")
+
+    print(f"✅ Saved {len(df)} stocks to {file_path}")
+    return file_path
+
+
+def load_nasdaq_stock_list(csv_path="nasdaq_stocks.csv"):
+    """
+    🔄 Loads NASDAQ stock list from a local CSV file.
+
+    Parameters:
+    - csv_path (str): Path to the CSV file
+
+    Returns:
+    - pd.DataFrame with columns: ['symbol', 'name']
+    """
+    df = pd.read_csv(csv_path)
+    assert "symbol" in df.columns and "name" in df.columns, "Missing required columns"
+    return df
+
+
+def stock_selector(df_stocks, key_prefix=""):
+    """
+    🔍 Streamlit UI component to select a stock by symbol or name.
+
+    Parameters:
+    - df_stocks (pd.DataFrame): Must contain 'symbol' and 'name' columns
+    - key_prefix (str): Optional prefix to ensure widget keys are unique
+
+    Returns:
+    - selected_symbol (str): The stock symbol selected by the user
+    - selected_name (str): The full stock name
+    """
+    df_stocks = df_stocks.copy()
+    df_stocks["label"] = df_stocks["symbol"] + " — " + df_stocks["name"]
+
+    search_key = f"{key_prefix}_stock_search_input"
+    select_key = f"{key_prefix}_stock_selector"
+
+    search_query = st.sidebar.text_input("🔎 Search Stock", "", key=search_key)
+
+    # Use regex to match whole words only
+    pattern = rf"\b{re.escape(search_query)}\b"
+    filtered_df = df_stocks[df_stocks["label"].str.contains(pattern, case=False, na=False, regex=True)]
+
+    # Fallback if no matches
+    if filtered_df.empty:
+        st.sidebar.warning("No matching stocks found.")
+        return None, None
+
+    selected_label = st.sidebar.selectbox(
+        "📋 Matching Stocks",
+        options=filtered_df["label"].tolist(),
+        key=select_key
+    )
+
+    selected_row = df_stocks[df_stocks["label"] == selected_label].iloc[0]
+    return selected_row["symbol"], selected_row["name"]
+
+
+def run_backtest(stock_file, model_name, selected_time, num_shares=100, debug=DEBUG_MODE):
+    """
+    📈 Run Backtest on a Selected Stock and Model
     ─────────────────────────────────────────────────────────────────────────────────
     This function performs a forward-looking backtest using a trained model on a selected stock.
     It scans for the first BUY signal after the selected date, evaluates the model's prediction,
@@ -246,7 +365,9 @@ def run_backtest(stock_file, model_name, selected_time, debug=DEBUG_MODE):
     - Loads the trained model
     - Scans forward from the selected date to find the first BUY signal
     - Calculates the entry price and future price (5-day lookahead)
-    - Computes return and model confidence
+    - Computes gross and net return (after commission and tax)
+    - Classifies the trade as "Buy on Dip" or "Buy on Rise"
+    - Labels the trade outcome as Profit or Loss
     - Displays results and debug logs in Streamlit
 
     📥 Parameters:
@@ -257,7 +378,11 @@ def run_backtest(stock_file, model_name, selected_time, debug=DEBUG_MODE):
         Name of the trained model to load (without .pkl extension)
     selected_time : str or datetime
         The user-selected date to start scanning from
-    debug : bool
+    commission : float, optional
+        Fixed commission fee in USD (default is 0.0)
+    state_tax : float, optional
+        Fixed tax fee in USD (default is 0.0)
+    debug : bool, optional
         If True, enables verbose debug output in Streamlit
 
     📤 Returns:
@@ -267,16 +392,21 @@ def run_backtest(stock_file, model_name, selected_time, debug=DEBUG_MODE):
     📝 Notes:
     - Uses a 5-day forward price shift to calculate return
     - Assumes model is trained on FEATURE_COLS
-    - Can be extended to include fees, taxes, or stop-loss logic
+    - Net return accounts for commission and tax deductions
+    - Trade context and outcome are clearly labeled
     """
+
     try:
         # 1️⃣ Load and sanitize test data
         selected_time = pd.to_datetime(selected_time).date()
-        if DEBUG_MODE:
+        if debug:
             st.write(f"[DEBUG] Selected model: {model_name}")
             st.write(f"[DEBUG] Selected date: {selected_time}")
 
         test_df = load_features(stock_file)
+        if test_df is None or test_df.empty:
+            st.error(f"❌ Could not load or parse feature file: {stock_file}")
+            return
         if debug:
             st.write(f"[DEBUG] Selected test stock file: {stock_file}")
             st.write(f"[DEBUG] Loaded test_df shape: {test_df.shape}")
@@ -285,18 +415,22 @@ def run_backtest(stock_file, model_name, selected_time, debug=DEBUG_MODE):
         test_df["Datetime"] = pd.to_datetime(test_df["Datetime"])
         test_df["DateOnly"] = test_df["Datetime"].dt.date
         test_df = test_df.reset_index(drop=True)  # 🔐 Ensure integer indexing
+
         if debug:
             st.write(f"[DEBUG] function name: run_backtest- A")
             st.write(f"[DEBUG] test_df = {test_df}")
+
         # 2️⃣ Locate the row for the selected date
         row_idx_list = test_df.index[test_df["DateOnly"] == selected_time].tolist()
+
         if debug:
             st.write(f"[DEBUG] function name: run_backtest- B")
             st.write(f"[DEBUG] row_idx_list = {row_idx_list}")
         if not row_idx_list:
             st.warning("⚠️ No data found for the selected date.")
             return
-        row_idx = int(row_idx_list[0])
+        row_idx = int(row_idx_list[0])  # check row_idx = row_idx_list[0]
+
         if debug:
             st.write(f"[DEBUG] function name: run_backtest- C")
             st.write(f"[DEBUG] row_idx = {row_idx}")
@@ -314,9 +448,18 @@ def run_backtest(stock_file, model_name, selected_time, debug=DEBUG_MODE):
             st.error(f"❌ Price column `{close_col}` not found. Aborting backtest.")
             return
         model_path = os.path.join(TRAIN_DIR, f"{model_name}.pkl")
+        if not os.path.exists(model_path):
+            st.error(f"❌ Model file not found: {model_path}")
+            return
+
+        if not os.path.exists(stock_file):
+            st.error(f"❌ Feature file not found: {stock_file}")
+            return
+
         mdl = joblib.load(model_path)
 
         # 4️⃣ Scan forward for first BUY signal
+        # Find first BUY signal after selected date
         entry_idx = None
         for i in range(row_idx + 1, len(test_df)):
             row_candidate = test_df.iloc[[i]]
@@ -334,56 +477,53 @@ def run_backtest(stock_file, model_name, selected_time, debug=DEBUG_MODE):
         # 5️⃣ Predict and evaluate
         ts_entry = test_df["Datetime"].iloc[entry_idx]
         entry_price = entry_row[close_col].values[0]
+
+        # 🧭 Determine Buy Type (based on price trend at entry)
+        prev_price = test_df[close_col].iloc[entry_idx - 1] if entry_idx > 0 else entry_price
+        buy_type = "Dip" if entry_price < prev_price else "Rise"
+
+        # 🔮 Predict future price and calculate return
         future_series = custom_shift_column(test_df, close_col, shift_n=-5, debug=debug)
         future_price = future_series.iloc[entry_idx]
-        pct_return = (future_price - entry_price) / entry_price * 100
+        dollar_return = future_price - entry_price
+        pct_return = (dollar_return / entry_price) * 100
+        net_profit, net_return, commission, state_tax = apply_fees_and_taxes(entry_price, future_price, num_shares)
 
-        # 🧾 Apply commission and state tax
-        # net_profit = future_price - entry_price - settings["commission"] - state_tax
-        # net_return = (net_profit / entry_price) * 100
-        #
-        # st.markdown(f"""
-        # - **📈 Signal**: {'BUY' if pred == 1 else 'No Signal'}
-        # - **Confidence**: `{prob:.2%}`
-        # - **Entry Price**: `${entry_price:.2f}`
-        # - **Future Price**: `${future_price:.2f}`
-        # - **Gross Return**: `{pct_return:.2f}%`
-        # - **Net Return (after fees)**: `{net_return:.2f}%`
-        # - **Fees Paid**: `${commission:.2f} + ${state_tax:.2f}`
-        # """)
+        # ✅ Determine trade outcome
+        trade_outcome = "Profit" if dollar_return > 0 else "Loss"
 
-        pred = mdl.predict(entry_row[FEATURE_COLS])[0]
+        # 🧠 Model prediction
+        missing_cols = [col for col in FEATURE_COLS if col not in entry_row.columns]
+        if missing_cols:
+            st.error(f"Missing required features: {missing_cols}")
+            return
+        pred = mdl.predict(entry_row[FEATURE_COLS])[0]          # todo: check it this is needed
         prob = mdl.predict_proba(entry_row[FEATURE_COLS])[0, 1]
 
+        # 📊 Display results
         st.markdown(f"""
-                - **📈 Signal**: {'BUY' if pred == 1 else 'No Signal'}  
-                - **Confidence**: `{prob:.2%}`  
-                - **Entry Price**: `${entry_price:.2f}`  
-                - **Future Price**: `${future_price:.2f}`  
-                - **Return**: `{pct_return:.2f}%`
-                """)
+        - **📈 Signal**: {'BUY' if pred == 1 else 'No Signal'}  # todo: check it this is needed
+        - **Buy Type (at entry)**: `{buy_type}`  
+        - **Trade Outcome**: `{trade_outcome}`  
+        - **Confidence**: `{prob:.2%}`  
+        - **Entry Price**: `${entry_price:.2f}`  
+        - **Future Price**: `${future_price:.2f}`  
+        - **{trade_outcome} (USD)**: `${abs(dollar_return):.2f}`  
+        - **{trade_outcome} (%)**: `{abs(pct_return):.2f}%`  
+        - **Net Profit (USD)**: `${net_profit:.2f}`  
+        - **Net Return (%)**: `{net_return:.2f}%`  
+        - **Fees Paid**: `${commission:.2f} + ${state_tax:.2f} = ${commission + state_tax:.2f}`
+        """)
 
-        # row = entry_row
-        # entry_price = entry_row[close_col].values[0]
+        # === Chart ===
+        candle_df = get_safe_window(test_df, entry_idx)
 
-        if debug:
-            st.write(f"[DEBUG] function name: run_backtest- D")
-            st.write(f"[DEBUG] row = {row}")
-            st.write(f"[DEBUG] test_df")
-            st.write(test_df)
-
-        # close_col = extract_price_column(test_df)
-
-        if debug:
-            st.write(f"[DEBUG] function name: run_backtest- E")
-            st.write(f"[DEBUG] row_idx = {close_col}")
+        # todo: check it this is needed
         if close_col is None or close_col not in test_df.columns:
             st.error(f"❌ Price column `{close_col}` not found in test_df. Aborting backtest.")
             st.write("Available columns:", test_df.columns.tolist())
             return
 
-        # entry_price = row[close_col].values[0]
-        # entry_price = entry_row[close_col].values[0]
         if debug:
             st.write(f"[DEBUG] function name: run_backtest- 1")
             st.write(f"[DEBUG] row_idx = {row_idx}")
@@ -394,31 +534,9 @@ def run_backtest(stock_file, model_name, selected_time, debug=DEBUG_MODE):
 
         # 6️⃣ Chart prep
         ts_target = test_df["Datetime"].iloc[min(entry_idx + 5, len(test_df) - 1)]
+        # todo: check it this is needed
         candle_df = get_safe_window(test_df, entry_idx)
-        vol_col = [col for col in candle_df.columns if "Volume_" in col][0]
-
-        # # 🔄 Future price shift (safe index handling)
-        # future_series = custom_shift_column(test_df, close_col, shift_n=-5, debug=DEBUG_MODE)
-        # # future_price = future_series.iloc[row_idx]
-        # future_price = future_series.iloc[entry_idx]
-        # pct_return = (future_price - entry_price) / entry_price * 100
-        #
-        # # 4️⃣ Load model and make prediction
-        # model_path = os.path.join(TRAIN_DIR, f"{model_name}.pkl")
-        # mdl = joblib.load(model_path)
-        # pred = mdl.predict(row[FEATURE_COLS])[0]
-        # prob = mdl.predict_proba(row[FEATURE_COLS])[0, 1]
-        #
-        # # 5️⃣ Display result
-        # st.markdown(f"""
-        # - **📈 Signal**: {'BUY' if pred == 1 else 'No Signal'}
-        # - **Confidence**: `{prob:.2%}`
-        # - **Entry Price**: `${entry_price:.2f}`
-        # - **Future Price**: `${future_price:.2f}`
-        # - **Return**: `{pct_return:.2f}%`
-        # """)
-
-        # candle_df = get_safe_window(test_df, row_idx)
+        # vol_col = [col for col in candle_df.columns if "Volume_" in col][0]
 
         if debug:
             st.write("[DEBUG] 🔍 Candle chart pre-check")
@@ -487,7 +605,7 @@ def run_backtest(stock_file, model_name, selected_time, debug=DEBUG_MODE):
 
         # 📍 Buy marker
         fig.add_trace(go.Scatter(
-            x=[ts_val],
+            x=[ts_val],  # todo: need to check if value ts_entry is better??
             y=[entry_price],
             mode="markers",
             marker=dict(symbol="arrow-bar-down", color="yellow", size=10),
@@ -534,7 +652,7 @@ def run_backtest(stock_file, model_name, selected_time, debug=DEBUG_MODE):
         st.plotly_chart(fig, use_container_width=True)
 
     except Exception as e:
-        st.error(f"Something went wrong: {e}")
+        st.error(f"Something went wrong during backtest: {e}")
 
 
 # === HELPER FUNCTIONS ===
@@ -548,19 +666,19 @@ def load_features(file_path):
     """
 
     try:
-        df = pd.read_parquet(file_path)
-        df = df.dropna()
+        if not os.path.exists(file_path):
+            st.warning(f"⚠️ File not found: {file_path}")
+            return None
+
+        df = pd.read_parquet(file_path).dropna()
 
         if "Datetime" not in df.columns:
-            # ⏱ Create dummy datetime index
             df = df.reset_index(drop=True)
-            df["Datetime"] = pd.date_range(
-                start="2023-01-01", periods=len(df), freq="1D"  # Change "1D" to "5min" or "1h" if intraday
-            )
+            df["Datetime"] = pd.date_range(start="2023-01-01", periods=len(df), freq="1D")
 
         return df
     except Exception as e:
-        st.write(f"Failed to load {file_path}: {e}")
+        st.warning(f"Failed to load {file_path}: {e}")
         return None
 
 
@@ -690,11 +808,15 @@ def main():
         in_f1, in_prec, in_rec, in_hit, in_err, in_prob = evaluate_model_on_df(model, train_df, close_col)
 
         test_f1s, test_prec, test_rec, test_hit, test_errs, test_probs = [], [], [], [], [], []
+        # Random sample from test files
         for test_file in np.random.choice(test_feature_files, size=10, replace=False):
             test_df = load_features(test_file)
             if test_df is None or test_df.empty:
                 continue
             close_col = extract_price_column(test_df)
+            if not np.issubdtype(test_df[close_col].dtype, np.number):
+                st.warning(f"⚠️ Unexpected dtype for price column: {test_df[close_col].dtype}")
+                continue
             if close_col is None or close_col not in test_df.columns:
                 if DEBUG_MODE:
                     st.write(f"[DEBUG WARNING] Column `{close_col}` missing from {os.path.basename(test_file)}")
@@ -737,48 +859,107 @@ def main():
 
 
 if __name__ == "__main__":
-    """
-    This section defines the interactive user interface and behavior of the Streamlit app. 
-    It controls how users interact with the model evaluation system and backtesting engine
-    
-    📌 st.set_page_config(...) Sets the layout and title of the app
-    🚀 st.button("Run Evaluation and Generate Report") Triggers the main() function to evaluate all models
-    
-    What It Does:
-    Sets up the app layout and title
-    Provides a button to trigger model evaluation across all saved models
-    Loads and displays the leaderboard from the generated CSV report
-    
-    
-    Offers sidebar filters for:
-    Loads the CSV report
-    Minimum F1 score
-    Maximum average error
-    Minimum hit rate
-    Displays a sorted table of top-performing models
-    
-    Displays interactive charts:
-    F1 vs. Error (bubble chart)
-    Hit Rate vs. Precision
-    Error Standard Deviation vs. F1
-    
-    🎛️ Sidebar Filters:
-    Interactive sliders for F1, error, and hit rate
-    Reset button to restore default filter values
-    
-    Allows users to:
-    Select a specific stock file
-    Choose a trained model
-    Pick a date
-    Run a manual backtest using the selected configuration
-    
-    📤 Outputs:
-    Dynamic tables, charts, and backtest results rendered in the Streamlit interface
-    
-    """
+    # """
+    # This section defines the interactive user interface and behavior of the Streamlit app.
+    # It controls how users interact with the model evaluation system and backtesting engine
+    #
+    # 📌 st.set_page_config(...) Sets the layout and title of the app
+    # 🚀 st.button("Run Evaluation and Generate Report") Triggers the main() function to evaluate all models
+    #
+    # What It Does:
+    # Sets up the app layout and title
+    # Provides a button to trigger model evaluation across all saved models
+    # Loads and displays the leaderboard from the generated CSV report
+    #
+    #
+    # Offers sidebar filters for:
+    # Loads the CSV report
+    # Minimum F1 score
+    # Maximum average error
+    # Minimum hit rate
+    # Displays a sorted table of top-performing models
+    #
+    # Displays interactive charts:
+    # F1 vs. Error (bubble chart)
+    # Hit Rate vs. Precision
+    # Error Standard Deviation vs. F1
+    #
+    # 🎛️ Sidebar Filters:
+    # Interactive sliders for F1, error, and hit rate
+    # Reset button to restore default filter values
+    #
+    # Allows users to:
+    # Select a specific stock file
+    # Choose a trained model
+    # Pick a date
+    # Run a manual backtest using the selected configuration
+    #
+    # 📤 Outputs:
+    # Dynamic tables, charts, and backtest results rendered in the Streamlit interface
+    #
+    # """
+
+    # st.title("🏆 NASDAQ Model Performance Evaluation")
+    #
+    # # Load model leaderboard
+    # if os.path.exists(REPORT_NAME):
+    #     df_summary = pd.read_csv(REPORT_NAME)
+    # else:
+    #     st.error("❌ Model performance summary not found. Please run evaluation first.")
+    #     st.stop()
+    #
+    # # === BACKTEST SECTION ===
+    # st.markdown("## 🔁 Backtest a Specific Scenario")
+    #
+    # with st.expander("🔍 How it works"):
+    #     st.markdown("""
+    #     Use this tool to test a specific model on new data from a stock and date it wasn't trained on.
+    #     It will simulate whether the model would have issued a 'buy signal', and how far the stock actually moved.
+    #     """)
+    #
+    # # Input widgets
+    # df_stocks = load_nasdaq_stock_list()
+    # selected_symbol, selected_name = stock_selector(df_stocks, key_prefix="backtest")
+    # stock_file = os.path.join(TEST_DIR, f"{selected_symbol}_features.parquet")
+    #
+    # # Get best model for selected stock
+    # stock_models = df_summary[df_summary["Symbol"] == selected_symbol]
+    # if stock_models.empty:
+    #     st.warning(f"❌ No trained model found for {selected_symbol}")
+    #     st.stop()
+    #
+    # best_model_row = stock_models.sort_values("Test_F1_avg", ascending=False).iloc[0]
+    # model_name = best_model_row["Model"]
+    # st.markdown(f"**Best Model:** `{model_name}` — F1 Score: `{best_model_row['Test_F1_avg']:.2f}`")
+    #
+    # # Load feature data
+    # test_df = load_features(stock_file)
+    # if test_df is None:
+    #     st.error(f"❌ Could not load feature file: {stock_file}")
+    #     st.stop()
+    # test_df = test_df.reset_index(drop=True)
+    #
+    # # Extract close column once
+    # close_col = extract_price_column(test_df)
+    # if close_col is None or close_col not in test_df.columns:
+    #     st.error(f"❌ Could not identify close price column in test data.")
+    #     st.stop()
+    #
+    # # Date selection
+    # selected_time = st.date_input("🕒 Choose time", value=pd.to_datetime("today").date())
+    # selected_time = pd.to_datetime(selected_time).date()
+    # test_df["DateOnly"] = pd.to_datetime(test_df["Datetime"]).dt.date
+    #
+    # match_indices = test_df.index[test_df["DateOnly"] == selected_time].tolist()
+    # if not match_indices:
+    #     st.warning("No data found for that date — try a different day.")
+    # else:
+    #     num_shares = st.sidebar.number_input("📦 Number of Shares", min_value=1, value=100, step=1)
+    #     if st.button("▶️ Run Backtest"):
+    #         run_backtest(stock_file, model_name, selected_time, num_shares=num_shares, debug=DEBUG_MODE)
 
     # === DASHBOARD ===
-    st.set_page_config(layout="wide")
+
     st.title("🏆 NASDAQ Model Performance Evaluation")
 
     # Run evaluation
@@ -800,13 +981,26 @@ if __name__ == "__main__":
         ranked_model_names = df_ranked["Model"].tolist()
 
         # === SIDEBAR FILTERS ===
+        # gets stock list
+        df_stocks = load_nasdaq_stock_list()
+        selected_symbol, selected_name = stock_selector(df_stocks, key_prefix="backtest")
+        stock_file = os.path.join(TEST_DIR, f"{selected_symbol}_features.parquet")
+
+        selected_time = st.date_input("🕒 Choose date", value=pd.to_datetime("today").date())
+        num_shares = st.sidebar.number_input("📦 Number of Shares", min_value=1, value=100, step=1)
+
+        if selected_symbol:
+            st.markdown(f"### 📈 Selected: `{selected_symbol}` — {selected_name}")
+
+        # num_shares = st.sidebar.number_input("📦 Number of Shares to Trade", min_value=1, value=100, step=1)
+
         with st.sidebar:
             with st.expander("📌 What do these filters do?"):
                 st.markdown("""
                 Filters:
-                - **F1 Score** → higher is better  
-                - **Avg Error ($)** → lower is better  
-                - **Hit Rate** → higher is better  
+                - **F1 Score** → higher is better
+                - **Avg Error ($)** → lower is better
+                - **Hit Rate** → higher is better
                 """)
 
             # Sliders using session state values
@@ -856,10 +1050,10 @@ if __name__ == "__main__":
             # === 📈 F1 vs Error Chart ===
         with st.expander("📈 F1 vs Error — How to read this chart"):
             st.markdown("""
-                    Each dot = a model  
-                    - **Higher = better F1 score**  
-                    - **Left = lower error** (good!)  
-                    - **Bubble size = Hit Rate**, **Color = Confidence**  
+                    Each dot = a model
+                    - **Higher = better F1 score**
+                    - **Left = lower error** (good!)
+                    - **Bubble size = Hit Rate**, **Color = Confidence**
                     Goal: Top-left zone ✅
                     """)
         fig1 = px.scatter(
@@ -876,9 +1070,9 @@ if __name__ == "__main__":
         # === 🎯 Hit Rate vs Precision Chart ===
         with st.expander("🎯 Hit Rate vs Precision — What's good here?"):
             st.markdown("""
-                    Top-right is ideal 💯  
-                    - **Hit Rate**: % of correct spike predictions  
-                    - **Precision**: % of predicted spikes that were real  
+                    Top-right is ideal 💯
+                    - **Hit Rate**: % of correct spike predictions
+                    - **Precision**: % of predicted spikes that were real
                     - Color = Avg Error ($) → Lighter is better
                     """)
         fig2 = px.scatter(
@@ -894,8 +1088,8 @@ if __name__ == "__main__":
         # === 📉 Optional: STD of Prediction Error ===
         with st.expander("📉 Std. Dev. of Error — Why it matters"):
             st.markdown("""
-                    Shows volatility of a model's predictions:  
-                    - **Lower STD** = More consistent accuracy ✅  
+                    Shows volatility of a model's predictions:
+                    - **Lower STD** = More consistent accuracy ✅
                     - **High STD** = Erratic predictions ⚠️
                     """)
 
@@ -936,18 +1130,35 @@ if __name__ == "__main__":
 
     with st.expander("🔍 How it works"):
         st.markdown("""
-        Use this tool to test a specific model on new data from a stock and date it wasn't trained on.  
-        It will simulate whether the model would have issued a 'buy signal', and how far the stock actually moved.  
+        Use this tool to test a specific model on new data from a stock and date it wasn't trained on.
+        It will simulate whether the model would have issued a 'buy signal', and how far the stock actually moved.
         """)
 
     # Input widgets
-    stock_file = st.selectbox("📄 Choose a test stock file", sorted(glob.glob(os.path.join(TEST_DIR, "*_features_*.parquet"))))
-    model_name = st.selectbox("🤖 Choose a trained model", ranked_model_names)
+    # selected_symbol, selected_name = stock_selector(df_stocks)
+    stock_models = df[df["Symbol"] == selected_symbol]
+
+    if stock_models.empty:
+        st.warning(f"❌ No trained model found for {selected_symbol}")
+        st.stop()
+
+    # Pick the model with the highest Test_F1_avg
+    best_model_row = stock_models.sort_values("Test_F1_avg", ascending=False).iloc[0]
+    model_name = best_model_row["Model"]
+    # ✅ Show the selected model and its F1 score
+    st.markdown(f"**Best Model:** `{model_name}` — F1 Score: `{best_model_row['Test_F1_avg']:.2f}`")
+    # model_name = st.selectbox("🤖 Choose a trained model", ranked_model_names)
     # selected_index = st.number_input("📍 Row index to simulate (e.g. 100)", min_value=0, step=1)
-    test_df = load_features(stock_file).reset_index(drop=True)
+    # test_df = load_features(stock_file).reset_index(drop=True)
+    test_df = load_features(stock_file)
+    if test_df is None:
+        st.error(f"❌ Could not load feature file: {stock_file}")
+        st.stop()
+    test_df = test_df.reset_index(drop=True)
+
     time_col = test_df.index if isinstance(test_df.index, pd.DatetimeIndex) else test_df["Datetime"]  # adjust if needed
     # selected_time = st.selectbox("🕒 Choose date/time", time_col.astype(str))
-    selected_time = st.date_input("🕒 Choose time", value="today")# test_df["Datetime"].astype(str))
+    selected_time = st.date_input("🕒 Choose time", value=pd.to_datetime("today").date())
     selected_time = pd.to_datetime(selected_time).date()  # ensure it's a date object
 
     # Create a 'date only' column from your Datetime column
@@ -965,6 +1176,4 @@ if __name__ == "__main__":
 
     # Button to run the test
     if st.button("▶️ Run Backtest"):
-        run_backtest(stock_file, model_name, selected_time, debug=DEBUG_MODE)
-
-
+        run_backtest(stock_file, model_name, selected_time, num_shares=num_shares, debug=DEBUG_MODE)

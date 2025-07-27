@@ -74,11 +74,11 @@ if __name__ == "__main__":
     symbols = test_data_manager.get_available_symbols()
     print(f"🔍 Found {len(symbols)} test stocks")
 
-    model_path = "models/nasdaq_general_model_lgbm_tech.pkl"
+    model_path = "models/400_train_set/nasdaq_general_model_lgbm_tech-400stocks.pkl"
 
     evaluator = ModelEvaluator(
         model_path=model_path,
         test_data_manager=test_data_manager
     )
 
-    summary = evaluator.evaluate_on_stocks(symbols, output_csv="summary_lgbm_tech.csv")
+    summary = evaluator.evaluate_on_stocks(symbols, output_csv="summary_lgbm_tech-dynamic-days-window-400stocks.csv")

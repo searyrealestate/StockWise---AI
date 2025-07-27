@@ -38,12 +38,16 @@ class DataManager:
         try:
             df = pd.read_parquet(file_path)
 
-            if df.index.name and "date" in df.index.name.lower():
-                df = df.reset_index()
-                df.rename(columns={df.columns[0]: "Datetime"}, inplace=True)
+            # 🛠️ Safely handle index and 'Date' column
+            if df.index.name and df.index.name.lower() == "date":
+                if "Date" not in df.columns:
+                    df = df.reset_index()
+                else:
+                    df.index.name = None  # Avoid conflict
             elif "Date" in df.columns:
-                df.rename(columns={"Date": "Datetime"}, inplace=True)
+                pass  # Already good
 
+            df.rename(columns={"Date": "Datetime"}, inplace=True)
             df["symbol"] = symbol
 
             # ✅ Add technical indicators
