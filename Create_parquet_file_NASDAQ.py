@@ -538,6 +538,9 @@ def train_model(df, symbol):
     )
     model.fit(X, y)
 
+    importance = model.get_booster().get_score(importance_type='weight')
+    sorted_features = sorted(importance.items(), key=lambda x: x[1], reverse=True)
+    debug_print(f"Top features: {sorted_features[:5]}", "DATA")
     debug_print(f"=== MODEL TRAINING COMPLETE for {symbol} ===", "SUCCESS")
     return model, df_clean
 

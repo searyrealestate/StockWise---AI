@@ -223,6 +223,40 @@ class EnhancedStockAdvisor:
             print(f"Critical error calculating indicators: {e}")
             return None
 
+    def calculate_confidence_score(self,indicators):
+        score = 0
+        weights = {
+            'rsi_14': 1,
+            'macd_histogram': 1.5,
+            'volume_relative': 0.8,
+            'momentum_5': 1.2,
+            'bb_position': 0.5,
+            'stoch_k': 0.8
+        }
+        for key, weight in weights.items():
+            val = indicators.get(key, 0)
+            if key.startswith('rsi') and 40 < val < 60:
+                continue  # Neutral zone
+            score += weight * val
+        return round(score, 2)
+
+    def interpret_signals(self,indicators):
+        commentary = []
+        if indicators['rsi_14'] < 30:
+            commentary.append("Oversold RSI – possible rebound.")
+        if indicators['macd'] > indicators['macd_signal']:
+            commentary.append("MACD crossover – bullish momentum.")
+        if indicators['volume_relative'] > 1.5:
+            commentary.append("High volume spike confirms move.")
+        if indicators['stoch_k'] > indicators['stoch_d']:
+            commentary.append("Stochastic trending upward.")
+        return " | ".join(commentary)
+
+    def log_recommendation(self, symbol, result, analysis_date):
+        with open("recommendation_log.csv", "a") as f:
+            f.write(
+                f"{symbol},{analysis_date},{result['action']},{result['confidence']:.1f},{result['final_score']:.2f}\n")
+
     def analyze_stock_enhanced(self, symbol, target_date, investment_days=7, debug_mode=False):
         """Enhanced stock analysis with 95% confidence targeting"""
 
@@ -251,6 +285,9 @@ class EnhancedStockAdvisor:
             indicators, symbol, investment_days, debug_mode=debug_mode
         )
 
+        # 🚥 Log the final recommendation to CSV
+        self.log_recommendation(symbol, recommendation, analysis_date)
+
         return {
             'symbol': symbol,
             'analysis_date': analysis_date,
@@ -258,6 +295,38 @@ class EnhancedStockAdvisor:
             'investment_days': investment_days,
             **recommendation
         }
+
+    def build_trading_plan(self, current_price, target_gain=0.037, max_loss=0.06, days=7):
+        buy_price = current_price
+        sell_price = round(buy_price * (1 + target_gain), 2)
+        stop_loss = round(buy_price * (1 - max_loss), 2)
+        profit_pct = round(target_gain * 100, 1)
+
+        plan = {
+            "buy_price": buy_price,
+            "sell_price": sell_price,
+            "stop_loss": stop_loss,
+            "profit_pct": profit_pct,
+            "max_loss_pct": round(max_loss * 100, 1),
+            "holding_days": days
+        }
+        return plan
+
+    def boost_confidence(self,tech_score, model_score, investment_days):
+        base_confidence = 50.0
+        signal_alignment = 1 if tech_score * model_score > 0 else 0
+
+        # Scale based on score strength
+        score_strength = min(abs(tech_score + model_score), 6)
+        confidence_boost = score_strength * 5
+
+        # Duration sensitivity
+        duration_factor = min(investment_days, 14) / 14
+        timing_bonus = 3 * duration_factor
+
+        total_boost = confidence_boost + (10 * signal_alignment) + timing_bonus
+        final_confidence = min(base_confidence + total_boost, 99.9)
+        return round(final_confidence, 1)
 
     def generate_enhanced_recommendation(self, indicators, symbol, investment_days, debug_mode=False):
         """Generate high-confidence recommendations using multiple confirmations"""
@@ -270,7 +339,7 @@ class EnhancedStockAdvisor:
                 print(message)
 
         current_price = indicators['current_price']
-        debug_print(f"=== ENHANCED RECOMMENDATION DEBUG for {symbol} ===")
+        debug_print(f"\n=== ENHANCED RECOMMENDATION DEBUG for {symbol} ===")
         debug_print(f"Current Price: ${current_price:.2f}")
         debug_print(f"Investment Days: {investment_days}")
 
@@ -345,26 +414,37 @@ class EnhancedStockAdvisor:
 
         if rsi_14 < 30:
             momentum_score += 3
-            momentum_signals.append("🔥 RSI extremely oversold - strong buy signal")
-            debug_print("✅ RSI < 30 (extremely oversold): +3 points")
+            momentum_signals.append("🔥 RSI < 30: Extremely oversold — strong buy signal")
+            debug_print("✅ RSI < 30: +3 points")
+
         elif rsi_14 < 40:
             momentum_score += 2
-            momentum_signals.append("💪 RSI oversold - good buying opportunity")
-            debug_print("✅ RSI < 40 (oversold): +2 points")
+            momentum_signals.append("💪 RSI 30–39: Oversold — good buying opportunity")
+            debug_print("✅ RSI 30–39: +2 points")
+
+        elif rsi_14 < 45:
+            momentum_score += 1
+            momentum_signals.append("📉 RSI 40–44: Weak recovery — light bullish bias")
+            debug_print("✅ RSI 40–44: +1 point")
+
+        elif rsi_14 <= 55:
+            momentum_score += 1
+            momentum_signals.append("✅ RSI 45–55: Healthy consolidation")
+            debug_print("✅ RSI 45–55: +1 point")
+
+        elif rsi_14 <= 60:
+            momentum_signals.append("😐 RSI 56–60: Slightly bullish — neutral")
+            debug_print("⚖️ RSI 56–60: 0 points")
+
+        elif rsi_14 <= 70:
+            momentum_score -= 1
+            momentum_signals.append("⚠️ RSI 61–70: Slightly overbought — cautious")
+            debug_print("❌ RSI 61–70: -1 point")
+
         elif rsi_14 > 70:
             momentum_score -= 3
-            momentum_signals.append("⚠️ RSI extremely overbought - strong sell signal")
-            debug_print("❌ RSI > 70 (extremely overbought): -3 points")
-        elif rsi_14 > 60:
-            momentum_score -= 2
-            momentum_signals.append("🚨 RSI overbought - consider taking profits")
-            debug_print("❌ RSI > 60 (overbought): -2 points")
-        elif 45 <= rsi_14 <= 55:
-            momentum_score += 1
-            momentum_signals.append("✅ RSI in healthy range")
-            debug_print("✅ RSI in healthy range (45-55): +1 point")
-        else:
-            debug_print(f"⚖️ RSI neutral ({rsi_14:.1f}): 0 points")
+            momentum_signals.append("🚨 RSI > 70: Extremely overbought — strong sell signal")
+            debug_print("❌ RSI > 70: -3 points")
 
         # MACD Analysis
         macd = indicators.get('macd', 0)
@@ -398,14 +478,22 @@ class EnhancedStockAdvisor:
             volume_score += 2
             volume_signals.append("🔊 Extremely high volume - strong confirmation")
             debug_print("✅ Volume > 2x average: +2 points")
+
         elif volume_ratio > 1.5:
             volume_score += 1
             volume_signals.append("📢 Above average volume - good confirmation")
             debug_print("✅ Volume > 1.5x average: +1 point")
+
+        elif volume_ratio > 1.2:
+            volume_score += 0.5
+            volume_signals.append("🔍 Slight volume uptick — minor confirmation")
+            debug_print("🟢 Volume > 1.2x average: +0.5 points")
+
         elif volume_ratio < 0.7:
             volume_score -= 1
             volume_signals.append("🔇 Below average volume - weak confirmation")
             debug_print("❌ Volume < 0.7x average: -1 point")
+
         else:
             volume_signals.append("📊 Normal volume levels")
             debug_print("⚖️ Normal volume: 0 points")
@@ -454,11 +542,22 @@ class EnhancedStockAdvisor:
                 volume_current = indicators.get('volume_current', 1000000)
                 volume_avg = indicators.get('volume_avg_10', 1000000)
 
+                # feature_values = [
+                #     volume_relative,
+                #     volume_current - volume_avg,
+                #     current_price * volume_current,
+                #     1 if volume_relative > 1.5 else 0
+                # ]
                 feature_values = [
-                    volume_relative,
-                    volume_current - volume_avg,
-                    current_price * volume_current,
-                    1 if volume_relative > 1.5 else 0
+                    indicators.get("volume_relative", 1.0),
+                    indicators.get("momentum_5", 0),
+                    indicators.get("rsi_14", 50),
+                    indicators.get("macd_histogram", 0),
+                    indicators.get("bb_position", 0.5),
+                    indicators.get("ema_10", current_price),  # short-term trend
+                    indicators.get("price_change_1d", 0.0),  # day-over-day delta
+                    1 if volume_relative > 1.5 else 0,
+                    1 if indicators.get("rsi_14", 50) < 30 else 0  # oversold trigger
                 ]
 
                 debug_print(f"ML Features: {feature_values}")
@@ -524,6 +623,8 @@ class EnhancedStockAdvisor:
             sr_score * adjusted_weights['support_resistance'] +
             model_score * adjusted_weights['model']
         )
+
+        signal_strengths = self.extract_signal_strengths(trend_score, momentum_score, volume_score, sr_score, model_score)
 
         debug_print(f"\n=== FINAL CALCULATION ===")
         debug_print(f"Trend: {trend_score} × {adjusted_weights['trend']} = {trend_score * adjusted_weights['trend']:.3f}")
