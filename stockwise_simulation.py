@@ -22,13 +22,39 @@ warnings.filterwarnings('ignore')
 
 
 class EnhancedStockAdvisor:
-    def __init__(self, model_dir="models/NASDAQ-training set"):
+    def __init__(self, model_dir="models/NASDAQ-training set", debug=False, download_log=True):
         self.model_dir = model_dir
         self.models = {}
+        self.debug = debug
+        self.debug_log = []
+        self.download_log = download_log
+        self.investment_days = 7
+        self.failed_models = []
         self.load_models()
+
+
+    def log(self, message, level="INFO"):
+        if self.debug:
+            color_map = {
+                "INFO": "\033[94m",  # Blue
+                "SUCCESS": "\033[92m",  # Green
+                "ERROR": "\033[91m",  # Red
+            }
+            reset = "\033[0m"
+            prefix = {"INFO": "⚖️", "SUCCESS": "✅", "ERROR": "❌"}.get(level, "⚖️")
+            symbol = getattr(self, "active_symbol", "")
+            formatted = f"{color_map.get(level, '')}{prefix} [{level}] {symbol}: {message}{reset}"
+            self.debug_log.append(formatted)
+            print(formatted)
+            if self.download_log:
+                with open("debug_log.txt", "a") as f:
+                    f.write(formatted + "\n")
 
     def load_models(self):
         """Load trained models"""
+
+        self.log("Loading models...", "INFO")
+
         try:
             if os.path.exists(self.model_dir):
                 model_files = glob.glob(os.path.join(self.model_dir, "*_model_*.pkl"))
@@ -36,33 +62,47 @@ class EnhancedStockAdvisor:
                     symbol = os.path.basename(model_file).split('_model_')[0]
                     try:
                         self.models[symbol] = joblib.load(model_file)
-                    except:
-                        pass
-        except:
-            pass
+                        self.log(f"Loaded model for {symbol}", "SUCCESS")
+                    except Exception as e:
+                        self.log(f"Failed to load model for {symbol}: {str(e)}", "ERROR")
+            else:
+                self.log(f"Model directory does not exist: {self.model_dir}", "ERROR")
 
-    def get_stock_data(self, symbol, target_date, days_back=90):
+        except Exception as e:
+            self.log(f"Unexpected error loading models: {str(e)}", "ERROR")
+            error_msg = f"Failed to load model for {symbol}: {str(e)}"
+            self.failed_models.append((symbol, str(e)))
+            self.log(error_msg, "ERROR")
+
+    def get_stock_data(self, symbol, target_date, days_back=60):
         """Get comprehensive stock data for analysis"""
+        self.log(f"Fetching stock data for {symbol}", "INFO")
         try:
             target_pd = pd.Timestamp(target_date)
             start_date = target_pd - pd.Timedelta(days=days_back)
-            end_date = target_pd + pd.Timedelta(days=10)
+            end_date = target_pd + pd.Timedelta(days=20)
 
             df = yf.download(symbol, start=start_date, end=end_date, progress=False, auto_adjust=True)
 
             if df.empty:
+                self.log(f"No data returned for {symbol}", "ERROR")
                 return None
 
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = [col[0] for col in df.columns]
 
+            self.log(f"Retrieved {len(df)} rows for {symbol}", "SUCCESS")
+
             return df
 
-        except:
+        except Exception as e:
+            self.log(f"Error fetching stock data for {symbol}: {str(e)}", "ERROR")
             return None
 
     def calculate_enhanced_indicators(self, df, analysis_date):
         """Calculate comprehensive technical indicators for higher confidence - FIXED VERSION"""
+
+        self.log(f"Calculating indicators for {analysis_date}", "INFO")
 
         # Filter data up to analysis date
         historical_data = df[df.index <= analysis_date].copy()
@@ -74,36 +114,57 @@ class EnhancedStockAdvisor:
         try:
             # Price Analysis
             current_price = historical_data['Close'].iloc[-1]
+            self.log(f"Current price: {current_price:.2f}", "SUCCESS")
+
             indicators['current_price'] = current_price
 
             # FIXED: Moving Averages (Multiple timeframes)
             indicators['sma_5'] = historical_data['Close'].rolling(5, min_periods=1).mean().iloc[-1]
+            self.log(f"sma_5: {indicators['sma_5']:.1f}", "SUCCESS")
+
             indicators['sma_10'] = historical_data['Close'].rolling(10, min_periods=1).mean().iloc[-1]
+            self.log(f"sma_10: {indicators['sma_10']:.1f}", "SUCCESS")
+
             indicators['sma_20'] = historical_data['Close'].rolling(20, min_periods=1).mean().iloc[-1]
+            self.log(f"sma_20: {indicators['sma_20']:.1f}", "SUCCESS")
+
             indicators['sma_50'] = historical_data['Close'].rolling(50, min_periods=1).mean().iloc[-1]
+            self.log(f"sma_50: {indicators['sma_50']:.1f}", "SUCCESS")
 
             # FIXED: EMA for trend confirmation
             indicators['ema_12'] = historical_data['Close'].ewm(span=12, min_periods=1).mean().iloc[-1]
+            self.log(f"ema_12: {indicators['ema_12']:.1f}", "SUCCESS")
+
             indicators['ema_26'] = historical_data['Close'].ewm(span=26, min_periods=1).mean().iloc[-1]
+            self.log(f"ema_26: {indicators['ema_26']:.1f}", "SUCCESS")
 
             # FIXED: RSI calculation using ta library
             try:
                 rsi_14 = ta.momentum.RSIIndicator(historical_data['Close'], window=14)
                 indicators['rsi_14'] = rsi_14.rsi().iloc[-1]
+                self.log(f"rsi_14: {indicators['rsi_14']:.1f}", "SUCCESS")
 
                 rsi_21 = ta.momentum.RSIIndicator(historical_data['Close'], window=21)
                 indicators['rsi_21'] = rsi_21.rsi().iloc[-1]
+                self.log(f"rsi_21: {indicators['rsi_21']:.1f}", "SUCCESS")
 
                 # Handle NaN values
                 if pd.isna(indicators['rsi_14']):
                     indicators['rsi_14'] = 50
+                    self.log(f"rsi_14: {indicators['rsi_14']:.1f}", "SUCCESS")
+
                 if pd.isna(indicators['rsi_21']):
                     indicators['rsi_21'] = 50
+                    self.log(f"rsi_21: {indicators['rsi_21']:.1f}", "SUCCESS")
 
             except Exception as rsi_error:
                 print(f"RSI calculation error: {rsi_error}")
+                self.log(f"RSI calculation error: {rsi_error}", "ERROR")
+
                 indicators['rsi_14'] = 50
                 indicators['rsi_21'] = 50
+                self.log(f"rsi_14: {indicators['rsi_14']:.1f}", "ERROR")
+                self.log(f"rsi_21: {indicators['rsi_21']:.1f}", "ERROR")
 
             # FIXED: MACD calculation
             try:
@@ -111,43 +172,66 @@ class EnhancedStockAdvisor:
                 indicators['macd'] = macd_indicator.macd().iloc[-1]
                 indicators['macd_signal'] = macd_indicator.macd_signal().iloc[-1]
                 indicators['macd_histogram'] = macd_indicator.macd_diff().iloc[-1]
+                self.log(f"MACD hist: {indicators['macd_histogram']:.3f}", "SUCCESS")
+
 
                 # Handle NaN values
                 for key in ['macd', 'macd_signal', 'macd_histogram']:
                     if pd.isna(indicators[key]):
                         indicators[key] = 0
+                        self.log(f"indicators - {key}: {indicators[key]:.3f}", "SUCCESS")
 
             except Exception as macd_error:
                 print(f"MACD calculation error: {macd_error}")
                 indicators['macd'] = 0
                 indicators['macd_signal'] = 0
                 indicators['macd_histogram'] = 0
+                self.log(f"macd: {indicators['macd']:.3f}", "ERROR")
+                self.log(f"macd_signal: {indicators['macd_signal']:.3f}", "ERROR")
+                self.log(f"macd_histogram: {indicators['macd_histogram'] :.3f}", "ERROR")
 
             # FIXED: Bollinger Bands
             try:
                 bb = ta.volatility.BollingerBands(historical_data['Close'], window=20)
                 indicators['bb_upper'] = bb.bollinger_hband().iloc[-1]
+                self.log(f"bb_upper: {indicators['bb_upper']:.2f}", "SUCCESS")
+
                 indicators['bb_lower'] = bb.bollinger_lband().iloc[-1]
+                self.log(f"bb_lower: {indicators['bb_lower']:.2f}", "SUCCESS")
+
                 indicators['bb_middle'] = bb.bollinger_mavg().iloc[-1]
+                self.log(f"bb_middle: {indicators['bb_middle']:.2f}", "SUCCESS")
 
                 # Calculate position
                 bb_range = indicators['bb_upper'] - indicators['bb_lower']
                 if bb_range > 0:
                     indicators['bb_position'] = (current_price - indicators['bb_lower']) / bb_range
+                    self.log(f"bb_position: {indicators['bb_position']:.2f}", "SUCCESS")
+
                 else:
                     indicators['bb_position'] = 0.5
+                    self.log(f"bb_position: {indicators['bb_position']:.2f}", "SUCCESS")
 
                 # Handle NaN values
                 for key in ['bb_upper', 'bb_lower', 'bb_middle']:
                     if pd.isna(indicators[key]):
                         indicators[key] = current_price
+                        self.log(f"{key}: {indicators[key]:.2f}", "SUCCESS")
+
 
             except Exception as bb_error:
                 print(f"Bollinger Bands calculation error: {bb_error}")
                 indicators['bb_position'] = 0.5
+                self.log(f"bb_position: {indicators['bb_position']:.2f}", "ERROR")
+
                 indicators['bb_upper'] = current_price * 1.02
+                self.log(f"bb_upper: {indicators['bb_upper']:.2f}", "ERROR")
+
                 indicators['bb_lower'] = current_price * 0.98
+                self.log(f"bb_lower: {indicators['bb_lower']:.2f}", "ERROR")
+
                 indicators['bb_middle'] = current_price
+                self.log(f"bb_middle: {indicators['bb_middle']:.2f}", "ERROR")
 
             # FIXED: Stochastic Oscillator
             try:
@@ -157,73 +241,104 @@ class EnhancedStockAdvisor:
                     historical_data['Close']
                 )
                 indicators['stoch_k'] = stoch.stoch().iloc[-1]
+                self.log(f"stoch_k: {indicators['stoch_k']:.1f}", "SUCCESS")
                 indicators['stoch_d'] = stoch.stoch_signal().iloc[-1]
+                self.log(f"stoch_d: {indicators['stoch_d']:.1f}", "SUCCESS")
 
                 # Handle NaN values
                 if pd.isna(indicators['stoch_k']):
                     indicators['stoch_k'] = 50
+                    self.log(f"stoch_k: {indicators['stoch_k']:.2f}", "INFO")
+
                 if pd.isna(indicators['stoch_d']):
                     indicators['stoch_d'] = 50
+                    self.log(f"stoch_d: {indicators['stoch_d']:.2f}", "INFO")
 
             except Exception as stoch_error:
                 print(f"Stochastic calculation error: {stoch_error}")
                 indicators['stoch_k'] = 50
                 indicators['stoch_d'] = 50
+                self.log(f"stoch_k: {indicators['stoch_k']:.2f}", "ERROR")
+                self.log(f"stoch_d: {indicators['stoch_d']:.2f}", "ERROR")
 
             # FIXED: Volume Analysis
             indicators['volume_current'] = historical_data['Volume'].iloc[-1]
+            self.log(f"volume_current: {indicators['volume_current']:.2f}", "SUCCESS")
+
             indicators['volume_avg_10'] = historical_data['Volume'].rolling(10, min_periods=1).mean().iloc[-1]
+            self.log(f"volume_avg_10: {indicators['volume_avg_10']:.2f}", "SUCCESS")
+
             indicators['volume_avg_20'] = historical_data['Volume'].rolling(20, min_periods=1).mean().iloc[-1]
+            self.log(f"volume_avg_20: {indicators['volume_avg_20']:.2f}", "SUCCESS")
 
             # Ensure volume averages are not zero
             if indicators['volume_avg_20'] > 0:
                 indicators['volume_relative'] = indicators['volume_current'] / indicators['volume_avg_20']
+                self.log(f"volume_relative: {indicators['volume_relative']:.2f}", "SUCCESS")
+
             else:
                 indicators['volume_relative'] = 1.0
+                self.log(f"volume_relative: {indicators['volume_relative']:.2f}", "INFO")
 
             # FIXED: Price Momentum
             if len(historical_data) > 5:
                 indicators['momentum_5'] = (current_price / historical_data['Close'].iloc[-6] - 1) * 100
+                self.log(f"momentum_5: {indicators['momentum_5']:.2f}", "SUCCESS")
+
             else:
                 indicators['momentum_5'] = 0
+                self.log(f"momentum_5: {indicators['momentum_5']:.2f}", "INFO")
 
             if len(historical_data) > 10:
                 indicators['momentum_10'] = (current_price / historical_data['Close'].iloc[-11] - 1) * 100
+                self.log(f"momentum_10: {indicators['momentum_10']:.2f}", "SUCCESS")
+
             else:
                 indicators['momentum_10'] = 0
+                self.log(f"momentum_10: {indicators['momentum_10']:.2f}", "INFO")
 
             # FIXED: Volatility
             returns = historical_data['Close'].pct_change().dropna()
             if len(returns) > 1:
                 indicators['volatility'] = returns.std() * 100
+                self.log(f"volatility: {indicators['volatility']:.2f}", "SUCCESS")
+
             else:
                 indicators['volatility'] = 1.0
+                self.log(f"volatility: {indicators['volatility']:.2f}", "INFO")
 
             # FIXED: Support and Resistance
             indicators['resistance_20'] = historical_data['High'].rolling(20, min_periods=1).max().iloc[-1]
+            self.log(f"resistance_20: {indicators['resistance_20']:.2f}", "SUCCESS")
             indicators['support_20'] = historical_data['Low'].rolling(20, min_periods=1).min().iloc[-1]
+            self.log(f"support_20: {indicators['support_20']:.2f}", "SUCCESS")
 
             # Ensure all values are numeric and not NaN
             for key, value in indicators.items():
                 if pd.isna(value) or not np.isfinite(value):
                     if 'price' in key.lower():
                         indicators[key] = current_price
+                        self.log(f"{key}: {indicators[key]:.2f}", "INFO")
                     elif 'volume' in key.lower():
                         indicators[key] = 1000000  # Default volume
+                        self.log(f"{key}: {indicators[key]:.2f}", "INFO")
                     elif 'rsi' in key.lower() or 'stoch' in key.lower():
                         indicators[key] = 50  # Neutral
+                        self.log(f"{key}: {indicators[key]:.2f}", "INFO")
                     else:
                         indicators[key] = 0
+                        self.log(f"{key}: {indicators[key]:.2f}", "INFO")
 
-            print(f"Calculated indicators for {analysis_date.date()}: RSI={indicators['rsi_14']:.1f}, MACD={indicators['macd']:.3f}, Volume_Rel={indicators['volume_relative']:.2f}")
+            self.log(f"Calculated indicators for {analysis_date.date()}: RSI={indicators['rsi_14']:.1f}, MACD={indicators['macd']:.3f}, Volume_Rel={indicators['volume_relative']:.2f}")
 
             return indicators
 
         except Exception as e:
-            print(f"Critical error calculating indicators: {e}")
+            self.log(f"Critical error calculating indicators: {e}")
             return None
 
     def calculate_confidence_score(self,indicators):
+        self.log("Starting confidence scoring", "INFO")
         score = 0
         weights = {
             'rsi_14': 1,
@@ -235,33 +350,57 @@ class EnhancedStockAdvisor:
         }
         for key, weight in weights.items():
             val = indicators.get(key, 0)
+            contribution = weight * val
             if key.startswith('rsi') and 40 < val < 60:
+                self.log(f"{key}: value={val:.2f}, weight={weight}, contribution={contribution:.2f}", "INFO")
                 continue  # Neutral zone
             score += weight * val
+            self.log(f"{key}: value={val:.2f}, weight={weight}, contribution={contribution:.2f}", "INFO")
+
+        # for key, weight in weights.items():
+        #     val = indicators.get(key, 0)
+        #     contribution = weight * val
+        #     self.log(f"{key}: value={val:.2f}, weight={weight}, contribution={contribution:.2f}", "INFO")
+
+        self.log(f"Final confidence score: {score:.2f}", "SUCCESS")
+
         return round(score, 2)
 
     def interpret_signals(self,indicators):
+        self.log("Starting interpret_signals", "INFO")
+
         commentary = []
         if indicators['rsi_14'] < 30:
             commentary.append("Oversold RSI – possible rebound.")
+            self.log("Signal: RSI is oversold (<30)", "INFO")
+
         if indicators['macd'] > indicators['macd_signal']:
             commentary.append("MACD crossover – bullish momentum.")
+            self.log(f"Signal: MACD crossover is oversold ({indicators['macd_signal']})", "INFO")
+
         if indicators['volume_relative'] > 1.5:
             commentary.append("High volume spike confirms move.")
+            self.log("High volume spike confirms move (<1.5)", "INFO")
+
         if indicators['stoch_k'] > indicators['stoch_d']:
             commentary.append("Stochastic trending upward.")
+            self.log(f"Stochastic trending upward is oversold (<{indicators['stoch_d']})", "INFO")
         return " | ".join(commentary)
 
     def log_recommendation(self, symbol, result, analysis_date):
+        self.log(f"Logged recommendation for {symbol} on {analysis_date}", "SUCCESS")
+
         with open("recommendation_log.csv", "a") as f:
             f.write(
                 f"{symbol},{analysis_date},{result['action']},{result['confidence']:.1f},{result['final_score']:.2f}\n")
 
-    def analyze_stock_enhanced(self, symbol, target_date, investment_days=7, debug_mode=False):
+    def analyze_stock_enhanced(self, symbol, target_date, debug_mode=False):
         """Enhanced stock analysis with 95% confidence targeting"""
+        self.log(f"Starting enhanced analysis for {symbol} on {target_date}", "INFO")
 
         df = self.get_stock_data(symbol, target_date)
         if df is None or df.empty:
+            self.log("No data retrieved for symbol or data is empty", "WARNING")
             return None
 
         target_pd = pd.Timestamp(target_date)
@@ -272,18 +411,24 @@ class EnhancedStockAdvisor:
         else:
             closest_idx = df.index.get_indexer([target_pd], method='nearest')[0]
             if closest_idx < 0 or closest_idx >= len(df):
+                self.log("Closest date index out of bounds", "ERROR")
                 return None
             analysis_date = df.index[closest_idx]
+            self.log(f"Using closest available date: {analysis_date}", "INFO")
 
         # Calculate comprehensive indicators
         indicators = self.calculate_enhanced_indicators(df, analysis_date)
         if indicators is None:
+            self.log("Failed to calculate indicators", "ERROR")
             return None
+
+        self.log("Indicators calculated successfully", "INFO")
 
         # Enhanced recommendation generation with debug mode
         recommendation = self.generate_enhanced_recommendation(
-            indicators, symbol, investment_days, debug_mode=debug_mode
-        )
+            indicators = indicators, symbol=symbol)
+
+        self.log(f"Recommendation generated: {recommendation}", "INFO")
 
         # 🚥 Log the final recommendation to CSV
         self.log_recommendation(symbol, recommendation, analysis_date)
@@ -292,11 +437,14 @@ class EnhancedStockAdvisor:
             'symbol': symbol,
             'analysis_date': analysis_date,
             'indicators': indicators,
-            'investment_days': investment_days,
+            'investment_days': self.investment_days,
             **recommendation
         }
 
     def build_trading_plan(self, current_price, target_gain=0.037, max_loss=0.06, days=7):
+        self.log(f"Building trading plan for price={current_price}, gain={target_gain}, loss={max_loss}, days={days}",
+                 "INFO")
+
         buy_price = current_price
         sell_price = round(buy_price * (1 + target_gain), 2)
         stop_loss = round(buy_price * (1 - max_loss), 2)
@@ -310,9 +458,13 @@ class EnhancedStockAdvisor:
             "max_loss_pct": round(max_loss * 100, 1),
             "holding_days": days
         }
+        self.log(f"Trading plan created: {plan}", "INFO")
         return plan
 
-    def boost_confidence(self,tech_score, model_score, investment_days):
+    def boost_confidence(self,tech_score, model_score):
+        self.log(f"Boosting confidence with tech_score={tech_score}, model_score={model_score}, days={self.investment_days}",
+                 "INFO")
+
         base_confidence = 50.0
         signal_alignment = 1 if tech_score * model_score > 0 else 0
 
@@ -321,29 +473,256 @@ class EnhancedStockAdvisor:
         confidence_boost = score_strength * 5
 
         # Duration sensitivity
-        duration_factor = min(investment_days, 14) / 14
+        duration_factor = min(self.investment_days, 14) / 14
         timing_bonus = 3 * duration_factor
 
         total_boost = confidence_boost + (10 * signal_alignment) + timing_bonus
         final_confidence = min(base_confidence + total_boost, 99.9)
+
+        self.log(f"Final confidence score: {final_confidence}", "INFO")
         return round(final_confidence, 1)
 
-    def generate_enhanced_recommendation(self, indicators, symbol, investment_days, debug_mode=False):
-        """Generate high-confidence recommendations using multiple confirmations"""
+    def analyze_trend(self, indicators, current_price):
+        self.log(f"Starting analyze_trend: indicators={indicators}, current_price={current_price}", "INFO")
 
-        debug_log = []
+        score = 0
+        signals = []
 
-        def debug_print(message):
-            debug_log.append(message)
-            if debug_mode:
-                print(message)
+        sma_5 = indicators.get('sma_5', current_price)
+        sma_10 = indicators.get('sma_10', current_price)
+        sma_20 = indicators.get('sma_20', current_price)
+        sma_50 = indicators.get('sma_50', current_price)
+        self.log(f"SMA: 5={sma_5:.2f}, 10={sma_10:.2f}, 20={sma_20:.2f}, 50={sma_50:.2f}", "INFO")
+
+        if current_price > sma_5 > sma_10 > sma_20:
+            score += 3
+            signals.append("📈 Strong SMA uptrend")
+            self.log(f"Strong SMA uptrend: ✅ Uptrend alignment: +3", "SEUCCESS")
+
+        elif current_price < sma_5 < sma_10 < sma_20:
+            score -= 3
+            signals.append("📉 Strong SMA downtrend")
+            self.log(f"Strong SMA downtrend: ❌ Downtrend alignment: -3", "ERROR")
+
+        elif current_price > sma_20:
+            score += 2
+            signals.append("📈 Price above SMA20")
+            self.log(f"Price above SMA20: ✅ Price > SMA20: +2", "SEUCCESS")
+
+        else:
+            score -= 2
+            signals.append("📉 Price below SMA20")
+            self.log(f"Price below SMA20: ❌ Price < SMA20: -2", "ERROR")
+
+
+        ema_12 = indicators.get('ema_12', current_price)
+        ema_26 = indicators.get('ema_26', current_price)
+        self.log(f"EMA: 12={ema_12:.2f}, 26={ema_26:.2f}", "INFO")
+
+        if ema_12 > ema_26:
+            score += 1
+            signals.append("🔄 Bullish EMA crossover")
+            self.log(f"Bullish EMA crossover: ✅ EMA12 > EMA26: +1", "SUCCESS")
+
+        else:
+            score -= 1
+            signals.append("🔄 Bearish EMA crossover")
+            self.log(f"Bearish EMA crossover: ❌ EMA12 < EMA26: -1", "ERROR")
+
+        self.log(f"Trend Score: {score}", "INFO")
+
+        return score, signals
+
+    def analyze_momentum(self, indicators):
+        self.log(f"Starting analyze_momentum: indicators={indicators}", "INFO")
+
+        score = 0
+        signals = []
+
+        rsi = indicators.get('rsi_14', 50)
+        macd = indicators.get('macd', 0)
+        macd_signal = indicators.get('macd_signal', 0)
+        macd_hist = indicators.get('macd_histogram', 0)
+        self.log(f"RSI: {rsi:.1f} | MACD={macd:.4f}, Signal={macd_signal:.4f}, Hist={macd_hist:.4f}", "INFO")
+
+        if rsi < 30:
+            score += 3
+            signals.append("🔥 RSI < 30: Strong buy")
+            self.log(f"RSI < 30: Strong buy: ✅ RSI < 30: +3", "SUCCESS")
+
+        elif rsi < 40:
+            score += 2
+            signals.append("💪 RSI 30–39: Buy bias")
+            self.log(f"RSI 30–39: Buy bias: ✅ RSI 30–39: +2", "SUCCESS")
+
+        elif rsi <= 55:
+            score += 1
+            signals.append("✅ RSI 45–55: Stable")
+            self.log(f"RSI 45–55: Stable: ✅ RSI 45–55: +1", "SUCCESS")
+
+        elif rsi > 70:
+            score -= 3
+            signals.append("🚨 RSI > 70: Sell bias")
+            self.log(f"RSI > 70: Sell bias: ❌ RSI > 70: -3", "ERROR")
+
+        if macd > macd_signal and macd_hist > 0:
+            score += 2
+            signals.append("🚀 MACD Bullish crossover")
+            self.log(f"MACD Bullish crossover: ✅ MACD bullish: +2", "SEUCCESS")
+
+        elif macd < macd_signal and macd_hist < 0:
+            score -= 2
+            signals.append("📉 MACD Bearish crossover")
+            self.log(f"MACD Bearish crossover: ❌ MACD bearish: -2", "ERROR")
+
+        self.log(f"Momentum Score: {score}", "INFO")
+        return score, signals
+
+    def analyze_volume(self, indicators):
+        self.log(f"Starting analyze_volume: indicators={indicators}", "INFO")
+
+        score = 0
+        signals = []
+
+        vr = indicators.get('volume_relative', 1.0)
+        self.log(f"Volume Ratio: {vr:.2f}", "INFO")
+
+        if vr > 2.0:
+            score += 2
+            signals.append("🔊 High volume spike")
+            self.log(f"High volume spike: ✅ Volume > 2x avg: +2", "SECESS")
+
+        elif vr > 1.5:
+            score += 1
+            signals.append("📢 Above average volume")
+            self.log(f"Above average volume: ✅ Volume > 1.5x: +1", "SECESS")
+
+        elif vr < 0.7:
+            score -= 1
+            signals.append("🔇 Weak volume")
+            self.log(f"Weak volume: ❌ Volume < 0.7x: -1", "ERROR")
+
+        self.log(f"Volume Score: {score}", "INFO")
+        return score, signals
+
+    def analyze_support_resistance(self, indicators):
+        self.log(f"Starting analyze_support_resistance: indicators={indicators}", "INFO")
+
+        score = 0
+        signals = []
+
+        bb = indicators.get('bb_position', 0.5)
+        self.log(f"Bollinger Position: {bb:.3f}", "INFO")
+
+        if bb < 0.2:
+            score += 2
+            signals.append("📉 Near lower band")
+            self.log(f"Near lower band: ✅ BB < 0.2: +2", "SUCCESS")
+
+        elif bb > 0.8:
+            score -= 2
+            signals.append("📈 Near upper band")
+            self.log(f"Near upper band: ❌ BB > 0.8: -2", "ERROR")
+        elif 0.3 <= bb <= 0.7:
+            score += 1
+            signals.append("✅ Healthy BB range")
+            self.log(f"Healthy BB range: ✅ BB 0.3–0.7: +1", "SUCCESS")
+
+        self.log(f"S/R Score: {score}","INFO")
+        return score, signals
+
+    def analyze_ml_model(self, symbol, indicators, current_price):
+        self.log(f"Starting analyze_ml_model: symbol={symbol}, indicators={indicators}, "
+                 f"current_price={current_price}", "INFO")
+
+        score = 0
+        signals = []
+
+        if symbol not in self.models:
+            self.log(f"⚠️ No ML model for {symbol}", "WARNING")
+            signals.append("🤖 No trained model available")
+            return score, signals
+
+        try:
+            model = self.models[symbol]
+            vr = indicators.get("volume_relative", 1.0)
+            features = [
+                vr,
+                indicators.get("momentum_5", 0),
+                indicators.get("rsi_14", 50),
+                indicators.get("macd_histogram", 0),
+                indicators.get("bb_position", 0.5),
+                indicators.get("ema_10", current_price),
+                indicators.get("price_change_1d", 0.0),
+                1 if vr > 1.5 else 0,
+                1 if indicators.get("rsi_14", 50) < 30 else 0
+            ]
+            self.log(f"ML Features: {features}", "INFO")
+
+            X = np.array(features).reshape(1, -1)
+            prediction = model.predict(X)[0]
+
+            if hasattr(model, "predict_proba"):
+                proba = model.predict_proba(X)[0]
+                confidence = proba[1] if prediction == 1 else proba[0]
+                self.log(f"ML Prediction: {prediction}, Prob: {proba}", "INFO")
+            else:
+                confidence = 0.7
+                self.log("ML Prediction: Default confidence", "INFO")
+
+            delta = 3 * confidence
+            if prediction == 1:
+                score += delta
+                signals.append(f"🤖 ML predicts BUY ({confidence:.1%})")
+                self.log(f"✅ ML BUY: +{delta:.2f}", "SUCCESS")
+            else:
+                score -= delta
+                signals.append(f"🤖 ML predicts SELL ({confidence:.1%})")
+                self.log(f"❌ ML SELL: -{delta:.2f}", "ERROR")
+
+        except Exception as e:
+            signals.append("🤖 ML model analysis failed")
+            self.log(f"❌ ML Error: {str(e)}", "ERROR")
+
+        self.log(f"ML Score: {score:.2f}", "INFO")
+        return score, signals
+
+    def extract_signal_strengths(self, trend_score, momentum_score, volume_score, sr_score, model_score):
+        """Return breakdown of signal strengths categorized by source."""
+        self.log(f"Starting extract_signal_strengths: "
+                 f"trend_score = {trend_score},"
+                 f" momentum_score = {momentum_score},"
+                 f" volume_score = {volume_score},"
+                 f" sr_score = {sr_score},"
+                 f" model_score = {model_score}",
+                 "INFO")
+
+        breakdown = {
+            'trend_score': round(trend_score, 2),
+            'momentum_score': round(momentum_score, 2),
+            'volume_score': round(volume_score, 2),
+            'sr_score': round(sr_score, 2),
+            'model_score': round(model_score, 2)
+        }
+        self.log(f"📊 Signal Breakdown: {breakdown}", "INFO")
+        return breakdown
+
+    def generate_enhanced_recommendation(self, indicators, symbol):
+
+        """Generate high-confidence recommendations using multi-factor analysis"""
+        self.log(f"Starting generate_enhanced_recommendation: "
+                 f"indicators={indicators}, "
+                 f"symbol={symbol}",
+                 "INFO")
+
+        self.active_symbol = symbol
 
         current_price = indicators['current_price']
-        debug_print(f"\n=== ENHANCED RECOMMENDATION DEBUG for {symbol} ===")
-        debug_print(f"Current Price: ${current_price:.2f}")
-        debug_print(f"Investment Days: {investment_days}")
+        self.log(f"\n=== ENHANCED RECOMMENDATION DEBUG for {symbol} ===", "INFO")
+        self.log(f"Current Price: ${current_price:.2f}", "INFO")
+        self.log(f"Investment Days: {self.investment_days}", "INFO")
 
-        # Multi-factor scoring system for higher confidence
+        # Signal weights
         signal_weights = {
             'trend': 0.25,
             'momentum': 0.20,
@@ -351,343 +730,90 @@ class EnhancedStockAdvisor:
             'support_resistance': 0.15,
             'model': 0.25
         }
-        debug_print(f"Signal Weights: {signal_weights}")
+        self.log(f"Signal Weights: {signal_weights}", "INFO")
 
-        # 1. TREND ANALYSIS (25% weight) - FIXED
-        trend_score = 0
-        trend_signals = []
+        # 1. Trend Analysis
+        trend_score, trend_signals = self.analyze_trend(indicators, current_price)
 
-        debug_print(f"\n=== TREND ANALYSIS ===")
+        # 2. Momentum Analysis
+        momentum_score, momentum_signals = self.analyze_momentum(indicators)
 
-        # Moving Average Alignment - CORRECTED LOGIC
-        sma_5 = indicators.get('sma_5', current_price)
-        sma_10 = indicators.get('sma_10', current_price)
-        sma_20 = indicators.get('sma_20', current_price)
-        sma_50 = indicators.get('sma_50', current_price)
+        # 3. Volume Analysis
+        volume_score, volume_signals = self.analyze_volume(indicators)
 
-        debug_print(f"SMA Values: 5={sma_5:.2f}, 10={sma_10:.2f}, 20={sma_20:.2f}, 50={sma_50:.2f}")
-        debug_print(f"Current Price vs SMAs: Price={current_price:.2f}")
+        # 4. Support/Resistance Analysis
+        sr_score, sr_signals = self.analyze_support_resistance(indicators)
 
-        if current_price > sma_5 > sma_10 > sma_20:
-            trend_score += 3
-            trend_signals.append("📈 All moving averages aligned upward - strong uptrend")
-            debug_print("✅ Strong upward alignment detected: +3 points")
-        elif current_price < sma_5 < sma_10 < sma_20:
-            trend_score -= 3
-            trend_signals.append("📉 All moving averages aligned downward - strong downtrend")
-            debug_print("❌ Strong downward alignment detected: -3 points")
-        elif current_price > sma_20:
-            trend_score += 2
-            trend_signals.append("📈 Price above 20-day average - upward bias")
-            debug_print("✅ Price above SMA20: +2 points")
-        else:
-            trend_score -= 2
-            trend_signals.append("📉 Price below 20-day average - downward bias")
-            debug_print("❌ Price below SMA20: -2 points")
+        # 5. Model Analysis
+        model_score, model_signals = self.analyze_ml_model(symbol, indicators, current_price)
 
-        # EMA Crossover
-        ema_12 = indicators.get('ema_12', current_price)
-        ema_26 = indicators.get('ema_26', current_price)
-        debug_print(f"EMA Values: 12={ema_12:.2f}, 26={ema_26:.2f}")
-
-        if ema_12 > ema_26:
-            trend_score += 1
-            trend_signals.append("🔄 Fast EMA above slow EMA - bullish momentum")
-            debug_print("✅ EMA12 > EMA26: +1 point")
-        else:
-            trend_score -= 1
-            trend_signals.append("🔄 Fast EMA below slow EMA - bearish momentum")
-            debug_print("❌ EMA12 < EMA26: -1 point")
-
-        debug_print(f"TREND SCORE TOTAL: {trend_score}")
-
-        # 2. MOMENTUM ANALYSIS (20% weight) - FIXED
-        momentum_score = 0
-        momentum_signals = []
-
-        debug_print(f"\n=== MOMENTUM ANALYSIS ===")
-
-        # RSI Analysis
-        rsi_14 = indicators.get('rsi_14', 50)
-        rsi_21 = indicators.get('rsi_21', 50)
-        debug_print(f"RSI Values: 14-day={rsi_14:.1f}, 21-day={rsi_21:.1f}")
-
-        if rsi_14 < 30:
-            momentum_score += 3
-            momentum_signals.append("🔥 RSI < 30: Extremely oversold — strong buy signal")
-            debug_print("✅ RSI < 30: +3 points")
-
-        elif rsi_14 < 40:
-            momentum_score += 2
-            momentum_signals.append("💪 RSI 30–39: Oversold — good buying opportunity")
-            debug_print("✅ RSI 30–39: +2 points")
-
-        elif rsi_14 < 45:
-            momentum_score += 1
-            momentum_signals.append("📉 RSI 40–44: Weak recovery — light bullish bias")
-            debug_print("✅ RSI 40–44: +1 point")
-
-        elif rsi_14 <= 55:
-            momentum_score += 1
-            momentum_signals.append("✅ RSI 45–55: Healthy consolidation")
-            debug_print("✅ RSI 45–55: +1 point")
-
-        elif rsi_14 <= 60:
-            momentum_signals.append("😐 RSI 56–60: Slightly bullish — neutral")
-            debug_print("⚖️ RSI 56–60: 0 points")
-
-        elif rsi_14 <= 70:
-            momentum_score -= 1
-            momentum_signals.append("⚠️ RSI 61–70: Slightly overbought — cautious")
-            debug_print("❌ RSI 61–70: -1 point")
-
-        elif rsi_14 > 70:
-            momentum_score -= 3
-            momentum_signals.append("🚨 RSI > 70: Extremely overbought — strong sell signal")
-            debug_print("❌ RSI > 70: -3 points")
-
-        # MACD Analysis
-        macd = indicators.get('macd', 0)
-        macd_signal = indicators.get('macd_signal', 0)
-        macd_hist = indicators.get('macd_histogram', 0)
-        debug_print(f"MACD Values: macd={macd:.4f}, signal={macd_signal:.4f}, histogram={macd_hist:.4f}")
-
-        if macd > macd_signal and macd_hist > 0:
-            momentum_score += 2
-            momentum_signals.append("🚀 MACD bullish crossover with positive histogram")
-            debug_print("✅ MACD bullish crossover: +2 points")
-        elif macd < macd_signal and macd_hist < 0:
-            momentum_score -= 2
-            momentum_signals.append("📉 MACD bearish crossover")
-            debug_print("❌ MACD bearish crossover: -2 points")
-        else:
-            debug_print("⚖️ MACD neutral: 0 points")
-
-        debug_print(f"MOMENTUM SCORE TOTAL: {momentum_score}")
-
-        # 3. VOLUME ANALYSIS (15% weight) - FIXED
-        volume_score = 0
-        volume_signals = []
-
-        debug_print(f"\n=== VOLUME ANALYSIS ===")
-
-        volume_ratio = indicators.get('volume_relative', 1.0)
-        debug_print(f"Volume Ratio: {volume_ratio:.2f}")
-
-        if volume_ratio > 2.0:
-            volume_score += 2
-            volume_signals.append("🔊 Extremely high volume - strong confirmation")
-            debug_print("✅ Volume > 2x average: +2 points")
-
-        elif volume_ratio > 1.5:
-            volume_score += 1
-            volume_signals.append("📢 Above average volume - good confirmation")
-            debug_print("✅ Volume > 1.5x average: +1 point")
-
-        elif volume_ratio > 1.2:
-            volume_score += 0.5
-            volume_signals.append("🔍 Slight volume uptick — minor confirmation")
-            debug_print("🟢 Volume > 1.2x average: +0.5 points")
-
-        elif volume_ratio < 0.7:
-            volume_score -= 1
-            volume_signals.append("🔇 Below average volume - weak confirmation")
-            debug_print("❌ Volume < 0.7x average: -1 point")
-
-        else:
-            volume_signals.append("📊 Normal volume levels")
-            debug_print("⚖️ Normal volume: 0 points")
-
-        debug_print(f"VOLUME SCORE TOTAL: {volume_score}")
-
-        # 4. SUPPORT/RESISTANCE ANALYSIS (15% weight) - FIXED
-        sr_score = 0
-        sr_signals = []
-
-        debug_print(f"\n=== SUPPORT/RESISTANCE ANALYSIS ===")
-
-        # Bollinger Bands position
-        bb_pos = indicators.get('bb_position', 0.5)
-        debug_print(f"Bollinger Band Position: {bb_pos:.3f}")
-
-        if bb_pos < 0.2:
-            sr_score += 2
-            sr_signals.append("📉 Price near lower Bollinger Band - oversold")
-            debug_print("✅ Near lower BB (< 0.2): +2 points")
-        elif bb_pos > 0.8:
-            sr_score -= 2
-            sr_signals.append("📈 Price near upper Bollinger Band - overbought")
-            debug_print("❌ Near upper BB (> 0.8): -2 points")
-        elif 0.3 <= bb_pos <= 0.7:
-            sr_score += 1
-            sr_signals.append("✅ Price in healthy Bollinger range")
-            debug_print("✅ Healthy BB range (0.3-0.7): +1 point")
-        else:
-            debug_print(f"⚖️ BB position neutral ({bb_pos:.3f}): 0 points")
-
-        debug_print(f"SUPPORT/RESISTANCE SCORE TOTAL: {sr_score}")
-
-        # 5. ML MODEL ANALYSIS (25% weight) - FIXED
-        model_score = 0
-        model_signals = []
-
-        debug_print(f"\n=== ML MODEL ANALYSIS ===")
-
-        if symbol in self.models:
-            debug_print(f"✅ Model available for {symbol}")
-            try:
-                model = self.models[symbol]
-                # Create basic features for prediction
-                volume_relative = indicators.get('volume_relative', 1.0)
-                volume_current = indicators.get('volume_current', 1000000)
-                volume_avg = indicators.get('volume_avg_10', 1000000)
-
-                # feature_values = [
-                #     volume_relative,
-                #     volume_current - volume_avg,
-                #     current_price * volume_current,
-                #     1 if volume_relative > 1.5 else 0
-                # ]
-                feature_values = [
-                    indicators.get("volume_relative", 1.0),
-                    indicators.get("momentum_5", 0),
-                    indicators.get("rsi_14", 50),
-                    indicators.get("macd_histogram", 0),
-                    indicators.get("bb_position", 0.5),
-                    indicators.get("ema_10", current_price),  # short-term trend
-                    indicators.get("price_change_1d", 0.0),  # day-over-day delta
-                    1 if volume_relative > 1.5 else 0,
-                    1 if indicators.get("rsi_14", 50) < 30 else 0  # oversold trigger
-                ]
-
-                debug_print(f"ML Features: {feature_values}")
-
-                X = np.array(feature_values).reshape(1, -1)
-                prediction = model.predict(X)[0]
-
-                if hasattr(model, 'predict_proba'):
-                    proba = model.predict_proba(X)[0]
-                    confidence = proba[1] if prediction == 1 else proba[0]
-                    debug_print(f"ML Prediction: {prediction}, Probabilities: {proba}, Confidence: {confidence:.3f}")
-                else:
-                    confidence = 0.7
-                    debug_print(f"ML Prediction: {prediction}, Using default confidence: {confidence}")
-
-                if prediction == 1:
-                    model_score += 3 * confidence
-                    model_signals.append(f"🤖 ML model predicts BUY (confidence: {confidence:.1%})")
-                    debug_print(f"✅ ML predicts BUY: +{3 * confidence:.2f} points")
-                else:
-                    model_score -= 3 * confidence
-                    model_signals.append(f"🤖 ML model predicts SELL (confidence: {confidence:.1%})")
-                    debug_print(f"❌ ML predicts SELL: -{3 * confidence:.2f} points")
-
-            except Exception as e:
-                model_signals.append("🤖 ML model analysis failed")
-                debug_print(f"❌ ML model error: {str(e)}")
-        else:
-            model_signals.append("🤖 No trained model available")
-            debug_print(f"⚖️ No ML model for {symbol}: 0 points")
-
-        debug_print(f"ML MODEL SCORE TOTAL: {model_score:.2f}")
-
-        # ENHANCED SIGNAL WEIGHTING - Prioritize Technical Analysis over ML when conflicting
+        # Conflict resolution
         technical_score = (trend_score + momentum_score + volume_score + sr_score) / 4
-        debug_print(f"\n=== SIGNAL WEIGHTING ===")
-        debug_print(f"Technical Score Average: {technical_score:.2f}")
-        debug_print(f"ML Score: {model_score:.2f}")
-        debug_print(f"Conflict Check: technical={technical_score:.2f}, model={model_score:.2f}, product={technical_score * model_score:.2f}")
-
-        # If technical signals are strong but ML disagrees, reduce ML weight
         if abs(technical_score) >= 1.5 and model_score * technical_score < 0:
-            adjusted_weights = {
+            signal_weights = {
                 'trend': 0.30,
                 'momentum': 0.25,
                 'volume': 0.20,
                 'support_resistance': 0.15,
-                'model': 0.10  # Reduced from 0.25
+                'model': 0.10
             }
             model_signals.append("⚖️ Technical analysis overrides conflicting ML prediction")
-            debug_print("🔄 CONFLICT DETECTED: Reducing ML weight to 0.10")
-        else:
-            adjusted_weights = signal_weights
-            debug_print("✅ No conflict: Using standard weights")
+            self.log("🔄 Conflict detected: ML weight reduced", "INFO")
 
-        debug_print(f"Final Weights: {adjusted_weights}")
+        self.log(f"Final Weights: {signal_weights}", "INFO")
 
-        # CALCULATE FINAL WEIGHTED SCORE with adjusted weights
+        # Final score calculation
         final_score = (
-            trend_score * adjusted_weights['trend'] +
-            momentum_score * adjusted_weights['momentum'] +
-            volume_score * adjusted_weights['volume'] +
-            sr_score * adjusted_weights['support_resistance'] +
-            model_score * adjusted_weights['model']
+                trend_score * signal_weights['trend'] +
+                momentum_score * signal_weights['momentum'] +
+                volume_score * signal_weights['volume'] +
+                sr_score * signal_weights['support_resistance'] +
+                model_score * signal_weights['model']
         )
 
-        signal_strengths = self.extract_signal_strengths(trend_score, momentum_score, volume_score, sr_score, model_score)
-
-        debug_print(f"\n=== FINAL CALCULATION ===")
-        debug_print(f"Trend: {trend_score} × {adjusted_weights['trend']} = {trend_score * adjusted_weights['trend']:.3f}")
-        debug_print(f"Momentum: {momentum_score} × {adjusted_weights['momentum']} = {momentum_score * adjusted_weights['momentum']:.3f}")
-        debug_print(f"Volume: {volume_score} × {adjusted_weights['volume']} = {volume_score * adjusted_weights['volume']:.3f}")
-        debug_print(f"S/R: {sr_score} × {adjusted_weights['support_resistance']} = {sr_score * adjusted_weights['support_resistance']:.3f}")
-        debug_print(f"ML: {model_score:.2f} × {adjusted_weights['model']} = {model_score * adjusted_weights['model']:.3f}")
-        debug_print(f"FINAL SCORE: {final_score:.3f}")
+        self.log(f"\n=== FINAL SCORE CALCULATION ===", "INFO")
+        self.log(f"FINAL SCORE: {final_score:.3f}", "INFO")
 
         # Combine all signals
         all_signals = trend_signals + momentum_signals + volume_signals + sr_signals + model_signals
 
-        # MORE DECISIVE LOGIC - Lower thresholds for action
-        debug_print(f"\n=== DECISION LOGIC ===")
-        debug_print(f"Final Score: {final_score:.3f}")
-
-        if final_score >= 1.2:  # Lowered threshold for BUY
+        stop_loss_presntage = 0.06
+        # Action decision logic
+        if final_score >= 1.2:
             action = "BUY"
-            base_confidence = 70 + min(25, final_score * 8)  # 70-95%
-            debug_print(f"✅ BUY Decision: Score >= 1.2, Base Confidence: {base_confidence:.1f}%")
-
+            base_confidence = 70 + min(25, final_score * 8)
             buy_price = current_price
-
-            if investment_days <= 7:
+            if self.investment_days <= 7:
                 target_multiplier = 1.025 + (final_score * 0.01)
-            elif investment_days <= 21:
+            elif self.investment_days <= 21:
                 target_multiplier = 1.04 + (final_score * 0.015)
             else:
                 target_multiplier = 1.06 + (final_score * 0.02)
-
             sell_price = current_price * target_multiplier
-            stop_loss = current_price * 0.94
+            stop_loss = current_price * (1 - stop_loss_presntage)
             profit_pct = (target_multiplier - 1) * 100
-
-            debug_print(f"Buy Price: ${buy_price:.2f}, Sell Price: ${sell_price:.2f}, Profit: {profit_pct:.1f}%")
-
-        elif final_score <= -1.2:  # Lowered threshold for SELL
+            self.log(f"BUY Decision → Sell @ ${sell_price:.2f}, Stop @ ${stop_loss:.2f}", "SUCCESS")
+        elif final_score <= -1.2:
             action = "SELL/AVOID"
             base_confidence = 70 + min(25, abs(final_score) * 8)
-            debug_print(f"❌ SELL Decision: Score <= -1.2, Base Confidence: {base_confidence:.1f}%")
-
             buy_price = None
             sell_price = current_price
             target_multiplier = 0.95 - (abs(final_score) * 0.01)
-            stop_loss = current_price * 1.06
+            stop_loss = current_price * (1 + stop_loss_presntage)
             profit_pct = (1 - target_multiplier) * 100
-
-        else:  # Only truly weak signals get WAIT
+            self.log(f"❌ SELL Decision: Target Multiplier={target_multiplier:.2f}, "
+                     f"Profit={profit_pct:.1f}%", "INFO")
+        else:
             action = "WAIT"
             base_confidence = 50 + abs(final_score) * 5
-            debug_print(f"⏳ WAIT Decision: Score between -1.2 and 1.2, Base Confidence: {base_confidence:.1f}%")
+            stop_loss = current_price * (1 - stop_loss_presntage + 0.01)
+            profit_pct = 0
             buy_price = None
             sell_price = None
-            stop_loss = current_price * 0.95
-            profit_pct = 0
             all_signals.append("🤔 Mixed signals - waiting for stronger confirmation")
-            buy_price = None
-            sell_price = None
-            stop_loss = current_price * 0.95
-            profit_pct = 0
-            all_signals.append("🤔 Mixed signals - waiting for stronger confirmation")
+            self.log(f"⏳ WAIT Decision: Final Score too weak", "INFO")
 
-        # Confidence boost for multiple confirming indicators
+        # ⚙️ Confidence Booster
         confirming_indicators = sum([
             1 if abs(trend_score) > 1 else 0,
             1 if abs(momentum_score) > 1 else 0,
@@ -695,17 +821,24 @@ class EnhancedStockAdvisor:
             1 if abs(sr_score) > 0 else 0,
             1 if abs(model_score) > 1 else 0
         ])
-
         confidence_bonus = min(10, confirming_indicators * 2)
         final_confidence = min(95, base_confidence + confidence_bonus)
+        self.log(f"💡 Confidence Boost: +{confidence_bonus} → {final_confidence}%", "INFO")
 
-        # Risk level
-        if investment_days <= 7:
-            risk_level = "Short-term"
-        elif investment_days <= 21:
-            risk_level = "Medium-term"
-        else:
-            risk_level = "Long-term"
+        # 📈 Trading Plan
+        trading_plan = self.build_trading_plan(current_price, target_gain=0.037, max_loss=0.06, days=self.investment_days)
+        self.log(f"📊 Trading Plan: {trading_plan}", "INFO")
+
+        # 🔍 Signal Breakdown
+        signal_strengths = self.extract_signal_strengths(trend_score, momentum_score, volume_score, sr_score,
+                                                         model_score)
+
+        # 🛡️ Risk Profile
+        risk_level = (
+            "Short-term" if self.investment_days <= 7 else
+            "Medium-term" if self.investment_days <= 21 else
+            "Long-term"
+        )
 
         return {
             'action': action,
@@ -718,20 +851,18 @@ class EnhancedStockAdvisor:
             'risk_level': risk_level,
             'final_score': final_score,
             'current_price': current_price,
-            'signal_breakdown': {
-                'trend_score': trend_score,
-                'momentum_score': momentum_score,
-                'volume_score': volume_score,
-                'sr_score': sr_score,
-                'model_score': model_score
-            }
+            'signal_breakdown': signal_strengths,
+            'trading_plan': trading_plan
         }
 
     def create_enhanced_chart(self, symbol, data):
         """Create enhanced chart with more technical indicators"""
 
+        self.log(f"Creating enhanced chart for {symbol}", "INFO")
+
         df = self.get_stock_data(symbol, data['analysis_date'], days_back=60)
         if df is None or df.empty:
+            self.log(f"No data returned for {symbol}", "ERROR")
             return None
 
         fig = go.Figure()
@@ -746,6 +877,7 @@ class EnhancedStockAdvisor:
             name='Price',
             showlegend=False
         ))
+        self.log(f"figure created: {fig}", "SUCCESS")
 
         # Add multiple moving averages
         for period, color in [(5, 'orange'), (20, 'blue'), (50, 'red')]:
@@ -756,6 +888,7 @@ class EnhancedStockAdvisor:
                     mode='lines', name=f'MA{period}',
                     line=dict(color=color, width=1)
                 ))
+        self.log(f"Add multiple moving averages to figure", "SUCCESS")
 
         # Bollinger Bands
         if len(df) >= 20:
@@ -774,24 +907,30 @@ class EnhancedStockAdvisor:
                     fill='tonexty', fillcolor='rgba(128,128,128,0.1)',
                     showlegend=False
                 ))
+                self.log(f"Add Bollinger Bands to figure", "SUCCESS")
             except:
+                self.log(f"Failed to calculate Bollinger Bands for {symbol}", "ERROR")
                 pass
 
         # Mark analysis point
         analysis_date = data['analysis_date']
         current_price = data['current_price']
         action = data['action']
+        self.log(f"Mark analysis point to figure: {analysis_date}, {current_price}, {action}", "SUCCESS")
 
         # Action marker
         if action == "BUY":
-            marker_color = 'green'
+            marker_color = 'blue'
             marker_symbol = 'triangle-up'
+            self.log(f"Buy signal: {marker_color}, {marker_symbol}", "SUCCESS")
         elif action == "SELL/AVOID":
             marker_color = 'red'
             marker_symbol = 'triangle-down'
+            self.log(f"Sell signal: {marker_color}, {marker_symbol}", "SUCCESS")
         else:
             marker_color = 'orange'
             marker_symbol = 'circle'
+            self.log(f"No signal: {marker_color}, {marker_symbol}", "SUCCESS")
 
         fig.add_trace(go.Scatter(
             x=[analysis_date],
@@ -814,6 +953,7 @@ class EnhancedStockAdvisor:
                 line_color="green",
                 annotation_text=f"Target: ${data['sell_price']:.2f}"
             )
+            self.log(f"Add target and stop loss lines to figure", "SUCCESS")
 
         if data.get('stop_loss'):
             fig.add_hline(
@@ -822,6 +962,7 @@ class EnhancedStockAdvisor:
                 line_color="red",
                 annotation_text=f"Stop Loss: ${data['stop_loss']:.2f}"
             )
+            self.log(f"Add stop loss line to figure", "SUCCESS")
 
         fig.update_layout(
             title=f'{symbol} - Enhanced Technical Analysis',
@@ -830,13 +971,12 @@ class EnhancedStockAdvisor:
             height=500,
             showlegend=True
         )
-
+        self.log(f"figure updated: {fig}", "SUCCESS")
         return fig
 
 
 def create_enhanced_interface():
     """Create enhanced interface with 95% confidence targeting"""
-
     st.set_page_config(
         page_title="Enhanced Stock Advisor",
         page_icon="📈",
@@ -848,11 +988,22 @@ def create_enhanced_interface():
     st.markdown("### Advanced AI system with 95% confidence targeting!")
     st.markdown("---")
 
+    # DEBUG CHECKBOX
+    show_debug = st.sidebar.checkbox("🐛 Show Debug Logs", value=False, help="Enable to see detailed calculation logs")
+    # Todo: need to enable this and find better location in GUI
+    if show_debug:
+        download_file = st.sidebar.checkbox("Download Debug Logs?", value=False, help="download log file")
+    else:
+        download_file = False
+
     # Initialize advisor
     if 'enhanced_advisor' not in st.session_state:
-        st.session_state.enhanced_advisor = EnhancedStockAdvisor()
+        st.session_state.enhanced_advisor = EnhancedStockAdvisor(debug=show_debug, download_log=download_file)
 
     advisor = st.session_state.enhanced_advisor
+
+    advisor.log("Create Steamlit Page", "INFO")
+    advisor.log("Enhanced interface initialized", "INFO")
 
     # Sidebar controls
     st.sidebar.header("🎯 Get Your Trading Advice")
@@ -864,12 +1015,15 @@ def create_enhanced_interface():
         help="Enter any stock ticker (e.g., AAPL, GOOGL, TSLA)"
     ).upper().strip()
 
+    advisor.log(f"Stock Symbol: {stock_symbol}", "INFO")
+
     # Date input
     date_input = st.sidebar.text_input(
         "📅 Date (MM/DD/YY or MM/DD/YYYY)",
         value="7/1/25",
         help="Enter date like: 1/7/25 or 1/7/2025"
     )
+    advisor.log(f"Date Input: {date_input}", "INFO")
 
     # Parse the date
     try:
@@ -880,61 +1034,75 @@ def create_enhanced_interface():
                 if len(year) == 2:
                     year = "20" + year if int(year) < 50 else "19" + year
                 target_date = datetime(int(year), int(month), int(day)).date()
+                advisor.log(f"Target Date: {target_date}", "INFO")
             else:
                 target_date = datetime.now().date()
+                advisor.log("Target Date: {target_date}", "INFO")
         else:
             target_date = datetime.now().date()
+            advisor.log("Target Date: {target_date}", "INFO")
     except:
         target_date = datetime.now().date()
         st.sidebar.warning("⚠️ Invalid date format. Using today's date.")
+        advisor.log("Invalid date format. Using today's date.", "WARNING")
 
     # Investment period
-    investment_days = st.sidebar.selectbox(
+    advisor.investment_days = st.sidebar.selectbox(
         "⏱️ Target holding period (up to):",
         options=[1, 3, 7, 14, 21, 30],
         index=2,  # Default to 7 days
         help="Maximum time you're willing to hold (can exit earlier if targets are met)"
     )
+    advisor.log(f"Investment Days: {advisor.investment_days}", "INFO")
 
     # Show model availability
     if stock_symbol in advisor.models:
         st.sidebar.success(f"🤖 AI Model Available for {stock_symbol}")
+        advisor.log(f"AI Model Available for {stock_symbol}", "SUCCESS")
+
     else:
         st.sidebar.info(f"📊 Using Technical Analysis for {stock_symbol}")
-
-    # DEBUG CHECKBOX
-    show_debug = st.sidebar.checkbox("🐛 Show Debug Logs", value=False, help="Enable to see detailed calculation logs")
+        advisor.log(f"Using Technical Analysis for {stock_symbol}", "INFO")
 
     # Analyze button
     analyze_btn = st.sidebar.button("🚀 Get Enhanced Trading Advice", type="primary", use_container_width=True)
+    advisor.log("Analyze Button Clicked", "INFO")
 
     # Analysis results
     if analyze_btn and stock_symbol:
         with st.spinner(f"🔍 Running enhanced analysis for {stock_symbol}..."):
 
-            result = advisor.analyze_stock_enhanced(stock_symbol, target_date, investment_days)
+            result = advisor.analyze_stock_enhanced(stock_symbol, target_date, debug_mode=show_debug)
 
             if result is None:
                 st.error("❌ Could not analyze this stock. Please try a different symbol or date.")
+                advisor.log("Could not analyze this stock. Please try a different symbol or date.", "ERROR")
                 return
 
             # Success message
-            st.success(f"✅ Enhanced analysis complete for {stock_symbol}")
+            st.sidebar.success(f"✅ Enhanced analysis complete for {stock_symbol}")
+            advisor.log(f"Enhanced analysis complete for {stock_symbol}", "SUCCESS")
 
             # Main recommendation box
             action = result['action']
             confidence = result['confidence']
 
+            cal1, cal2 = st.columns(2)
             # Enhanced color-coded recommendation
             if action == "BUY":
-                st.success(f"🟢 **RECOMMENDATION: {action}** 📈")
-                st.markdown(f"### **Confidence Level: {confidence:.0f}%**")
+                cal2.success(f"🟢 **RECOMMENDATION: {action}** 📈")
+                cal1.markdown(f"### **Confidence Level: {confidence:.0f}%**")
+                advisor.log(f"BUY recommendation for {stock_symbol}", "INFO")
+
             elif action == "SELL/AVOID":
-                st.error(f"🔴 **RECOMMENDATION: {action}** 📉")
-                st.markdown(f"### **Confidence Level: {confidence:.0f}%**")
+                cal2.error(f"🔴 **RECOMMENDATION: {action}** 📉")
+                cal1.markdown(f"### **Confidence Level: {confidence:.0f}%**")
+                advisor.log(f"SELL/AVOID recommendation for {stock_symbol}", "INFO")
+
             else:
-                st.warning(f"🟡 **RECOMMENDATION: {action}** ⏳")
-                st.markdown(f"### **Confidence Level: {confidence:.0f}%**")
+                cal2.warning(f"🟡 **RECOMMENDATION: {action}** ⏳")
+                cal1.markdown(f"### **Confidence Level: {confidence:.0f}%**")
+                advisor.log(f"NEUTRAL recommendation for {stock_symbol}", "INFO")
 
             # Enhanced price information
             st.subheader("💰 Price Information")
@@ -947,6 +1115,7 @@ def create_enhanced_interface():
                     value=f"${result['current_price']:.2f}",
                     help="Price on the analysis date"
                 )
+                advisor.log(f"Current Price: {result['current_price']:.2f}", "INFO")
 
             with col2:
                 if result.get('buy_price'):
@@ -955,12 +1124,14 @@ def create_enhanced_interface():
                         value=f"${result['buy_price']:.2f}",
                         help="Recommended buying price"
                     )
+                    advisor.log(f"BUY Price: {result['buy_price']:.2f}", "INFO")
                 else:
                     st.metric(
                         label="🟢 BUY at",
                         value="N/A",
                         help="No buy recommendation"
                     )
+                    advisor.log("No buy recommendation", "INFO")
 
             with col3:
                 if result.get('sell_price'):
@@ -969,34 +1140,41 @@ def create_enhanced_interface():
                         value=f"${result['sell_price']:.2f}",
                         help="Target selling price"
                     )
+                    advisor.log(f"SELL Price: {result['sell_price']:.2f}", "INFO")
                 else:
                     st.metric(
                         label="🔴 SELL at",
                         value="N/A",
                         help="No sell target"
                     )
+                    advisor.log("No sell target", "INFO")
 
             with col4:
                 if result['expected_profit_pct'] > 0:
                     st.metric(
                         label="💰 Expected Profit",
                         value=f"{result['expected_profit_pct']:.1f}%",
-                        delta=f"in {investment_days} days"
+                        delta=f"in {advisor.investment_days} days"
                     )
+                    advisor.log(f"Expected Profit: {result['expected_profit_pct']:.1f}%", "INFO")
                 else:
                     st.metric(
                         label="💰 Expected Profit",
                         value="0%",
                         help="No profit expected"
                     )
+                    advisor.log("No profit expected", "INFO")
 
             # Show signal strength breakdown
             if confidence >= 85:
                 st.info("🎯 **HIGH CONFIDENCE SIGNAL** - Multiple indicators confirm this recommendation")
+                advisor.log("HIGH CONFIDENCE SIGNAL", "INFO")
             elif confidence >= 70:
                 st.info("✅ **GOOD CONFIDENCE** - Most indicators support this recommendation")
+                advisor.log("GOOD CONFIDENCE", "INFO")
             else:
                 st.warning("⚠️ **MODERATE CONFIDENCE** - Mixed signals detected")
+                advisor.log("MODERATE CONFIDENCE", "WARNING")
 
             # Enhanced trading plan
             st.subheader("📋 Your Enhanced Trading Plan")
@@ -1012,8 +1190,9 @@ def create_enhanced_interface():
                     1. 💰 **Buy the stock at:** ${result['buy_price']:.2f}
                     2. 🎯 **Sell it when it reaches:** ${result['sell_price']:.2f}
                     3. 🛡️ **Stop loss if it drops to:** ${result['stop_loss']:.2f}
-                    4. ⏱️ **Max holding time:** {investment_days} days (can exit earlier at target)
+                    4. ⏱️ **Max holding time:** {advisor.investment_days} days (can exit earlier at target)
                     """)
+                    advisor.log(f"BUY plan for {stock_symbol}", "INFO")
 
                 with col2:
                     st.markdown(f"""
@@ -1022,8 +1201,9 @@ def create_enhanced_interface():
                     - 📈 **Percentage gain:** {result['expected_profit_pct']:.1f}%
                     - 🎲 **Success probability:** {confidence:.0f}%
                     - 🛡️ **Max loss if stopped:** {((result['buy_price'] - result['stop_loss']) / result['buy_price'] * 100):.1f}%
-                    - ⏰ **Exit strategy:** Sell at target OR after {investment_days} days
+                    - ⏰ **Exit strategy:** Sell at target OR after {advisor.investment_days} days
                     """)
+                    advisor.log(f"Expected outcome for {stock_symbol}", "INFO")
 
             elif action == "SELL/AVOID":
                 with col1:
@@ -1033,16 +1213,18 @@ def create_enhanced_interface():
                     **What to do:**
                     - 🚫 **Don't buy this stock right now**
                     - 📉 **If you own it, sell at:** ${result['sell_price']:.2f}
-                    - ⏳ **Re-evaluate in:** {investment_days} days maximum
+                    - ⏳ **Re-evaluate in:** {advisor.investment_days} days maximum
                     """)
+                    advisor.log(f"SELL/AVOID plan for {stock_symbol}", "INFO")
 
                 with col2:
                     st.markdown(f"""
                     **Expected Outcome:**
                     - 📉 **Potential loss avoided:** {result['expected_profit_pct']:.1f}%
                     - 🎲 **Confidence in decline:** {confidence:.0f}%
-                    - 💡 **Better opportunities expected within {investment_days} days**
+                    - 💡 **Better opportunities expected within {advisor.investment_days} days**
                     """)
+                    advisor.log(f"Expected outcome for {stock_symbol}", "INFO")
 
             else:
                 with col1:
@@ -1051,18 +1233,19 @@ def create_enhanced_interface():
                     
                     **What to do:**
                     - ⏳ **Wait for clearer signals**
-                    - 👀 **Monitor daily for up to {investment_days} days**
+                    - 👀 **Monitor daily for up to {advisor.investment_days} days**
                     - 🔄 **Re-analyze when signals strengthen**
                     """)
+                    advisor.log(f"WAIT plan for {stock_symbol}", "INFO")
 
                 with col2:
                     st.markdown(f"""
                     **Why wait:**
                     - 🤔 **Conflicting signals detected**
                     - 📊 **Need stronger confirmation**
-                    - 🎯 **Better timing expected within {investment_days} days**
+                    - 🎯 **Better timing expected within {advisor.investment_days} days**
                     """)
-
+                    advisor.log(f"Wait reason for {stock_symbol}", "INFO")
 
             # Enhanced signal analysis
             with col3:
@@ -1076,132 +1259,199 @@ def create_enhanced_interface():
                         if signal_type == 'trend_score':
                             emoji = "📈" if score > 0 else "📉" if score < 0 else "➡️"
                             st.write(f"{emoji} **Trend:** {score:.1f}")
+                            advisor.log(f"Trend score for {stock_symbol}: {score:.1f}", "INFO")
+
                         elif signal_type == 'momentum_score':
                             emoji = "🚀" if score > 0 else "🔻" if score < 0 else "⚖️"
                             st.write(f"{emoji} **Momentum:** {score:.1f}")
+                            advisor.log(f"Momentum score for {stock_symbol}: {score:.1f}", "INFO")
+
                         elif signal_type == 'volume_score':
                             emoji = "📢" if abs(score) > 1 else "📊"
                             st.write(f"{emoji} **Volume:** {score:.1f}")
+                            advisor.log(f"Volume score for {stock_symbol}: {score:.1f}", "INFO")
+
                         elif signal_type == 'sr_score':
                             emoji = "🎯" if abs(score) > 1 else "📊"
                             st.write(f"{emoji} **Support/Resistance:** {score:.1f}")
+                            advisor.log(f"Support/Resistance score for {stock_symbol}: {score:.1f}", "INFO")
+
                         elif signal_type == 'model_score':
                             emoji = "🤖" if abs(score) > 1 else "📊"
                             st.write(f"{emoji} **AI Model:** {score:.1f}")
+                            advisor.log(f"AI Model score for {stock_symbol}: {score:.1f}", "INFO")
 
-            # Detailed reasoning
-            st.subheader("🤔 Why This Recommendation?")
+            with st.expander("Recommendation"):
+                # Detailed reasoning
+                st.subheader("🤔 Why This Recommendation?")
 
-            reasons = result.get('reasons', [])
-            if reasons:
-                # Group reasons by category for better organization
-                trend_reasons = [r for r in reasons if any(word in r.lower() for word in ['average', 'trend', 'ema', 'moving'])]
-                momentum_reasons = [r for r in reasons if any(word in r.lower() for word in ['rsi', 'macd', 'stochastic', 'momentum'])]
-                volume_reasons = [r for r in reasons if 'volume' in r.lower()]
-                level_reasons = [r for r in reasons if any(word in r.lower() for word in ['support', 'resistance', 'bollinger'])]
-                model_reasons = [r for r in reasons if 'model' in r.lower()]
-                other_reasons = [r for r in reasons if r not in trend_reasons + momentum_reasons + volume_reasons + level_reasons + model_reasons]
+                reasons = result.get('reasons', [])
+                if reasons:
+                    advisor.log(f"Reasons for {stock_symbol}", "INFO")
+                    # Group reasons by category for better organization
+                    trend_reasons = [r for r in reasons if any(word in r.lower() for word in ['average', 'trend', 'ema', 'moving'])]
+                    advisor.log(f"Trend reasons: {trend_reasons}", "INFO")
+                    momentum_reasons = [r for r in reasons if any(word in r.lower() for word in ['rsi', 'macd', 'stochastic', 'momentum'])]
+                    advisor.log(f"Momentum reasons: {momentum_reasons}", "INFO")
+                    volume_reasons = [r for r in reasons if 'volume' in r.lower()]
+                    advisor.log(f"Volume reasons: {volume_reasons}", "INFO")
+                    level_reasons = [r for r in reasons if any(word in r.lower() for word in ['support', 'resistance', 'bollinger'])]
+                    advisor.log(f"Level reasons: {level_reasons}", "INFO")
+                    model_reasons = [r for r in reasons if 'model' in r.lower()]
+                    advisor.log(f"Model reasons: {model_reasons}", "INFO")
+                    other_reasons = [r for r in reasons if r not in trend_reasons + momentum_reasons + volume_reasons + level_reasons + model_reasons]
+                    advisor.log(f"Other reasons: {other_reasons}", "INFO")
+                    col1, col2 = st.columns(2)
 
-                col1, col2 = st.columns(2)
+                    with col1:
+                        if trend_reasons:
+                            st.markdown("**📈 Trend Analysis:**")
+                            for reason in trend_reasons:
+                                st.write(f"• {reason}")
+                                advisor.log(f"Trend reason: {reason}", "INFO")
 
-                with col1:
-                    if trend_reasons:
-                        st.markdown("**📈 Trend Analysis:**")
-                        for reason in trend_reasons:
-                            st.write(f"• {reason}")
+                        if momentum_reasons:
+                            st.markdown("**🚀 Momentum Indicators:**")
+                            for reason in momentum_reasons:
+                                st.write(f"• {reason}")
+                                advisor.log(f"Momentum reason: {reason}", "INFO")
 
-                    if momentum_reasons:
-                        st.markdown("**🚀 Momentum Indicators:**")
-                        for reason in momentum_reasons:
-                            st.write(f"• {reason}")
+                        if volume_reasons:
+                            st.markdown("**📊 Volume Analysis:**")
+                            for reason in volume_reasons:
+                                st.write(f"• {reason}")
+                                advisor.log(f"Volume reason: {reason}", "INFO")
 
-                    if volume_reasons:
-                        st.markdown("**📊 Volume Analysis:**")
-                        for reason in volume_reasons:
-                            st.write(f"• {reason}")
+                    with col2:
+                        if level_reasons:
+                            st.markdown("**🎯 Key Levels:**")
+                            for reason in level_reasons:
+                                st.write(f"• {reason}")
+                                advisor.log(f"Level reason: {reason}", "INFO")
 
-                with col2:
-                    if level_reasons:
-                        st.markdown("**🎯 Key Levels:**")
-                        for reason in level_reasons:
-                            st.write(f"• {reason}")
+                        if model_reasons:
+                            st.markdown("**🤖 AI Analysis:**")
+                            for reason in model_reasons:
+                                st.write(f"• {reason}")
+                                advisor.log(f"Model reason: {reason}", "INFO")
 
-                    if model_reasons:
-                        st.markdown("**🤖 AI Analysis:**")
-                        for reason in model_reasons:
-                            st.write(f"• {reason}")
-
-                    if other_reasons:
-                        st.markdown("**📋 Additional Factors:**")
-                        for reason in other_reasons:
-                            st.write(f"• {reason}")
+                        if other_reasons:
+                            st.markdown("**📋 Additional Factors:**")
+                            for reason in other_reasons:
+                                st.write(f"• {reason}")
+                                advisor.log(f"Other reason: {reason}", "INFO")
 
             # Enhanced chart
             chart = advisor.create_enhanced_chart(stock_symbol, result)
             if chart:
                 st.subheader("📊 Enhanced Technical Chart")
                 st.plotly_chart(chart, use_container_width=True)
+                advisor.log(f"Enhanced chart for {stock_symbol} created", "INFO")
 
-            # Enhanced risk information
-            st.subheader("⚠️ Risk Assessment")
+            with st.expander("Risk Assessment"):
+                # Enhanced risk information
+                st.subheader("⚠️ Risk Assessment")
 
-            risk_level = result.get('risk_level', 'Medium-term')
-            final_score = result.get('final_score', 0)
+                risk_level = result.get('risk_level', 'Medium-term')
+                final_score = result.get('final_score', 0)
+                advisor.log(f"Risk level for {stock_symbol}: {risk_level}", "INFO")
 
-            col1, col2, col3 = st.columns(3)
+                col1, col2, col3 = st.columns(3)
 
-            with col1:
-                st.markdown("**📊 Risk Level**")
-                if risk_level == "Short-term":
-                    st.warning("""
-                    **🏃‍♂️ Short-term (1-7 days):**
-                    - ⚡ Higher volatility
-                    - 👀 Monitor closely
-                    - 🎯 Quick decisions needed
-                    """)
-                elif risk_level == "Medium-term":
-                    st.info("""
-                    **🚶‍♂️ Medium-term (1-3 weeks):**
-                    - ⚖️ Balanced approach
-                    - 📅 Weekly monitoring
-                    - 📈 Trend development time
-                    """)
-                else:
-                    st.success("""
-                    **🐌 Long-term (3-4 weeks+):**
-                    - 📉 Lower daily volatility
-                    - 🔄 Less frequent monitoring
-                    - 🎯 Fundamental changes
-                    """)
+                with col1:
+                    st.markdown("**📊 Risk Level**")
+                    if risk_level == "Short-term":
+                        st.warning("""
+                        **🏃‍♂️ Short-term (1-7 days):**
+                        - ⚡ Higher volatility
+                        - 👀 Monitor closely
+                        - 🎯 Quick decisions needed
+                        """)
+                        advisor.log(f"Risk level for {stock_symbol}: Short-term", "INFO")
 
-            with col2:
-                st.markdown("**🎯 Signal Strength**")
-                if abs(final_score) >= 2.5:
-                    st.success("🔥 **VERY STRONG** signal")
-                elif abs(final_score) >= 1.5:
-                    st.info("💪 **STRONG** signal")
-                elif abs(final_score) >= 1.0:
-                    st.warning("📊 **MODERATE** signal")
-                else:
-                    st.error("🤔 **WEAK** signal")
+                    elif risk_level == "Medium-term":
+                        st.info("""
+                        **🚶‍♂️ Medium-term (1-3 weeks):**
+                        - ⚖️ Balanced approach
+                        - 📅 Weekly monitoring
+                        - 📈 Trend development time
+                        """)
+                        advisor.log(f"Risk level for {stock_symbol}: Medium-term", "INFO")
 
-                st.write(f"Signal Score: {final_score:.2f}")
+                    else:
+                        st.success("""
+                        **🐌 Long-term (3-4 weeks+):**
+                        - 📉 Lower daily volatility
+                        - 🔄 Less frequent monitoring
+                        - 🎯 Fundamental changes
+                        """)
+                        advisor.log(f"Risk level for {stock_symbol}: Long-term", "INFO")
 
-            with col3:
-                st.markdown("**💡 Recommendation Quality**")
-                if confidence >= 90:
-                    st.success("🏆 **EXCELLENT** - Act with confidence")
-                elif confidence >= 80:
-                    st.success("✅ **VERY GOOD** - Strong recommendation")
-                elif confidence >= 70:
-                    st.info("👍 **GOOD** - Solid analysis")
-                elif confidence >= 60:
-                    st.warning("⚖️ **FAIR** - Consider carefully")
-                else:
-                    st.error("🤔 **POOR** - Wait for better signals")
+                with col2:
+                    st.markdown("**🎯 Signal Strength**")
+                    if abs(final_score) >= 2.5:
+                        st.success("🔥 **VERY STRONG** signal")
+                        advisor.log(f"Signal strength for {stock_symbol}: Very Strong", "INFO")
+
+                    elif abs(final_score) >= 1.5:
+                        st.info("💪 **STRONG** signal")
+                        advisor.log(f"Signal strength for {stock_symbol}: Strong", "INFO")
+
+                    elif abs(final_score) >= 1.0:
+                        st.warning("📊 **MODERATE** signal")
+                        advisor.log(f"Signal strength for {stock_symbol}: Moderate", "INFO")
+
+                    else:
+                        st.error("🤔 **WEAK** signal")
+                        advisor.log(f"Signal strength for {stock_symbol}: Weak", "INFO")
+
+                    st.write(f"Signal Score: {final_score:.2f}")
+                    advisor.log(f"Signal score for {stock_symbol}: {final_score:.2f}", "INFO")
+
+                with col3:
+                    st.markdown("**💡 Recommendation Quality**")
+                    if confidence >= 90:
+                        st.success("🏆 **EXCELLENT** - Act with confidence")
+                        advisor.log(f"Recommendation quality for {stock_symbol}: Excellent", "INFO")
+
+                    elif confidence >= 80:
+                        st.success("✅ **VERY GOOD** - Strong recommendation")
+                        advisor.log(f"Recommendation quality for {stock_symbol}: Very Good", "INFO")
+
+                    elif confidence >= 70:
+                        st.info("👍 **GOOD** - Solid analysis")
+                        advisor.log(f"Recommendation quality for {stock_symbol}: Good", "INFO")
+
+                    elif confidence >= 60:
+                        st.warning("⚖️ **FAIR** - Consider carefully")
+                        advisor.log(f"Recommendation quality for {stock_symbol}: Fair", "INFO")
+
+                    else:
+                        st.error("🤔 **POOR** - Wait for better signals")
+                        advisor.log(f"Recommendation quality for {stock_symbol}: Poor", "ERROR")
 
             # Enhanced disclaimer
             st.subheader("📋 Important Trading Guidelines")
+
+            if show_debug:
+                st.markdown("---")
+                st.subheader("🐛 Debug Logs")
+
+                with st.expander("🔍 Full Debug Output", expanded=False):
+                    st.code("\n".join(result["debug_log"]), language="text")
+
+                success_lines = [l for l in result['debug_log'] if l.startswith('✅')]
+                error_lines = [l for l in result['debug_log'] if l.startswith('❌')]
+                neutral_lines = [l for l in result['debug_log'] if l.startswith('⚖️')]
+
+                st.markdown("### ✅ Successful Checks")
+                st.code("\n".join(success_lines))
+
+                st.markdown("### ❌ Warnings & Issues")
+                st.code("\n".join(error_lines))
+
+                st.markdown("### ⚖️ Neutral Observations")
+                st.code("\n".join(neutral_lines))
 
             col1, col2 = st.columns(2)
 
@@ -1258,23 +1508,23 @@ def create_enhanced_interface():
         st.subheader("📋 Example Enhanced Recommendation")
 
         st.code("""
-🟢 RECOMMENDATION: BUY
-Confidence Level: 87%
-
-💰 Price Information:
-Current Price: $153.30
-🟢 BUY at: $153.30
-🔴 SELL at: $158.45
-💰 Expected Profit: 3.4%
-
-🔬 Signal Analysis:
-📈 Trend: +2.1 (Strong upward)
-🚀 Momentum: +1.8 (Bullish RSI & MACD)
-📢 Volume: +1.2 (Above average confirmation)  
-🎯 Support/Resistance: +0.9 (Near support)
-🤖 AI Model: +2.3 (85% buy confidence)
-
-Final Signal Score: +8.3 (Very Strong)
+            🟢 RECOMMENDATION: BUY
+            Confidence Level: 87%
+            
+            💰 Price Information:
+            Current Price: $153.30
+            🟢 BUY at: $153.30
+            🔴 SELL at: $158.45
+            💰 Expected Profit: 3.4%
+            
+            🔬 Signal Analysis:
+            📈 Trend: +2.1 (Strong upward)
+            🚀 Momentum: +1.8 (Bullish RSI & MACD)
+            📢 Volume: +1.2 (Above average confirmation)  
+            🎯 Support/Resistance: +0.9 (Near support)
+            🤖 AI Model: +2.3 (85% buy confidence)
+            
+            Final Signal Score: +8.3 (Very Strong)
         """)
 
 
