@@ -18,6 +18,17 @@ from datetime import datetime, timedelta, date
 import ta
 import warnings
 
+# ENHANCED IMPORTS WITH ERROR HANDLING
+try:
+    from enhanced_signals import EnhancedSignalDetector
+    from confidence_system import ConfidenceBuilder
+    ENHANCEMENTS_AVAILABLE = True
+    print("✅ 95% Confidence System loaded successfully")
+except ImportError as e:
+    ENHANCEMENTS_AVAILABLE = False
+    print(f"⚠️ 95% Confidence System not available: {e}")
+    print("   System will use original algorithms")
+
 warnings.filterwarnings('ignore')
 
 
@@ -30,8 +41,21 @@ class EnhancedStockAdvisor:
         self.download_log = download_log
         self.investment_days = 7
         self.failed_models = []
-        self.load_models()
 
+        # Initialize 95% confidence system if available
+        if ENHANCEMENTS_AVAILABLE:
+            try:
+                self.enhanced_detector = EnhancedSignalDetector(debug=self.debug)
+                self.confidence_builder = ConfidenceBuilder(debug=self.debug)
+                self.enhancements_active = True
+                self.log("95% Confidence System initialized", "SUCCESS")
+            except Exception as e:
+                self.enhancements_active = False
+                self.log(f"Enhancement initialization failed: {e}", "ERROR")
+        else:
+            self.enhancements_active = False
+
+        self.load_models()
 
     def log(self, message, level="INFO"):
         if self.debug:
@@ -49,6 +73,117 @@ class EnhancedStockAdvisor:
             if self.download_log:
                 with open("debug_log.txt", "a") as f:
                     f.write(formatted + "\n")
+
+    def generate_95_percent_recommendation(self, indicators, symbol):
+        """🎯 Generate recommendation using 95% confidence system"""
+        if not hasattr(self, 'enhancements_active') or not self.enhancements_active:
+            self.log("Enhancements not active, using original system", "INFO")
+            return self.generate_enhanced_recommendation(indicators, symbol)
+
+        self.log(f"Starting 95% confidence recommendation for {symbol}", "INFO")
+
+        try:
+            # Get stock data for enhanced analysis
+            df = self.get_stock_data(symbol, datetime.now().date(), days_back=60)
+            if df is None:
+                self.log("No data available, falling back to original system", "WARNING")
+                return self.generate_enhanced_recommendation(indicators, symbol)
+
+            # Run enhanced signal detection
+            enhanced_result = self.enhanced_detector.enhanced_signal_decision(df, indicators, symbol)
+            self.log(f"Enhanced signals result: {enhanced_result['action']}", "INFO")
+
+            if not hasattr(self, 'enhancements_active') or not self.enhancements_active:
+                self.log("Enhancements not active, using original system", "INFO")
+                return self.generate_enhanced_recommendation(indicators, symbol)
+
+            # Prepare features for confidence system
+            features = [
+                indicators.get('volume_relative', 1.0),
+                indicators.get('rsi_14', 50) / 100,
+                indicators.get('macd_histogram', 0),
+                indicators.get('momentum_5', 0) / 100,
+                indicators.get('bb_position', 0.5),
+                indicators.get('volatility', 1.0) / 100
+            ]
+
+            # Market data for confidence calculation
+            market_data = {
+                'volatility': indicators.get('volatility', 2.0) / 100,
+                'market_trend': 'neutral',
+                'expected_return': enhanced_result.get('target_gain_pct', 5.0) / 100
+            }
+
+            # Calculate 95% confidence if system is highly confident
+            if enhanced_result['confidence'] >= 75:
+                confidence_result = self.confidence_builder.calculate_95_percent_confidence(
+                    symbol, features, enhanced_result['signals'], market_data
+                )
+
+                final_confidence = confidence_result['confidence']
+                recommendation = confidence_result['recommendation']
+
+                self.log(f"95% system confidence: {final_confidence:.1f}%", "SUCCESS")
+            else:
+                # Use enhanced signals result directly for lower confidence
+                final_confidence = enhanced_result['confidence']
+                recommendation = enhanced_result['action']
+                self.log(f"Using enhanced signals directly: {final_confidence:.1f}%", "INFO")
+
+            # Convert to your existing format
+            action_mapping = {
+                'ULTRA_BUY': 'BUY',
+                'STRONG_BUY': 'BUY',
+                'BUY': 'BUY',
+                'WEAK_BUY': 'BUY',
+                'SELL': 'SELL/AVOID',
+                'WAIT': 'WAIT'
+            }
+
+            # Dynamic profit targets based on confidence
+            if final_confidence >= 95:
+                target_profit = 0.08  # 8% for ultra-high confidence
+            elif final_confidence >= 90:
+                target_profit = 0.06  # 6% for high confidence
+            elif final_confidence >= 85:
+                target_profit = 0.05  # 5% for good confidence
+            elif final_confidence >= 80:
+                target_profit = 0.04  # 4% for moderate confidence
+            else:
+                target_profit = 0.037  # Default 3.7%
+
+            current_price = indicators['current_price']
+            final_action = action_mapping.get(recommendation, 'WAIT')
+
+            # Build comprehensive result
+            result = {
+                'action': final_action,
+                'confidence': final_confidence,
+                'buy_price': current_price if final_action == 'BUY' else None,
+                'sell_price': current_price * (1 + target_profit) if final_action == 'BUY' else current_price,
+                'stop_loss': current_price * 0.94,  # 6% stop loss
+                'expected_profit_pct': target_profit * 100,
+                'reasons': enhanced_result['signals'] + [
+                    f"🎯 95% Confidence System: {recommendation} ({final_confidence:.1f}%)"],
+                'final_score': enhanced_result.get('total_score', 0),
+                'signal_breakdown': enhanced_result.get('score_breakdown', {}),
+                'current_price': current_price,
+                'trading_plan': self.build_trading_plan(current_price, target_gain=target_profit),
+                'enhancement_active': True,
+                'original_confidence': enhanced_result['confidence'],
+                'confidence_boost': final_confidence - enhanced_result['confidence']
+            }
+
+            self.log(f"95% recommendation complete: {final_action} at {final_confidence:.1f}% confidence",
+                     "SUCCESS")
+            return result
+
+        except Exception as e:
+            self.log(f"Error in 95% system, falling back to original: {e}", "ERROR")
+            # Fallback to original system
+            return self.generate_enhanced_recommendation(indicators, symbol)
+
+
 
     def load_models(self):
         """Load trained models"""
@@ -394,7 +529,7 @@ class EnhancedStockAdvisor:
             f.write(
                 f"{symbol},{analysis_date},{result['action']},{result['confidence']:.1f},{result['final_score']:.2f}\n")
 
-    def analyze_stock_enhanced(self, symbol, target_date, debug_mode=False):
+    def analyze_stock_enhanced(self, symbol, target_date):
         """Enhanced stock analysis with 95% confidence targeting"""
         self.log(f"Starting enhanced analysis for {symbol} on {target_date}", "INFO")
 
@@ -425,8 +560,17 @@ class EnhancedStockAdvisor:
         self.log("Indicators calculated successfully", "INFO")
 
         # Enhanced recommendation generation with debug mode
-        recommendation = self.generate_enhanced_recommendation(
-            indicators = indicators, symbol=symbol)
+        # recommendation = self.generate_enhanced_recommendation(
+        #     indicators = indicators, symbol=symbol)
+        try:
+            recommendation = self.generate_95_percent_recommendation(indicators, symbol)
+            if recommendation.get('enhancement_active', False):
+                self.log("Using 95% confidence recommendation", "SUCCESS")
+            else:
+                raise Exception("95% system not active")
+        except Exception as e:
+            self.log(f"95% system failed: {e}, using original", "WARNING")
+            recommendation = self.generate_enhanced_recommendation(indicators=indicators, symbol=symbol)
 
         self.log(f"Recommendation generated: {recommendation}", "INFO")
 
@@ -1072,7 +1216,7 @@ def create_enhanced_interface():
     if analyze_btn and stock_symbol:
         with st.spinner(f"🔍 Running enhanced analysis for {stock_symbol}..."):
 
-            result = advisor.analyze_stock_enhanced(stock_symbol, target_date, debug_mode=show_debug)
+            result = advisor.analyze_stock_enhanced(stock_symbol, target_date)
 
             if result is None:
                 st.error("❌ Could not analyze this stock. Please try a different symbol or date.")
@@ -1175,6 +1319,41 @@ def create_enhanced_interface():
             else:
                 st.warning("⚠️ **MODERATE CONFIDENCE** - Mixed signals detected")
                 advisor.log("MODERATE CONFIDENCE", "WARNING")
+
+            # ADD THIS NEW SECTION:
+            if result.get('enhancement_active', False):
+                st.info("🎯 **95% CONFIDENCE SYSTEM ACTIVE** - Enhanced analysis in use")
+
+                # Show confidence breakdown
+                if 'confidence_boost' in result and result['confidence_boost'] > 0:
+                    st.success(
+                        f"💪 Confidence Boosted: {result['original_confidence']:.1f}% → {result['confidence']:.1f}% (+{result['confidence_boost']:.1f}%)")
+
+                # Enhanced confidence indicators
+                if result['confidence'] >= 95:
+                    st.success("🏆 **ULTRA-HIGH CONFIDENCE** - Highest quality signal")
+                elif result['confidence'] >= 90:
+                    st.success("🌟 **VERY HIGH CONFIDENCE** - Excellent signal quality")
+                elif result['confidence'] >= 85:
+                    st.info("⭐ **HIGH CONFIDENCE** - Strong signal")
+
+                # Show enhancement details in expander
+                with st.expander("🔍 95% Confidence System Details"):
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        st.markdown("**System Status:**")
+                        st.write("✅ Enhanced Signal Detection: Active")
+                        st.write("✅ Confidence Builder: Active")
+                        st.write("✅ Market Regime Detection: Active")
+
+                    with col2:
+                        st.markdown("**Confidence Breakdown:**")
+                        if 'signal_breakdown' in result:
+                            for signal_type, score in result['signal_breakdown'].items():
+                                st.write(f"• {signal_type.replace('_', ' ').title()}: {score:.2f}")
+            else:
+                st.warning("⚠️ Using original system - 95% confidence enhancements not active")
 
             # Enhanced trading plan
             st.subheader("📋 Your Enhanced Trading Plan")
