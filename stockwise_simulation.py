@@ -43,7 +43,11 @@ class EnhancedStockAdvisor:
         self.failed_models = []
         self.tax = 0
         self.broker_fee = 0
-        self.log_file = f"debug_log_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.log"
+
+        if self.download_log:
+            self.ensure_log_file()
+        else:
+            self.log_file = None
 
         # Initialize 95% confidence system if available
         if ENHANCEMENTS_AVAILABLE:
@@ -60,51 +64,87 @@ class EnhancedStockAdvisor:
 
         self.load_models()
 
+    def ensure_log_file(self):
+        """Ensure log file is properly initialized with timestamp"""
+        if not hasattr(self, 'log_file') or not self.log_file:
+            timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+            self.log_file = f"debug_log_{timestamp}.log"
+
+            # Create initial log entry with your desired format
+            if self.download_log:
+                try:
+                    header_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    with open(self.log_file, "w", encoding='utf-8') as f:
+                        f.write(f"=== Stock Advisor Debug Log ===\n")
+                        f.write(f"{header_timestamp} | [INFO] | Log file created: {self.log_file}\n")
+                        f.write(f"{header_timestamp} | [INFO] | Debug mode: {self.debug}\n")
+                        f.write(f"{header_timestamp} | [INFO] | Download log: {self.download_log}\n")
+                        f.write("=" * 80 + "\n\n")
+                        f.flush()
+                except Exception as e:
+                    print(f"Warning: Could not create log file {self.log_file}: {e}")
+
+        return self.log_file
+
     def log(self, message, level="INFO"):
         if self.debug:
+            # Define timestamp once for both console and file
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
             color_map = {
                 "INFO": "\033[94m",  # Blue
                 "SUCCESS": "\033[92m",  # Green
                 "ERROR": "\033[91m",  # Red
             }
             reset = "\033[0m"
-            prefix = {"INFO": "⚖️", "SUCCESS": "✅", "ERROR": "❌"}.get(level, "⚖️")
+            level_prefix = {"INFO": "[INFO]", "SUCCESS": "[SUCCESS]", "ERROR": "[ERROR]"}.get(level, "[INFO]")
             symbol = getattr(self, "active_symbol", "")
-            formatted = f"{color_map.get(level, '')}{prefix} [{level}] {symbol}: {message}{reset}"
-            self.debug_log.append(formatted)
-            print(formatted)
 
-            # File logging - ensure directory exists and handle errors
+            # Console output with colors and emoji (keep existing format for console)
+            emoji_prefix = {"INFO": "⚖️", "SUCCESS": "✅", "ERROR": "❌"}.get(level, "⚖️")
+            console_formatted = f"{datetime.now().strftime('%H:%M:%S')} | {color_map.get(level, '')}{emoji_prefix} [{level}] {symbol} | {message}{reset}"
+            self.debug_log.append(console_formatted)
+            print(console_formatted)
+
+            # File logging with your desired format: YYYY-MM-DD HH:MM:SS | [LEVEL] | message
             if self.download_log:
                 try:
                     # Ensure log_file attribute exists
                     if not hasattr(self, 'log_file') or not self.log_file:
-                        self.log_file = f"debug_log_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.log"
+                        self.ensure_log_file()
 
                     # Get directory path (only if there is one)
                     log_dir = os.path.dirname(self.log_file)
                     if log_dir:  # Only create directory if there is one
                         os.makedirs(log_dir, exist_ok=True)
 
-                    # Create a clean version for file logging (remove ANSI color codes and handle encoding)
-                    clean_formatted = f"{prefix} [{level}] {symbol}: {message}"
+                    # FIXED: Create clean file format with timestamp
+                    # Format: 2025-08-02 21:05:34 | [INFO] | Create Streamlit Page
+                    if symbol:
+                        clean_formatted = f"{timestamp} | {level_prefix} | {symbol} | {message}"
+                    else:
+                        clean_formatted = f"{timestamp} | {level_prefix} | {message}"
 
-                    # Write to file with explicit UTF-8 encoding and error handling
+                    # Write to file with explicit UTF-8 encoding
                     with open(self.log_file, "a", encoding='utf-8', errors='replace') as f:
                         f.write(clean_formatted + "\n")
                         f.flush()  # Ensure immediate write
 
                 except Exception as e:
-                    # Create a fallback message without emojis
-                    fallback_msg = f"[{level}] {symbol}: {message}"
+                    # Fallback: try writing without special characters
                     try:
-                        # Try writing without emojis as last resort
+                        fallback_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        if symbol:
+                            fallback_msg = f"{fallback_timestamp} | {level} | {symbol} | {message}"
+                        else:
+                            fallback_msg = f"{fallback_timestamp} | {level} | {message}"
+
                         with open(self.log_file, "a", encoding='utf-8', errors='ignore') as f:
                             f.write(fallback_msg + "\n")
                             f.flush()
-                    except:
-                        # If all else fails, just print the error but don't break the app
-                        print(f"Error writing to log file: {e}")
+                    except Exception as inner_e:
+                        # If all else fails, print error but don't break the app
+                        print(f"Critical logging error: {inner_e}")
                         pass
 
     def apply_israeli_fees_and_tax(self, profit_pct, apply_tax=True, apply_fees=True):
@@ -916,6 +956,227 @@ class EnhancedStockAdvisor:
         self.log(f"ML Score: {score:.2f}", "INFO")
         return score, signals
 
+    def calculate_dynamic_profit_target(self, indicators, confidence, investment_days, symbol):
+        """
+        🎯 Calculate dynamic profit targets based on multiple factors
+        Higher confidence + longer time = higher profit targets
+        """
+        self.log(f"Calculating dynamic profit target for {symbol}", "INFO")
+
+        # Base profit targets by confidence level
+        confidence_multipliers = {
+            95: 0.12,  # 12% for ultra-high confidence
+            90: 0.10,  # 10% for very high confidence
+            85: 0.08,  # 8% for high confidence
+            80: 0.06,  # 6% for good confidence
+            75: 0.05,  # 5% for moderate confidence
+            70: 0.04,  # 4% for fair confidence
+            60: 0.037  # 3.7% default for low confidence
+        }
+
+        # Get base target from confidence
+        base_target = 0.037  # Default
+        for conf_threshold in sorted(confidence_multipliers.keys(), reverse=True):
+            if confidence >= conf_threshold:
+                base_target = confidence_multipliers[conf_threshold]
+                break
+
+        # Time-based multipliers (longer time = higher targets)
+        time_multipliers = {
+            1: 0.8,  # 1 day: reduce target (harder to achieve big gains quickly)
+            3: 0.9,  # 3 days: slight reduction
+            7: 1.0,  # 7 days: base target
+            14: 1.15,  # 14 days: 15% increase
+            21: 1.3,  # 21 days: 30% increase
+            30: 1.5,  # 30 days: 50% increase
+            60: 1.8,  # 60 days: 80% increase
+            90: 2.2  # 90 days: 120% increase
+        }
+
+        time_multiplier = 1.0
+        for days in sorted(time_multipliers.keys(), reverse=True):
+            if investment_days >= days:
+                time_multiplier = time_multipliers[days]
+                break
+
+        # Volatility-based adjustments
+        volatility = indicators.get('volatility', 2.0)
+        if volatility > 4.0:  # High volatility = higher potential profits
+            volatility_multiplier = 1.2
+        elif volatility > 3.0:
+            volatility_multiplier = 1.1
+        elif volatility < 1.0:  # Low volatility = lower targets
+            volatility_multiplier = 0.9
+        else:
+            volatility_multiplier = 1.0
+
+        # Momentum-based adjustments
+        momentum_5 = indicators.get('momentum_5', 0)
+        if momentum_5 > 5:  # Strong positive momentum
+            momentum_multiplier = 1.15
+        elif momentum_5 > 2:
+            momentum_multiplier = 1.05
+        elif momentum_5 < -5:  # Strong negative momentum
+            momentum_multiplier = 0.85
+        else:
+            momentum_multiplier = 1.0
+
+        # Volume confirmation bonus
+        volume_relative = indicators.get('volume_relative', 1.0)
+        if volume_relative > 2.0:  # High volume confirmation
+            volume_bonus = 1.1
+        elif volume_relative > 1.5:
+            volume_bonus = 1.05
+        else:
+            volume_bonus = 1.0
+
+        # Calculate final target
+        final_target = base_target * time_multiplier * volatility_multiplier * momentum_multiplier * volume_bonus
+
+        # Apply reasonable bounds
+        final_target = max(0.02, min(final_target, 0.25))  # Between 2% and 25%
+
+        self.log(f"Dynamic target calculation for {symbol}:", "INFO")
+        self.log(f"  Base target: {base_target:.1%} (confidence: {confidence}%)", "INFO")
+        self.log(f"  Time multiplier: {time_multiplier:.2f} ({investment_days} days)", "INFO")
+        self.log(f"  Volatility multiplier: {volatility_multiplier:.2f}", "INFO")
+        self.log(f"  Momentum multiplier: {momentum_multiplier:.2f}", "INFO")
+        self.log(f"  Volume bonus: {volume_bonus:.2f}", "INFO")
+        self.log(f"  Final target: {final_target:.1%}", "SUCCESS")
+
+        return final_target
+
+    def analyze_market_regime(self, indicators, df_recent):
+        """🌍 Analyze current market regime for better context"""
+
+        # Trend strength analysis
+        sma_20 = indicators.get('sma_20', indicators['current_price'])
+        sma_50 = indicators.get('sma_50', indicators['current_price'])
+        current_price = indicators['current_price']
+
+        # Calculate trend strength
+        if current_price > sma_20 > sma_50:
+            trend_strength = min((current_price - sma_50) / sma_50 * 100, 10)
+            regime = "Strong Uptrend"
+        elif current_price > sma_20:
+            trend_strength = min((current_price - sma_20) / sma_20 * 100, 5)
+            regime = "Mild Uptrend"
+        elif current_price < sma_20 < sma_50:
+            trend_strength = min((sma_50 - current_price) / current_price * 100, -10)
+            regime = "Strong Downtrend"
+        else:
+            trend_strength = 0
+            regime = "Sideways"
+
+        return {
+            'regime': regime,
+            'trend_strength': trend_strength,
+            'regime_multiplier': 1.2 if "Strong Uptrend" in regime else
+            1.1 if "Mild Uptrend" in regime else
+            0.8 if "Downtrend" in regime else 1.0
+        }
+
+    def calculate_multi_timeframe_confirmation(self, indicators):
+        """📊 Multi-timeframe analysis for higher confidence"""
+
+        confirmations = 0
+        total_checks = 0
+
+        # RSI across timeframes
+        rsi_14 = indicators.get('rsi_14', 50)
+        rsi_21 = indicators.get('rsi_21', 50)
+
+        if rsi_14 < 40 and rsi_21 < 45:  # Both RSIs suggest oversold
+            confirmations += 2
+        elif rsi_14 < 50 and rsi_21 < 55:  # Mild oversold
+            confirmations += 1
+        total_checks += 2
+
+        # Moving average alignment
+        current_price = indicators['current_price']
+        sma_5 = indicators.get('sma_5', current_price)
+        sma_10 = indicators.get('sma_10', current_price)
+        sma_20 = indicators.get('sma_20', current_price)
+
+        if current_price > sma_5 > sma_10 > sma_20:  # Perfect bullish alignment
+            confirmations += 3
+        elif current_price > sma_10 > sma_20:  # Good bullish alignment
+            confirmations += 2
+        elif current_price > sma_20:  # Basic bullish
+            confirmations += 1
+        total_checks += 3
+
+        # MACD confirmation
+        macd = indicators.get('macd', 0)
+        macd_signal = indicators.get('macd_signal', 0)
+        macd_hist = indicators.get('macd_histogram', 0)
+
+        if macd > macd_signal and macd_hist > 0:  # Strong bullish MACD
+            confirmations += 2
+        elif macd > macd_signal:  # Mild bullish MACD
+            confirmations += 1
+        total_checks += 2
+
+        # Volume confirmation
+        volume_relative = indicators.get('volume_relative', 1.0)
+        if volume_relative > 1.5:  # Strong volume
+            confirmations += 2
+        elif volume_relative > 1.2:  # Good volume
+            confirmations += 1
+        total_checks += 2
+
+        confirmation_percentage = (confirmations / total_checks) * 100 if total_checks > 0 else 0
+
+        return {
+            'confirmation_score': confirmations,
+            'total_possible': total_checks,
+            'confirmation_percentage': confirmation_percentage,
+            'confidence_boost': min(confirmation_percentage / 10, 15)  # Up to 15% boost
+        }
+
+    def enhanced_profit_recommendation(self, indicators, symbol):
+        """🚀 Enhanced recommendation with higher profit targets"""
+
+        # Get current analysis
+        current_price = indicators['current_price']
+
+        # Analyze market regime
+        regime_analysis = self.analyze_market_regime(indicators, None)
+
+        # Multi-timeframe confirmation
+        confirmation_analysis = self.calculate_multi_timeframe_confirmation(indicators)
+
+        # Base confidence from your existing system
+        base_confidence = 70  # You'll get this from your existing method
+
+        # Enhanced confidence calculation
+        enhanced_confidence = base_confidence + confirmation_analysis['confidence_boost']
+        enhanced_confidence = min(enhanced_confidence, 98)  # Cap at 98%
+
+        # Dynamic profit target
+        profit_target = self.calculate_dynamic_profit_target(
+            indicators, enhanced_confidence, self.investment_days, symbol
+        )
+
+        # Risk-adjusted stop loss
+        volatility = indicators.get('volatility', 2.0)
+        if volatility > 4.0:
+            stop_loss_pct = 0.08  # 8% stop for high volatility
+        elif volatility > 3.0:
+            stop_loss_pct = 0.06  # 6% stop for medium volatility
+        else:
+            stop_loss_pct = 0.04  # 4% stop for low volatility
+
+        return {
+            'enhanced_confidence': enhanced_confidence,
+            'profit_target': profit_target,
+            'stop_loss_pct': stop_loss_pct,
+            'regime_analysis': regime_analysis,
+            'confirmation_analysis': confirmation_analysis,
+            'expected_holding_days': self.investment_days,
+            'risk_reward_ratio': profit_target / stop_loss_pct
+        }
+
     def extract_signal_strengths(self, trend_score, momentum_score, volume_score, sr_score, model_score):
         """Return breakdown of signal strengths categorized by source."""
         self.log(f"Starting extract_signal_strengths: "
@@ -1347,13 +1608,41 @@ def create_enhanced_interface():
         advisor.log("Invalid date format. Using today's date.", "WARNING")
 
     # Investment period
+    # Investment timeframe selection
     advisor.investment_days = st.sidebar.selectbox(
-        "⏱️ Target holding period (up to):",
-        options=[1, 3, 7, 14, 21, 30],
+        "🕐 Target holding period(up to):",
+        options=[1, 3, 7, 14, 21, 30, 45, 60, 90, 120],  # Extended options
         index=2,  # Default to 7 days
-        help="Maximum time you're willing to hold (can exit earlier if targets are met)"
+        help="Longer periods generally allow for higher profit targets but require more patience"
     )
     advisor.log(f"Investment Days: {advisor.investment_days}", "INFO")
+
+    # Strategy type selection
+    strategy_type = st.sidebar.radio(
+        "📈 Strategy Type:",
+        options=["Conservative", "Balanced", "Aggressive", "Swing Trading"],
+        index=1,  # Default to Balanced
+        help="Strategy affects profit targets and risk tolerance"
+    )
+    advisor.log(f"Strategy type selection: {strategy_type}", "INFO")
+
+    # Map strategy to multipliers
+    strategy_multipliers = {
+        "Conservative": {"profit": 0.8, "risk": 0.8, "confidence_req": 85},
+        "Balanced": {"profit": 1.0, "risk": 1.0, "confidence_req": 75},
+        "Aggressive": {"profit": 1.4, "risk": 1.3, "confidence_req": 65},
+        "Swing Trading": {"profit": 1.8, "risk": 1.5, "confidence_req": 70}
+    }
+    advisor.strategy_settings = strategy_multipliers[strategy_type]
+    advisor.log(f"Strategy: {strategy_type}, Investment Days: {advisor.investment_days}", "INFO")
+
+    # Add profit target preview
+    if advisor.investment_days >= 30:
+        st.sidebar.info(f"💡 Longer timeframes (≥30 days) can target 8-15% profits with high confidence signals")
+    elif advisor.investment_days >= 14:
+        st.sidebar.info(f"💡 Medium timeframes (14-30 days) can target 5-10% profits")
+    else:
+        st.sidebar.info(f"💡 Short timeframes (<14 days) typically target 3-6% profits")
 
     # Show model availability
     if stock_symbol in advisor.models:
@@ -1388,9 +1677,12 @@ def create_enhanced_interface():
 
     # UPDATE ADVISOR SETTINGS BASED ON CURRENT STATE
     advisor.download_log = st.session_state.download_file
-    if st.session_state.download_file and not hasattr(advisor, 'log_file'):
-        # Create log file if it doesn't exist
-        advisor.log_file = f"debug_log_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.log"
+    if st.session_state.download_file:
+        if not hasattr(advisor, 'log_file') or not advisor.log_file:
+            advisor.ensure_log_file()  # Use the new method
+            st.sidebar.success(f"📝 Log file created: {os.path.basename(advisor.log_file)}")
+    else:
+        advisor.log_file = None
 
     # Show download button if log file exists and download is enabled
     if st.session_state.download_file and 'enhanced_advisor' in st.session_state:
@@ -1412,16 +1704,22 @@ def create_enhanced_interface():
                         mime="text/plain",
                         help="Download the complete debug log file"
                     )
+                    # Show file info
+                    file_size = len(log_content.encode('utf-8'))
+                    st.sidebar.caption(f"Log file: {file_size} bytes, {log_content.count(chr(10))} lines")
                 else:
-                    st.sidebar.info("📝 Log file is empty. Run an analysis first.")
+                    st.sidebar.info("📝 Log file exists but is empty. Run an analysis first.")
 
             except Exception as e:
                 st.sidebar.error(f"Error accessing log file: {e}")
+                st.sidebar.caption(f"Log file path: {advisor.log_file}")
+                advisor.log(f"Error accessing log file: {e}", "ERROR")
         else:
             if advisor.debug_log:  # If there are debug logs in memory but no file
                 st.sidebar.info("📝 Debug logs available. Run an analysis to create downloadable file.")
             else:
                 st.sidebar.info("📝 No debug logs yet. Run an analysis first.")
+                advisor.log("No debug logs yet. Run an analysis first.", "INFO")
 
     # Use session state values for the rest of the application
     show_debug = st.session_state.show_debug
@@ -1536,6 +1834,49 @@ def create_enhanced_interface():
                     value=f"{result.get('tax_paid', 0.0):.2f}%",
                     help="25% capital gains tax applied to net profit"
                 )
+
+            def show_enhanced_profit_analysis(result, strategy_type, investment_days):
+                """Display enhanced profit analysis"""
+
+                with st.expander("🚀 Enhanced Profit Analysis"):
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        st.markdown("**📊 Profit Target Breakdown:**")
+                        base_target = result.get('base_profit_target', 3.7)
+                        final_target = result.get('expected_profit_pct', 3.7)
+
+                        st.write(f"• Base Target: {base_target:.1f}%")
+                        st.write(
+                            f"• Strategy Multiplier ({strategy_type}): {strategy_multipliers[strategy_type]['profit']:.1f}x")
+                        st.write(
+                            f"• Time Multiplier ({investment_days} days): {1.0 + (investment_days - 7) * 0.02:.1f}x")
+                        st.write(f"• **Final Target: {final_target:.1f}%**")
+
+                    with col2:
+                        st.markdown("**⏰ Time vs Profit Expectations:**")
+
+                        timeframes = {
+                            "1-7 days": "3-6% (Quick trades)",
+                            "7-21 days": "5-10% (Short swing)",
+                            "21-60 days": "8-15% (Medium swing)",
+                            "60+ days": "12-25% (Long swing)"
+                        }
+
+                        for timeframe, profit_range in timeframes.items():
+                            if investment_days <= 7 and "1-7 days" in timeframe:
+                                st.write(f"🎯 **{timeframe}: {profit_range}**")
+                            elif 7 < investment_days <= 21 and "7-21 days" in timeframe:
+                                st.write(f"🎯 **{timeframe}: {profit_range}**")
+                            elif 21 < investment_days <= 60 and "21-60 days" in timeframe:
+                                st.write(f"🎯 **{timeframe}: {profit_range}**")
+                            elif investment_days > 60 and "60+ days" in timeframe:
+                                st.write(f"🎯 **{timeframe}: {profit_range}**")
+                            else:
+                                st.write(f"• {timeframe}: {profit_range}")
+
+            # Add this after your existing price information section
+            show_enhanced_profit_analysis(result, strategy_type, advisor.investment_days)
 
             # Show signal strength breakdown
             if confidence >= 85:
