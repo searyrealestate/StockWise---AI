@@ -41,6 +41,8 @@ class EnhancedStockAdvisor:
         self.download_log = download_log
         self.investment_days = 7
         self.failed_models = []
+        self.tax = 0
+        self.broker_fee = 0
 
         # Initialize 95% confidence system if available
         if ENHANCEMENTS_AVAILABLE:
@@ -73,6 +75,43 @@ class EnhancedStockAdvisor:
             if self.download_log:
                 with open("debug_log.txt", "a") as f:
                     f.write(formatted + "\n")
+
+    def apply_israeli_fees_and_tax(self, profit_pct, apply_tax=True, apply_fees=True):
+        """
+        Adjust profit percentage for Israeli broker fees and tax.
+        - Broker fee: 0.2% on buy + 0.2% on sell = 0.4%
+        - Tax: 25% on net profit
+
+        Args:
+        profit_pct: Gross profit percentage (e.g., 5.0 for 5%)
+        apply_tax: Whether to apply capital gains tax
+        apply_fees: Whether to apply broker fees
+
+        Returns:
+        Net profit percentage after fees and taxes
+        """
+        adjusted = profit_pct
+
+        # Reset class variables
+        self.broker_fee = 0
+        self.tax = 0
+
+        if apply_fees:
+            # Subtract broker fees (0.4% total)
+            fee_amount = 0.4
+            adjusted -= fee_amount
+            self.broker_fee = fee_amount
+            self.log(f"Applied broker fees: -{fee_amount:.2f}%", "INFO")
+
+        if apply_tax and adjusted > 0:
+            # Apply 25% tax on net profit (after fees)
+            tax_amount = adjusted * 0.25
+            adjusted -= tax_amount
+            self.tax = tax_amount
+            self.log(f"Applied capital gains tax: -{tax_amount:.2f}%", "INFO")
+
+        self.log(f"Profit calculation: {profit_pct:.2f}% → {adjusted:.2f}% (net)", "INFO")
+        return round(adjusted, 2)
 
     def generate_95_percent_recommendation(self, indicators, symbol):
         """🎯 Generate recommendation using 95% confidence system"""
@@ -155,6 +194,10 @@ class EnhancedStockAdvisor:
             current_price = indicators['current_price']
             final_action = action_mapping.get(recommendation, 'WAIT')
 
+            # FIXED: Calculate profit percentage correctly
+            target_profit_pct = target_profit * 100  # Convert to percentage
+            net_profit_pct = self.apply_israeli_fees_and_tax(target_profit_pct)
+
             # Build comprehensive result
             result = {
                 'action': final_action,
@@ -162,7 +205,10 @@ class EnhancedStockAdvisor:
                 'buy_price': current_price if final_action == 'BUY' else None,
                 'sell_price': current_price * (1 + target_profit) if final_action == 'BUY' else current_price,
                 'stop_loss': current_price * 0.94,  # 6% stop loss
-                'expected_profit_pct': target_profit * 100,
+                'expected_profit_pct': round(net_profit_pct, 2),  # FIXED: Now correctly defined
+                'gross_profit_pct': round(target_profit_pct, 2),  # FIXED: Add gross profit
+                'tax_paid': round(self.tax, 2),
+                'broker_fee_paid': round(self.broker_fee, 2),
                 'reasons': enhanced_result['signals'] + [
                     f"🎯 95% Confidence System: {recommendation} ({final_confidence:.1f}%)"],
                 'final_score': enhanced_result.get('total_score', 0),
@@ -174,16 +220,13 @@ class EnhancedStockAdvisor:
                 'confidence_boost': final_confidence - enhanced_result['confidence']
             }
 
-            self.log(f"95% recommendation complete: {final_action} at {final_confidence:.1f}% confidence",
-                     "SUCCESS")
+            self.log(f"95% recommendation complete: {final_action} at {final_confidence:.1f}% confidence", "SUCCESS")
             return result
 
         except Exception as e:
             self.log(f"Error in 95% system, falling back to original: {e}", "ERROR")
             # Fallback to original system
             return self.generate_enhanced_recommendation(indicators, symbol)
-
-
 
     def load_models(self):
         """Load trained models"""
@@ -267,6 +310,9 @@ class EnhancedStockAdvisor:
             self.log(f"sma_50: {indicators['sma_50']:.1f}", "SUCCESS")
 
             # FIXED: EMA for trend confirmation
+            indicators['ema_10'] = historical_data['Close'].ewm(span=10, min_periods=1).mean().iloc[-1]
+            self.log(f"ema_10: {indicators['ema_10']:.1f}", "SUCCESS")
+
             indicators['ema_12'] = historical_data['Close'].ewm(span=12, min_periods=1).mean().iloc[-1]
             self.log(f"ema_12: {indicators['ema_12']:.1f}", "SUCCESS")
 
@@ -308,7 +354,6 @@ class EnhancedStockAdvisor:
                 indicators['macd_signal'] = macd_indicator.macd_signal().iloc[-1]
                 indicators['macd_histogram'] = macd_indicator.macd_diff().iloc[-1]
                 self.log(f"MACD hist: {indicators['macd_histogram']:.3f}", "SUCCESS")
-
 
                 # Handle NaN values
                 for key in ['macd', 'macd_signal', 'macd_histogram']:
@@ -352,7 +397,6 @@ class EnhancedStockAdvisor:
                     if pd.isna(indicators[key]):
                         indicators[key] = current_price
                         self.log(f"{key}: {indicators[key]:.2f}", "SUCCESS")
-
 
             except Exception as bb_error:
                 print(f"Bollinger Bands calculation error: {bb_error}")
@@ -442,9 +486,18 @@ class EnhancedStockAdvisor:
                 indicators['volatility'] = 1.0
                 self.log(f"volatility: {indicators['volatility']:.2f}", "INFO")
 
-            # FIXED: Support and Resistance
+            # Add price change calculation for ML model
+            if len(historical_data) > 1:
+                indicators['price_change_1d'] = (current_price / historical_data['Close'].iloc[-2] - 1) * 100
+                self.log(f"price_change_1d: {indicators['price_change_1d']:.2f}%", "SUCCESS")
+            else:
+                indicators['price_change_1d'] = 0
+                self.log(f"price_change_1d: {indicators['price_change_1d']:.2f}%", "INFO")
+
             indicators['resistance_20'] = historical_data['High'].rolling(20, min_periods=1).max().iloc[-1]
             self.log(f"resistance_20: {indicators['resistance_20']:.2f}", "SUCCESS")
+
+            # FIXED: Support and Resistance
             indicators['support_20'] = historical_data['Low'].rolling(20, min_periods=1).min().iloc[-1]
             self.log(f"support_20: {indicators['support_20']:.2f}", "SUCCESS")
 
@@ -560,8 +613,6 @@ class EnhancedStockAdvisor:
         self.log("Indicators calculated successfully", "INFO")
 
         # Enhanced recommendation generation with debug mode
-        # recommendation = self.generate_enhanced_recommendation(
-        #     indicators = indicators, symbol=symbol)
         try:
             recommendation = self.generate_95_percent_recommendation(indicators, symbol)
             if recommendation.get('enhancement_active', False):
@@ -574,14 +625,16 @@ class EnhancedStockAdvisor:
 
         self.log(f"Recommendation generated: {recommendation}", "INFO")
 
-        # 🚥 Log the final recommendation to CSV
+        # Log the final recommendation to CSV
         self.log_recommendation(symbol, recommendation, analysis_date)
 
+        # FIXED: Include debug_log in the return dictionary
         return {
             'symbol': symbol,
             'analysis_date': analysis_date,
             'indicators': indicators,
             'investment_days': self.investment_days,
+            'debug_log': self.debug_log,  # Add this line
             **recommendation
         }
 
@@ -600,7 +653,8 @@ class EnhancedStockAdvisor:
             "stop_loss": stop_loss,
             "profit_pct": profit_pct,
             "max_loss_pct": round(max_loss * 100, 1),
-            "holding_days": days
+            "holding_days": days,
+            'net_profit_pct': self.apply_israeli_fees_and_tax(target_gain * 100)
         }
         self.log(f"Trading plan created: {plan}", "INFO")
         return plan
@@ -641,7 +695,7 @@ class EnhancedStockAdvisor:
         if current_price > sma_5 > sma_10 > sma_20:
             score += 3
             signals.append("📈 Strong SMA uptrend")
-            self.log(f"Strong SMA uptrend: ✅ Uptrend alignment: +3", "SEUCCESS")
+            self.log(f"Strong SMA uptrend: ✅ Uptrend alignment: +3", "SUCCESS")
 
         elif current_price < sma_5 < sma_10 < sma_20:
             score -= 3
@@ -651,7 +705,7 @@ class EnhancedStockAdvisor:
         elif current_price > sma_20:
             score += 2
             signals.append("📈 Price above SMA20")
-            self.log(f"Price above SMA20: ✅ Price > SMA20: +2", "SEUCCESS")
+            self.log(f"Price above SMA20: ✅ Price > SMA20: +2", "SUCCESS")
 
         else:
             score -= 2
@@ -712,7 +766,7 @@ class EnhancedStockAdvisor:
         if macd > macd_signal and macd_hist > 0:
             score += 2
             signals.append("🚀 MACD Bullish crossover")
-            self.log(f"MACD Bullish crossover: ✅ MACD bullish: +2", "SEUCCESS")
+            self.log(f"MACD Bullish crossover: ✅ MACD bullish: +2", "SUCCESS")
 
         elif macd < macd_signal and macd_hist < 0:
             score -= 2
@@ -734,12 +788,12 @@ class EnhancedStockAdvisor:
         if vr > 2.0:
             score += 2
             signals.append("🔊 High volume spike")
-            self.log(f"High volume spike: ✅ Volume > 2x avg: +2", "SECESS")
+            self.log(f"High volume spike: ✅ Volume > 2x avg: +2", "SUCCESS")
 
         elif vr > 1.5:
             score += 1
             signals.append("📢 Above average volume")
-            self.log(f"Above average volume: ✅ Volume > 1.5x: +1", "SECESS")
+            self.log(f"Above average volume: ✅ Volume > 1.5x: +1", "SUCCESS")
 
         elif vr < 0.7:
             score -= 1
@@ -922,42 +976,63 @@ class EnhancedStockAdvisor:
         all_signals = trend_signals + momentum_signals + volume_signals + sr_signals + model_signals
 
         stop_loss_presntage = 0.06
+
         # Action decision logic
+        # FIXED: Action decision logic with proper variable handling
         if final_score >= 1.2:
             action = "BUY"
             base_confidence = 70 + min(25, final_score * 8)
             buy_price = current_price
+
+            # Calculate target multiplier based on investment period
             if self.investment_days <= 7:
                 target_multiplier = 1.025 + (final_score * 0.01)
             elif self.investment_days <= 21:
                 target_multiplier = 1.04 + (final_score * 0.015)
             else:
                 target_multiplier = 1.06 + (final_score * 0.02)
+
             sell_price = current_price * target_multiplier
-            stop_loss = current_price * (1 - stop_loss_presntage)
-            profit_pct = (target_multiplier - 1) * 100
+            stop_loss_percentage = 0.06  # FIXED: Define the variable
+            stop_loss = current_price * (1 - stop_loss_percentage)
+
+            # FIXED: Calculate gross profit percentage correctly
+            gross_profit_pct = (target_multiplier - 1) * 100
+
+            # FIXED: Apply fees and taxes to percentage
+            net_profit_pct = self.apply_israeli_fees_and_tax(gross_profit_pct)
+
             self.log(f"BUY Decision → Sell @ ${sell_price:.2f}, Stop @ ${stop_loss:.2f}", "SUCCESS")
+            self.log(f"Gross profit: {gross_profit_pct:.2f}%, Net profit: {net_profit_pct:.2f}%", "INFO")
+
         elif final_score <= -1.2:
             action = "SELL/AVOID"
             base_confidence = 70 + min(25, abs(final_score) * 8)
             buy_price = None
             sell_price = current_price
             target_multiplier = 0.95 - (abs(final_score) * 0.01)
-            stop_loss = current_price * (1 + stop_loss_presntage)
-            profit_pct = (1 - target_multiplier) * 100
-            self.log(f"❌ SELL Decision: Target Multiplier={target_multiplier:.2f}, "
-                     f"Profit={profit_pct:.1f}%", "INFO")
+            stop_loss_percentage = 0.06  # FIXED: Define the variable
+            stop_loss = current_price * (1 + stop_loss_percentage)
+
+            # For sell recommendations, profit represents potential loss avoided
+            gross_profit_pct = (1 - target_multiplier) * 100
+            net_profit_pct = gross_profit_pct  # No fees/taxes on avoided losses
+
+            self.log(f"SELL Decision: Target Multiplier={target_multiplier:.2f}, "
+                     f"Potential loss avoided: {gross_profit_pct:.1f}%", "INFO")
         else:
             action = "WAIT"
             base_confidence = 50 + abs(final_score) * 5
-            stop_loss = current_price * (1 - stop_loss_presntage + 0.01)
-            profit_pct = 0
+            stop_loss_percentage = 0.06  # FIXED: Define the variable
+            stop_loss = current_price * (1 - stop_loss_percentage + 0.01)
+            gross_profit_pct = 0
+            net_profit_pct = 0
             buy_price = None
             sell_price = None
             all_signals.append("🤔 Mixed signals - waiting for stronger confirmation")
-            self.log(f"⏳ WAIT Decision: Final Score too weak", "INFO")
+            self.log(f"WAIT Decision: Final Score too weak", "INFO")
 
-        # ⚙️ Confidence Booster
+            # ⚙️ Confidence Booster
         confirming_indicators = sum([
             1 if abs(trend_score) > 1 else 0,
             1 if abs(momentum_score) > 1 else 0,
@@ -970,7 +1045,8 @@ class EnhancedStockAdvisor:
         self.log(f"💡 Confidence Boost: +{confidence_bonus} → {final_confidence}%", "INFO")
 
         # 📈 Trading Plan
-        trading_plan = self.build_trading_plan(current_price, target_gain=0.037, max_loss=0.06, days=self.investment_days)
+        trading_plan = self.build_trading_plan(current_price, target_gain=0.037, max_loss=0.06,
+                                               days=self.investment_days)
         self.log(f"📊 Trading Plan: {trading_plan}", "INFO")
 
         # 🔍 Signal Breakdown
@@ -990,13 +1066,16 @@ class EnhancedStockAdvisor:
             'buy_price': buy_price,
             'sell_price': sell_price,
             'stop_loss': stop_loss,
-            'expected_profit_pct': profit_pct,
+            'expected_profit_pct': round(net_profit_pct, 2),  # FIXED: Use net_profit_pct
+            'gross_profit_pct': round(gross_profit_pct, 2),  # FIXED: Add gross profit
+            'tax_paid': round(self.tax, 2),
+            'broker_fee_paid': round(self.broker_fee, 2),
             'reasons': all_signals,
             'risk_level': risk_level,
             'final_score': final_score,
             'current_price': current_price,
             'signal_breakdown': signal_strengths,
-            'trading_plan': trading_plan
+            'trading_plan': trading_plan,
         }
 
     def create_enhanced_chart(self, symbol, data):
@@ -1119,6 +1198,50 @@ class EnhancedStockAdvisor:
         return fig
 
 
+def show_debug_logs_safely(result, show_debug):
+    """Safely display debug logs with error handling"""
+    if show_debug:
+        st.markdown("---")
+        st.subheader("🐛 Debug Logs")
+
+        # Safely get debug logs
+        debug_logs = result.get("debug_log", [])
+
+        if debug_logs and len(debug_logs) > 0:
+            with st.expander("🔍 Full Debug Output", expanded=False):
+                try:
+                    # Convert all log entries to strings and join
+                    log_text = "\n".join(str(log) for log in debug_logs)
+                    st.code(log_text, language="text")
+                except Exception as e:
+                    st.error(f"Error displaying debug logs: {e}")
+                    st.write("Raw debug data:")
+                    st.write(debug_logs)
+
+            # FIXED: Safe filtering with error handling
+            try:
+                success_lines = [str(l) for l in debug_logs if '✅' in str(l) or 'SUCCESS' in str(l)]
+                error_lines = [str(l) for l in debug_logs if '❌' in str(l) or 'ERROR' in str(l)]
+                neutral_lines = [str(l) for l in debug_logs if '⚖️' in str(l) or 'INFO' in str(l)]
+
+                if success_lines:
+                    st.markdown("### ✅ Successful Checks")
+                    st.code("\n".join(success_lines))
+
+                if error_lines:
+                    st.markdown("### ❌ Warnings & Issues")
+                    st.code("\n".join(error_lines))
+
+                if neutral_lines:
+                    st.markdown("### ⚖️ Neutral Observations")
+                    st.code("\n".join(neutral_lines))
+
+            except Exception as e:
+                st.error(f"Error processing debug logs: {e}")
+
+        else:
+            st.info("No debug logs available. Make sure debug mode is enabled in the sidebar.")
+
 def create_enhanced_interface():
     """Create enhanced interface with 95% confidence targeting"""
     st.set_page_config(
@@ -1146,7 +1269,7 @@ def create_enhanced_interface():
 
     advisor = st.session_state.enhanced_advisor
 
-    advisor.log("Create Steamlit Page", "INFO")
+    advisor.log("Create Streamlit Page", "INFO")
     advisor.log("Enhanced interface initialized", "INFO")
 
     # Sidebar controls
@@ -1251,7 +1374,7 @@ def create_enhanced_interface():
             # Enhanced price information
             st.subheader("💰 Price Information")
 
-            col1, col2, col3, col4 = st.columns(4)
+            col1, col2, col3, col4, col5 = st.columns(5)
 
             with col1:
                 st.metric(
@@ -1300,6 +1423,7 @@ def create_enhanced_interface():
                         value=f"{result['expected_profit_pct']:.1f}%",
                         delta=f"in {advisor.investment_days} days"
                     )
+                    st.caption(result.get('net_profit_message', ''))
                     advisor.log(f"Expected Profit: {result['expected_profit_pct']:.1f}%", "INFO")
                 else:
                     st.metric(
@@ -1308,6 +1432,18 @@ def create_enhanced_interface():
                         help="No profit expected"
                     )
                     advisor.log("No profit expected", "INFO")
+
+            with col5:
+                st.metric(
+                    label="💸 Broker Fee",
+                    value=f"{result.get('broker_fee_paid', 0.0):.2f}%",
+                    help="Total cost from buying and selling fees"
+                )
+                st.metric(
+                    label="🧾 Tax Paid",
+                    value=f"{result.get('tax_paid', 0.0):.2f}%",
+                    help="25% capital gains tax applied to net profit"
+                )
 
             # Show signal strength breakdown
             if confidence >= 85:
@@ -1372,6 +1508,7 @@ def create_enhanced_interface():
                     4. ⏱️ **Max holding time:** {advisor.investment_days} days (can exit earlier at target)
                     """)
                     advisor.log(f"BUY plan for {stock_symbol}", "INFO")
+
 
                 with col2:
                     st.markdown(f"""
@@ -1612,26 +1749,27 @@ def create_enhanced_interface():
             # Enhanced disclaimer
             st.subheader("📋 Important Trading Guidelines")
 
-            if show_debug:
-                st.markdown("---")
-                st.subheader("🐛 Debug Logs")
+            # if show_debug:
+            #     st.markdown("---")
+            #     st.subheader("🐛 Debug Logs")
+            #
+            #     with st.expander("🔍 Full Debug Output", expanded=False):
+            #         st.code("\n".join(result["debug_log"]), language="text")
+            #
+            #     success_lines = [l for l in result['debug_log'] if l.startswith('✅')]
+            #     error_lines = [l for l in result['debug_log'] if l.startswith('❌')]
+            #     neutral_lines = [l for l in result['debug_log'] if l.startswith('⚖️')]
+            #
+            #     st.markdown("### ✅ Successful Checks")
+            #     st.code("\n".join(success_lines))
+            #
+            #     st.markdown("### ❌ Warnings & Issues")
+            #     st.code("\n".join(error_lines))
+            #
+            #     st.markdown("### ⚖️ Neutral Observations")
+            #     st.code("\n".join(neutral_lines))
 
-                with st.expander("🔍 Full Debug Output", expanded=False):
-                    st.code("\n".join(result["debug_log"]), language="text")
-
-                success_lines = [l for l in result['debug_log'] if l.startswith('✅')]
-                error_lines = [l for l in result['debug_log'] if l.startswith('❌')]
-                neutral_lines = [l for l in result['debug_log'] if l.startswith('⚖️')]
-
-                st.markdown("### ✅ Successful Checks")
-                st.code("\n".join(success_lines))
-
-                st.markdown("### ❌ Warnings & Issues")
-                st.code("\n".join(error_lines))
-
-                st.markdown("### ⚖️ Neutral Observations")
-                st.code("\n".join(neutral_lines))
-
+            show_debug_logs_safely(result,show_debug)
             col1, col2 = st.columns(2)
 
             with col1:
