@@ -184,10 +184,42 @@ class EnhancedStockAdvisor:
         self.log(f"Profit calculation: {profit_pct:.2f}% → {adjusted:.2f}% (net)", "INFO")
         return round(adjusted, 2)
 
+    def build_enhanced_trading_plan(self, current_price, target_gain=0.037, max_loss=0.06, days=7):
+        """🎯 Enhanced trading plan with strategy integration"""
+        self.log(
+            f"Building enhanced trading plan for price={current_price}, gain={target_gain:.1%}, loss={max_loss:.1%}, days={days}",
+            "INFO")
+
+        strategy_settings = getattr(self, 'strategy_settings', {"profit": 1.0, "risk": 1.0})
+
+        buy_price = current_price
+        sell_price = round(buy_price * (1 + target_gain), 2)
+        stop_loss = round(buy_price * (1 - max_loss), 2)
+        profit_pct = round(target_gain * 100, 1)
+
+        # Calculate net profit after fees and taxes
+        net_profit_pct = self.apply_israeli_fees_and_tax(profit_pct)
+
+        plan = {
+            "buy_price": buy_price,
+            "sell_price": sell_price,
+            "stop_loss": stop_loss,
+            "profit_pct": profit_pct,
+            "net_profit_pct": net_profit_pct,
+            "max_loss_pct": round(max_loss * 100, 1),
+            "holding_days": days,
+            "strategy_multiplier": strategy_settings.get("profit", 1.0),
+            "risk_multiplier": strategy_settings.get("risk", 1.0),
+            "confidence_requirement": strategy_settings.get("confidence_req", 75)
+        }
+
+        self.log(f"Enhanced trading plan created: {plan}", "INFO")
+        return plan
+
     def generate_95_percent_recommendation(self, indicators, symbol):
         """🎯 Generate recommendation using 95% confidence system"""
         if not hasattr(self, 'enhancements_active') or not self.enhancements_active:
-            self.log("Enhancements not active, using original system", "INFO")
+            self.log("Enhancements not active, using enhanced original system", "INFO")
             return self.generate_enhanced_recommendation(indicators, symbol)
 
         self.log(f"Starting 95% confidence recommendation for {symbol}", "INFO")
@@ -196,16 +228,11 @@ class EnhancedStockAdvisor:
             # Get stock data for enhanced analysis
             df = self.get_stock_data(symbol, datetime.now().date(), days_back=60)
             if df is None:
-                self.log("No data available, falling back to original system", "WARNING")
+                self.log("No data available, falling back to enhanced original system", "WARNING")
                 return self.generate_enhanced_recommendation(indicators, symbol)
 
             # Run enhanced signal detection
             enhanced_result = self.enhanced_detector.enhanced_signal_decision(df, indicators, symbol)
-            self.log(f"Enhanced signals result: {enhanced_result['action']}", "INFO")
-
-            if not hasattr(self, 'enhancements_active') or not self.enhancements_active:
-                self.log("Enhancements not active, using original system", "INFO")
-                return self.generate_enhanced_recommendation(indicators, symbol)
 
             # Prepare features for confidence system
             features = [
@@ -229,18 +256,21 @@ class EnhancedStockAdvisor:
                 confidence_result = self.confidence_builder.calculate_95_percent_confidence(
                     symbol, features, enhanced_result['signals'], market_data
                 )
-
                 final_confidence = confidence_result['confidence']
                 recommendation = confidence_result['recommendation']
-
-                self.log(f"95% system confidence: {final_confidence:.1f}%", "SUCCESS")
             else:
-                # Use enhanced signals result directly for lower confidence
                 final_confidence = enhanced_result['confidence']
                 recommendation = enhanced_result['action']
-                self.log(f"Using enhanced signals directly: {final_confidence:.1f}%", "INFO")
 
-            # Convert to your existing format
+            # FIXED: Use the enhanced profit calculation with strategy settings
+            strategy_settings = getattr(self, 'strategy_settings', {"profit": 1.0, "risk": 1.0})
+            target_profit = self.calculate_dynamic_profit_target(
+                indicators, final_confidence, self.investment_days, symbol, strategy_settings
+            )
+
+            current_price = indicators['current_price']
+
+            # Action mapping
             action_mapping = {
                 'ULTRA_BUY': 'BUY',
                 'STRONG_BUY': 'BUY',
@@ -250,55 +280,280 @@ class EnhancedStockAdvisor:
                 'WAIT': 'WAIT'
             }
 
-            # Dynamic profit targets based on confidence
-            if final_confidence >= 95:
-                target_profit = 0.08  # 8% for ultra-high confidence
-            elif final_confidence >= 90:
-                target_profit = 0.06  # 6% for high confidence
-            elif final_confidence >= 85:
-                target_profit = 0.05  # 5% for good confidence
-            elif final_confidence >= 80:
-                target_profit = 0.04  # 4% for moderate confidence
-            else:
-                target_profit = 0.037  # Default 3.7%
-
-            current_price = indicators['current_price']
             final_action = action_mapping.get(recommendation, 'WAIT')
 
-            # FIXED: Calculate profit percentage correctly
+            # Calculate prices and profits
             target_profit_pct = target_profit * 100  # Convert to percentage
             net_profit_pct = self.apply_israeli_fees_and_tax(target_profit_pct)
 
-            # Build comprehensive result
+            # Enhanced stop loss based on strategy and time horizon
+            if strategy_settings.get("risk", 1.0) >= 1.3:  # Aggressive/Swing
+                stop_loss_pct = min(0.08, 0.04 + (self.investment_days * 0.001))  # Dynamic stop loss
+            else:
+                stop_loss_pct = min(0.06, 0.03 + (self.investment_days * 0.0005))
+
+            # Build result
             result = {
                 'action': final_action,
                 'confidence': final_confidence,
                 'buy_price': current_price if final_action == 'BUY' else None,
                 'sell_price': current_price * (1 + target_profit) if final_action == 'BUY' else current_price,
-                'stop_loss': current_price * 0.94,  # 6% stop loss
-                'expected_profit_pct': round(net_profit_pct, 2),  # FIXED: Now correctly defined
-                'gross_profit_pct': round(target_profit_pct, 2),  # FIXED: Add gross profit
+                'stop_loss': current_price * (1 - stop_loss_pct),
+                'expected_profit_pct': round(net_profit_pct, 2),
+                'gross_profit_pct': round(target_profit_pct, 2),
                 'tax_paid': round(self.tax, 2),
                 'broker_fee_paid': round(self.broker_fee, 2),
                 'reasons': enhanced_result['signals'] + [
-                    f"🎯 95% Confidence System: {recommendation} ({final_confidence:.1f}%)"],
+                    f"🎯 95% System: {recommendation} ({final_confidence:.1f}%)",
+                    f"📈 Strategy: {getattr(self, 'current_strategy', 'Unknown')} (×{strategy_settings.get('profit', 1.0):.1f})",
+                    f"⏱️ Time horizon: {self.investment_days} days (×{target_profit / 0.037:.1f} base)"
+                ],
                 'final_score': enhanced_result.get('total_score', 0),
                 'signal_breakdown': enhanced_result.get('score_breakdown', {}),
                 'current_price': current_price,
-                'trading_plan': self.build_trading_plan(current_price, target_gain=target_profit),
+                'trading_plan': self.build_enhanced_trading_plan(current_price, target_profit, stop_loss_pct),
                 'enhancement_active': True,
-                'original_confidence': enhanced_result['confidence'],
-                'confidence_boost': final_confidence - enhanced_result['confidence']
+                'strategy_applied': True,  # NEW: Flag to show strategy was applied
+                'time_multiplier': target_profit / 0.037,  # Show the scaling factor
             }
 
             self.log(f"95% recommendation complete: {final_action} at {final_confidence:.1f}% confidence", "SUCCESS")
+            self.log(f"Profit target: {target_profit_pct:.1f}% (net: {net_profit_pct:.1f}%)", "SUCCESS")
+
             return result
 
         except Exception as e:
-            self.log(f"Error in 95% system, falling back to original: {e}", "ERROR")
-            # Fallback to original system
+            self.log(f"Error in 95% system, falling back to enhanced original: {e}", "ERROR")
             return self.generate_enhanced_recommendation(indicators, symbol)
 
+    def debug_recommendation_logic(self, final_score, strategy_settings, current_strategy):
+        """🔍 Debug function to trace recommendation logic"""
+
+        self.log("=== DEBUGGING RECOMMENDATION LOGIC ===", "INFO")
+        self.log(f"Final Score: {final_score:.2f}", "INFO")
+        self.log(f"Strategy: {current_strategy}", "INFO")
+        self.log(f"Strategy Settings: {strategy_settings}", "INFO")
+
+        # Recreate threshold logic with debugging
+        confidence_req = strategy_settings.get("confidence_req", 75)
+        self.log(f"Confidence Requirement: {confidence_req}%", "INFO")
+
+        profit_multiplier = strategy_settings.get("profit", 1.0)
+        self.log(f"Profit Multiplier: {profit_multiplier}", "INFO")
+
+        if profit_multiplier >= 1.8:  # Swing Trading
+            buy_threshold = 0.8
+            sell_threshold = -0.8
+            strategy_type = "Swing Trading"
+        elif profit_multiplier >= 1.4:  # Aggressive
+            buy_threshold = 0.9
+            sell_threshold = -0.9
+            strategy_type = "Aggressive"
+        else:  # Conservative/Balanced
+            buy_threshold = 1.0
+            sell_threshold = -1.0
+            strategy_type = "Conservative/Balanced"
+
+        self.log(f"Detected Strategy Type: {strategy_type}", "INFO")
+        self.log(f"BUY Threshold: {buy_threshold}", "INFO")
+        self.log(f"SELL Threshold: {sell_threshold}", "INFO")
+
+        # Decision logic with detailed logging
+        if final_score >= buy_threshold:
+            expected_action = "BUY"
+            self.log(f"✅ SHOULD BE BUY: {final_score:.2f} >= {buy_threshold}", "SUCCESS")
+        elif final_score <= sell_threshold:
+            expected_action = "SELL/AVOID"
+            self.log(f"❌ SHOULD BE SELL: {final_score:.2f} <= {sell_threshold}", "INFO")
+        else:
+            expected_action = "WAIT"
+            self.log(f"⏳ SHOULD BE WAIT: {sell_threshold} < {final_score:.2f} < {buy_threshold}", "INFO")
+
+        self.log(f"Expected Action: {expected_action}", "SUCCESS")
+
+        return {
+            'expected_action': expected_action,
+            'buy_threshold': buy_threshold,
+            'sell_threshold': sell_threshold,
+            'final_score': final_score,
+            'strategy_type': strategy_type
+        }
+
+    def fix_recommendation_logic(self, indicators, symbol):
+        """🔧 Fixed version of recommendation logic"""
+
+        self.log(f"=== FIXED RECOMMENDATION LOGIC for {symbol} ===", "INFO")
+
+        current_price = indicators['current_price']
+        strategy_settings = getattr(self, 'strategy_settings', {"profit": 1.0, "risk": 1.0, "confidence_req": 75})
+
+        # Signal analysis (keep your existing logic)
+        trend_score, trend_signals = self.analyze_trend(indicators, current_price)
+        momentum_score, momentum_signals = self.analyze_momentum(indicators)
+        volume_score, volume_signals = self.analyze_volume(indicators)
+        sr_score, sr_signals = self.analyze_support_resistance(indicators)
+        model_score, model_signals = self.analyze_ml_model(symbol, indicators, current_price)
+
+        # Calculate final score
+        signal_weights = {
+            'trend': 0.25,
+            'momentum': 0.20,
+            'volume': 0.15,
+            'support_resistance': 0.15,
+            'model': 0.25
+        }
+
+        final_score = (
+                trend_score * signal_weights['trend'] +
+                momentum_score * signal_weights['momentum'] +
+                volume_score * signal_weights['volume'] +
+                sr_score * signal_weights['support_resistance'] +
+                model_score * signal_weights['model']
+        )
+
+        self.log(f"Calculated Final Score: {final_score:.2f}", "INFO")
+
+        # FIXED: Proper threshold logic
+        profit_multiplier = strategy_settings.get("profit", 1.0)
+
+        if profit_multiplier >= 1.8:  # Swing Trading
+            buy_threshold = 0.8
+            sell_threshold = -0.8
+        elif profit_multiplier >= 1.4:  # Aggressive
+            buy_threshold = 0.9
+            sell_threshold = -0.9
+        else:  # Conservative/Balanced
+            buy_threshold = 1.0
+            sell_threshold = -1.0
+
+        self.log(f"Using thresholds: BUY≥{buy_threshold}, SELL≤{sell_threshold}", "INFO")
+
+        # FIXED: Decision logic
+        if final_score >= buy_threshold:
+            action = "BUY"
+            self.log(f"✅ BUY DECISION: {final_score:.2f} >= {buy_threshold}", "SUCCESS")
+
+            # Calculate enhanced profit target
+            base_confidence = 70 + min(25, final_score * 8)
+            target_profit = self.calculate_dynamic_profit_target(
+                indicators, base_confidence, self.investment_days, symbol, strategy_settings
+            )
+
+            buy_price = current_price
+            sell_price = current_price * (1 + target_profit)
+            stop_loss_pct = min(0.08, 0.04 + (self.investment_days * 0.001))
+            stop_loss = current_price * (1 - stop_loss_pct)
+
+            gross_profit_pct = target_profit * 100
+            net_profit_pct = self.apply_israeli_fees_and_tax(gross_profit_pct)
+
+        elif final_score <= sell_threshold:
+            action = "SELL/AVOID"
+            self.log(f"❌ SELL DECISION: {final_score:.2f} <= {sell_threshold}", "INFO")
+
+            buy_price = None
+            sell_price = current_price
+            stop_loss = current_price * 1.06
+            gross_profit_pct = 0
+            net_profit_pct = 0
+            base_confidence = 70 + min(25, abs(final_score) * 8)
+
+        else:
+            action = "WAIT"
+            self.log(f"⏳ WAIT DECISION: {sell_threshold} < {final_score:.2f} < {buy_threshold}", "INFO")
+
+            buy_price = None
+            sell_price = current_price
+            stop_loss = current_price * 0.94
+            gross_profit_pct = 0
+            net_profit_pct = 0
+            base_confidence = 50 + abs(final_score) * 5
+
+        # Calculate final confidence
+        confirming_indicators = sum([
+            1 if abs(trend_score) > 1 else 0,
+            1 if abs(momentum_score) > 1 else 0,
+            1 if abs(volume_score) > 0 else 0,
+            1 if abs(sr_score) > 0 else 0,
+            1 if abs(model_score) > 1 else 0
+        ])
+        confidence_bonus = min(10, confirming_indicators * 2)
+        final_confidence = min(95, base_confidence + confidence_bonus)
+
+        all_signals = trend_signals + momentum_signals + volume_signals + sr_signals + model_signals
+
+        return {
+            'action': action,
+            'confidence': final_confidence,
+            'buy_price': buy_price,
+            'sell_price': sell_price,
+            'stop_loss': stop_loss,
+            'expected_profit_pct': round(net_profit_pct, 2),
+            'gross_profit_pct': round(gross_profit_pct, 2),
+            'final_score': final_score,
+            'buy_threshold': buy_threshold,
+            'sell_threshold': sell_threshold,
+            'reasons': all_signals,
+            'debug_info': {
+                'trend_score': trend_score,
+                'momentum_score': momentum_score,
+                'volume_score': volume_score,
+                'sr_score': sr_score,
+                'model_score': model_score,
+                'profit_multiplier': profit_multiplier
+            }
+        }
+
+    def validate_signal_logic(self):
+        """🧪 Test function to validate signal logic"""
+
+        test_cases = [
+            {'score': 5.0, 'strategy': 'Swing Trading', 'expected': 'BUY'},
+            {'score': 0.9, 'strategy': 'Swing Trading', 'expected': 'BUY'},
+            {'score': 0.7, 'strategy': 'Swing Trading', 'expected': 'WAIT'},
+            {'score': 1.5, 'strategy': 'Balanced', 'expected': 'BUY'},
+            {'score': 0.5, 'strategy': 'Balanced', 'expected': 'WAIT'},
+            {'score': -1.5, 'strategy': 'Aggressive', 'expected': 'SELL/AVOID'},
+        ]
+
+        for test in test_cases:
+            # Set strategy settings
+            strategy_multipliers = {
+                "Conservative": {"profit": 0.8, "risk": 0.8},
+                "Balanced": {"profit": 1.0, "risk": 1.0},
+                "Aggressive": {"profit": 1.4, "risk": 1.3},
+                "Swing Trading": {"profit": 1.8, "risk": 1.5}
+            }
+
+            strategy_settings = strategy_multipliers[test['strategy']]
+            profit_multiplier = strategy_settings.get("profit", 1.0)
+
+            # Calculate thresholds
+            if profit_multiplier >= 1.8:
+                buy_threshold = 0.8
+                sell_threshold = -0.8
+            elif profit_multiplier >= 1.4:
+                buy_threshold = 0.9
+                sell_threshold = -0.9
+            else:
+                buy_threshold = 1.0
+                sell_threshold = -1.0
+
+            # Determine action
+            if test['score'] >= buy_threshold:
+                actual = 'BUY'
+            elif test['score'] <= sell_threshold:
+                actual = 'SELL/AVOID'
+            else:
+                actual = 'WAIT'
+
+            # Validate
+            status = "✅ PASS" if actual == test['expected'] else "❌ FAIL"
+            print(
+                f"{status} | Score: {test['score']:.1f} | Strategy: {test['strategy']} | Expected: {test['expected']} | Actual: {actual}")
+
+            if actual != test['expected']:
+                print(f"   Thresholds: BUY≥{buy_threshold}, SELL≤{sell_threshold}")
     def load_models(self):
         """Load trained models"""
 
@@ -322,6 +577,289 @@ class EnhancedStockAdvisor:
             error_msg = f"Failed to load model for {symbol}: {str(e)}"
             self.failed_models.append((symbol, str(e)))
             self.log(error_msg, "ERROR")
+
+    def calculate_enhanced_confidence(self, indicators, final_score, strategy_settings, investment_days):
+        """
+        🎯 Enhanced confidence calculation with multiple validation layers
+        Target: 90-95% confidence for strong signals across all strategies
+        """
+        self.log("=== ENHANCED CONFIDENCE CALCULATION ===", "INFO")
+
+        # 1. BASE CONFIDENCE from signal strength
+        base_confidence = self.calculate_base_confidence_from_signals(final_score)
+        self.log(f"Base confidence from signals: {base_confidence:.1f}%", "INFO")
+
+        # 2. TECHNICAL INDICATOR CONFIRMATION
+        technical_boost = self.calculate_technical_confirmation_boost(indicators)
+        self.log(f"Technical confirmation boost: +{technical_boost:.1f}%", "INFO")
+
+        # 3. MULTI-TIMEFRAME ALIGNMENT
+        timeframe_boost = self.calculate_timeframe_alignment_boost(indicators)
+        self.log(f"Timeframe alignment boost: +{timeframe_boost:.1f}%", "INFO")
+
+        # 4. VOLUME AND MOMENTUM CONFIRMATION
+        volume_momentum_boost = self.calculate_volume_momentum_boost(indicators)
+        self.log(f"Volume & momentum boost: +{volume_momentum_boost:.1f}%", "INFO")
+
+        # 5. STRATEGY-SPECIFIC CONFIDENCE ADJUSTMENTS
+        strategy_boost = self.calculate_strategy_confidence_boost(strategy_settings, investment_days)
+        self.log(f"Strategy-specific boost: +{strategy_boost:.1f}%", "INFO")
+
+        # 6. RISK-ADJUSTED CONFIDENCE
+        risk_adjustment = self.calculate_risk_adjusted_confidence(indicators, investment_days)
+        self.log(f"Risk adjustment: {risk_adjustment:+.1f}%", "INFO")
+
+        # CALCULATE FINAL CONFIDENCE
+        final_confidence = (base_confidence +
+                            technical_boost +
+                            timeframe_boost +
+                            volume_momentum_boost +
+                            strategy_boost +
+                            risk_adjustment)
+
+        # Apply bounds based on strategy type
+        min_confidence, max_confidence = self.get_confidence_bounds(strategy_settings)
+        final_confidence = max(min_confidence, min(final_confidence, max_confidence))
+
+        self.log(f"FINAL ENHANCED CONFIDENCE: {final_confidence:.1f}%", "SUCCESS")
+
+        return final_confidence
+
+    def calculate_base_confidence_from_signals(self, final_score):
+        """Calculate base confidence from signal strength"""
+        # Enhanced mapping: stronger signals = higher confidence
+        if abs(final_score) >= 3.0:
+            return 85.0  # Very strong signals
+        elif abs(final_score) >= 2.5:
+            return 80.0  # Strong signals
+        elif abs(final_score) >= 2.0:
+            return 75.0  # Good signals
+        elif abs(final_score) >= 1.5:
+            return 70.0  # Moderate signals
+        elif abs(final_score) >= 1.0:
+            return 65.0  # Weak signals
+        elif abs(final_score) >= 0.8:
+            return 60.0  # Very weak signals
+        else:
+            return 55.0  # Minimal signals
+
+    def calculate_technical_confirmation_boost(self, indicators):
+        """Calculate boost from technical indicator alignment"""
+        boost = 0.0
+
+        # RSI confirmation
+        rsi_14 = indicators.get('rsi_14', 50)
+        if 30 <= rsi_14 <= 45:  # Sweet spot for buying
+            boost += 8.0
+        elif 25 <= rsi_14 <= 35:  # Oversold but not extreme
+            boost += 6.0
+        elif rsi_14 < 25:  # Extremely oversold
+            boost += 4.0  # Less confident in extreme conditions
+
+        # MACD confirmation
+        macd = indicators.get('macd', 0)
+        macd_signal = indicators.get('macd_signal', 0)
+        macd_hist = indicators.get('macd_histogram', 0)
+
+        if macd > macd_signal and macd_hist > 0:
+            if macd_hist > 0.5:  # Strong bullish momentum
+                boost += 10.0
+            else:  # Mild bullish momentum
+                boost += 6.0
+
+        # Bollinger Bands position
+        bb_position = indicators.get('bb_position', 0.5)
+        if 0.15 <= bb_position <= 0.35:  # Near lower band but not extreme
+            boost += 6.0
+        elif bb_position < 0.15:  # Very near lower band
+            boost += 4.0
+
+        # Stochastic confirmation
+        stoch_k = indicators.get('stoch_k', 50)
+        stoch_d = indicators.get('stoch_d', 50)
+        if stoch_k < 30 and stoch_k > stoch_d:  # Oversold with upward momentum
+            boost += 5.0
+
+        return min(boost, 20.0)  # Cap at 20%
+
+    def calculate_timeframe_alignment_boost(self, indicators):
+        """Calculate boost from multiple timeframe alignment"""
+        boost = 0.0
+        current_price = indicators['current_price']
+
+        # Moving average alignment (bullish setup)
+        sma_5 = indicators.get('sma_5', current_price)
+        sma_10 = indicators.get('sma_10', current_price)
+        sma_20 = indicators.get('sma_20', current_price)
+        sma_50 = indicators.get('sma_50', current_price)
+
+        # Perfect bullish alignment
+        if current_price > sma_5 > sma_10 > sma_20 > sma_50:
+            boost += 12.0
+        # Good bullish alignment
+        elif current_price > sma_5 > sma_10 > sma_20:
+            boost += 8.0
+        # Moderate bullish alignment
+        elif current_price > sma_10 > sma_20:
+            boost += 5.0
+        # Basic bullish
+        elif current_price > sma_20:
+            boost += 3.0
+
+        # EMA alignment
+        ema_12 = indicators.get('ema_12', current_price)
+        ema_26 = indicators.get('ema_26', current_price)
+        if ema_12 > ema_26:
+            boost += 3.0
+
+        return min(boost, 15.0)  # Cap at 15%
+
+    def calculate_volume_momentum_boost(self, indicators):
+        """Calculate boost from volume and momentum confirmation"""
+        boost = 0.0
+
+        # Volume confirmation
+        volume_relative = indicators.get('volume_relative', 1.0)
+        if volume_relative >= 2.0:
+            boost += 8.0  # High volume spike
+        elif volume_relative >= 1.5:
+            boost += 5.0  # Above average volume
+        elif volume_relative >= 1.2:
+            boost += 3.0  # Good volume
+
+        # Price momentum
+        momentum_5 = indicators.get('momentum_5', 0)
+        if momentum_5 > 5:
+            boost += 6.0  # Strong positive momentum
+        elif momentum_5 > 2:
+            boost += 4.0  # Good momentum
+        elif momentum_5 > 0:
+            boost += 2.0  # Positive momentum
+
+        # Volatility consideration (moderate volatility is better)
+        volatility = indicators.get('volatility', 2.0)
+        if 1.5 <= volatility <= 3.5:  # Sweet spot
+            boost += 3.0
+        elif volatility > 5.0:  # Too volatile
+            boost -= 2.0
+
+        return boost
+
+    def calculate_strategy_confidence_boost(self, strategy_settings, investment_days):
+        """Calculate strategy-specific confidence adjustments"""
+        boost = 0.0
+        strategy_type = getattr(self, 'current_strategy', 'Balanced')
+
+        # Strategy-based confidence adjustments
+        if strategy_type == "Conservative":
+            # Conservative strategy gets bonus for longer timeframes
+            if investment_days >= 30:
+                boost += 8.0
+            elif investment_days >= 14:
+                boost += 5.0
+            # Conservative strategy penalty for short timeframes
+            elif investment_days <= 3:
+                boost -= 5.0
+
+        elif strategy_type == "Aggressive":
+            # Aggressive strategy gets bonus for medium timeframes
+            if 7 <= investment_days <= 21:
+                boost += 6.0
+            # Penalty for very long timeframes (market can change)
+            elif investment_days > 60:
+                boost -= 3.0
+
+        elif strategy_type == "Swing Trading":
+            # Swing trading gets bonus for optimal timeframes
+            if 14 <= investment_days <= 45:
+                boost += 8.0
+            elif 7 <= investment_days <= 60:
+                boost += 5.0
+            # Penalty for very short timeframes
+            elif investment_days <= 3:
+                boost -= 8.0
+
+        # Balanced strategy (no specific adjustments - it's the baseline)
+
+        return boost
+
+    def calculate_risk_adjusted_confidence(self, indicators, investment_days):
+        """Calculate risk-based confidence adjustments"""
+        adjustment = 0.0
+
+        # Support/resistance strength
+        current_price = indicators['current_price']
+        support_20 = indicators.get('support_20', current_price * 0.95)
+        resistance_20 = indicators.get('resistance_20', current_price * 1.05)
+
+        # Distance from support (good for buying)
+        support_distance = (current_price - support_20) / support_20 * 100
+        if 2 <= support_distance <= 8:  # Sweet spot above support
+            adjustment += 5.0
+        elif support_distance < 1:  # Very close to support
+            adjustment += 3.0
+
+        # Market regime stability
+        bb_width = indicators.get('bb_upper', current_price * 1.02) - indicators.get('bb_lower', current_price * 0.98)
+        bb_width_pct = bb_width / current_price * 100
+
+        if 3 <= bb_width_pct <= 8:  # Moderate volatility
+            adjustment += 3.0
+        elif bb_width_pct > 12:  # High volatility - reduce confidence
+            adjustment -= 5.0
+
+        # Time horizon risk
+        if investment_days <= 1:
+            adjustment -= 10.0  # Very risky
+        elif investment_days <= 3:
+            adjustment -= 5.0  # Risky
+        elif 7 <= investment_days <= 30:
+            adjustment += 2.0  # Good timeframe
+        elif investment_days > 90:
+            adjustment -= 3.0  # Too long, market uncertainty
+
+        return adjustment
+
+    def get_confidence_bounds(self, strategy_settings):
+        """Get min/max confidence bounds based on strategy"""
+        strategy_type = getattr(self, 'current_strategy', 'Balanced')
+
+        bounds = {
+            "Conservative": (75, 95),  # High minimum, high maximum
+            "Balanced": (65, 93),  # Moderate bounds
+            "Aggressive": (60, 90),  # Lower minimum, good maximum
+            "Swing Trading": (70, 95)  # Good minimum, high maximum
+        }
+
+        return bounds.get(strategy_type, (65, 90))
+
+    def validate_confidence_calculation(self, indicators, final_score, confidence, strategy_settings):
+        """Validate that confidence calculation makes sense"""
+        issues = []
+
+        # Check if confidence matches signal strength
+        if abs(final_score) >= 2.0 and confidence < 75:
+            issues.append(f"Strong signal (score: {final_score:.2f}) but low confidence ({confidence:.1f}%)")
+
+        if abs(final_score) < 1.0 and confidence > 85:
+            issues.append(f"Weak signal (score: {final_score:.2f}) but high confidence ({confidence:.1f}%)")
+
+        # Check technical indicators alignment
+        rsi_14 = indicators.get('rsi_14', 50)
+        macd_hist = indicators.get('macd_histogram', 0)
+
+        if rsi_14 < 30 and macd_hist > 0 and confidence < 80:
+            issues.append("Strong technical setup (oversold RSI + bullish MACD) but confidence too low")
+
+        # Log validation results
+        if issues:
+            self.log("⚠️ CONFIDENCE VALIDATION ISSUES:", "WARNING")
+            for issue in issues:
+                self.log(f"   • {issue}", "WARNING")
+        else:
+            self.log("✅ Confidence validation passed", "SUCCESS")
+
+        return len(issues) == 0
 
     def get_stock_data(self, symbol, target_date, days_back=60):
         """Get comprehensive stock data for analysis"""
@@ -685,11 +1223,8 @@ class EnhancedStockAdvisor:
 
         # Enhanced recommendation generation with debug mode
         try:
-            recommendation = self.generate_95_percent_recommendation(indicators, symbol)
-            if recommendation.get('enhancement_active', False):
-                self.log("Using 95% confidence recommendation", "SUCCESS")
-            else:
-                raise Exception("95% system not active")
+            recommendation = self.generate_enhanced_recommendation(indicators=indicators, symbol=symbol)
+            self.log("Using enhanced recommendation (forced for testing)", "SUCCESS")
         except Exception as e:
             self.log(f"95% system failed: {e}, using original", "WARNING")
             recommendation = self.generate_enhanced_recommendation(indicators=indicators, symbol=symbol)
@@ -752,7 +1287,8 @@ class EnhancedStockAdvisor:
         return round(final_confidence, 1)
 
     def analyze_trend(self, indicators, current_price):
-        self.log(f"Starting analyze_trend: indicators={indicators}, current_price={current_price}", "INFO")
+        """Enhanced trend analysis with more sensitive scoring"""
+        self.log(f"Starting analyze_trend with enhanced sensitivity", "INFO")
 
         score = 0
         signals = []
@@ -761,45 +1297,42 @@ class EnhancedStockAdvisor:
         sma_10 = indicators.get('sma_10', current_price)
         sma_20 = indicators.get('sma_20', current_price)
         sma_50 = indicators.get('sma_50', current_price)
-        self.log(f"SMA: 5={sma_5:.2f}, 10={sma_10:.2f}, 20={sma_20:.2f}, 50={sma_50:.2f}", "INFO")
 
+        # 🔧 ENHANCED: More granular trend scoring
         if current_price > sma_5 > sma_10 > sma_20:
             score += 3
             signals.append("📈 Strong SMA uptrend")
-            self.log(f"Strong SMA uptrend: ✅ Uptrend alignment: +3", "SUCCESS")
-
+        elif current_price > sma_5 > sma_10:  # NEW: Additional case
+            score += 2.5
+            signals.append("📈 Good SMA uptrend")
+        elif current_price > sma_10 > sma_20:  # NEW: Additional case
+            score += 2
+            signals.append("📈 Moderate SMA uptrend")
+        elif current_price > sma_20:
+            score += 1.5  # INCREASED from 2 to 1.5 for balance
+            signals.append("📈 Price above SMA20")
+        elif current_price > sma_50:  # NEW: Additional positive case
+            score += 1
+            signals.append("📈 Price above SMA50")
         elif current_price < sma_5 < sma_10 < sma_20:
             score -= 3
             signals.append("📉 Strong SMA downtrend")
-            self.log(f"Strong SMA downtrend: ❌ Downtrend alignment: -3", "ERROR")
-
-        elif current_price > sma_20:
-            score += 2
-            signals.append("📈 Price above SMA20")
-            self.log(f"Price above SMA20: ✅ Price > SMA20: +2", "SUCCESS")
-
         else:
-            score -= 2
-            signals.append("📉 Price below SMA20")
-            self.log(f"Price below SMA20: ❌ Price < SMA20: -2", "ERROR")
+            score -= 1  # REDUCED from -2 to -1
+            signals.append("📉 Price below key SMAs")
 
-
+        # EMA analysis (keep existing)
         ema_12 = indicators.get('ema_12', current_price)
         ema_26 = indicators.get('ema_26', current_price)
-        self.log(f"EMA: 12={ema_12:.2f}, 26={ema_26:.2f}", "INFO")
 
         if ema_12 > ema_26:
             score += 1
             signals.append("🔄 Bullish EMA crossover")
-            self.log(f"Bullish EMA crossover: ✅ EMA12 > EMA26: +1", "SUCCESS")
-
         else:
             score -= 1
             signals.append("🔄 Bearish EMA crossover")
-            self.log(f"Bearish EMA crossover: ❌ EMA12 < EMA26: -1", "ERROR")
 
-        self.log(f"Trend Score: {score}", "INFO")
-
+        self.log(f"Enhanced Trend Score: {score}", "INFO")
         return score, signals
 
     def analyze_momentum(self, indicators):
@@ -956,21 +1489,25 @@ class EnhancedStockAdvisor:
         self.log(f"ML Score: {score:.2f}", "INFO")
         return score, signals
 
-    def calculate_dynamic_profit_target(self, indicators, confidence, investment_days, symbol):
+    def calculate_dynamic_profit_target(self, indicators, confidence, investment_days, symbol, strategy_settings=None):
         """
         🎯 Calculate dynamic profit targets based on multiple factors
-        Higher confidence + longer time = higher profit targets
+        Higher confidence + longer time + aggressive strategy = higher profit targets
         """
         self.log(f"Calculating dynamic profit target for {symbol}", "INFO")
 
-        # Base profit targets by confidence level
+        # Use strategy settings if available
+        if strategy_settings is None:
+            strategy_settings = getattr(self, 'strategy_settings', {"profit": 1.0, "risk": 1.0, "confidence_req": 75})
+
+        # ENHANCED BASE TARGETS by confidence level
         confidence_multipliers = {
-            95: 0.12,  # 12% for ultra-high confidence
-            90: 0.10,  # 10% for very high confidence
-            85: 0.08,  # 8% for high confidence
-            80: 0.06,  # 6% for good confidence
-            75: 0.05,  # 5% for moderate confidence
-            70: 0.04,  # 4% for fair confidence
+            95: 0.15,  # 15% for ultra-high confidence
+            90: 0.12,  # 12% for very high confidence
+            85: 0.10,  # 10% for high confidence
+            80: 0.08,  # 8% for good confidence
+            75: 0.06,  # 6% for moderate confidence
+            70: 0.05,  # 5% for fair confidence
             60: 0.037  # 3.7% default for low confidence
         }
 
@@ -981,16 +1518,18 @@ class EnhancedStockAdvisor:
                 base_target = confidence_multipliers[conf_threshold]
                 break
 
-        # Time-based multipliers (longer time = higher targets)
+        # ENHANCED TIME-BASED MULTIPLIERS (much more aggressive for longer periods)
         time_multipliers = {
-            1: 0.8,  # 1 day: reduce target (harder to achieve big gains quickly)
+            1: 0.8,  # 1 day: reduce target
             3: 0.9,  # 3 days: slight reduction
             7: 1.0,  # 7 days: base target
-            14: 1.15,  # 14 days: 15% increase
-            21: 1.3,  # 21 days: 30% increase
-            30: 1.5,  # 30 days: 50% increase
-            60: 1.8,  # 60 days: 80% increase
-            90: 2.2  # 90 days: 120% increase
+            14: 1.4,  # 14 days: 40% increase
+            21: 1.8,  # 21 days: 80% increase
+            30: 2.5,  # 30 days: 150% increase
+            45: 3.2,  # 45 days: 220% increase
+            60: 4.0,  # 60 days: 300% increase
+            90: 5.5,  # 90 days: 450% increase
+            120: 7.0  # 120 days: 600% increase
         }
 
         time_multiplier = 1.0
@@ -999,50 +1538,96 @@ class EnhancedStockAdvisor:
                 time_multiplier = time_multipliers[days]
                 break
 
-        # Volatility-based adjustments
+        # STRATEGY TYPE MULTIPLIERS (FIXED - now actually applied)
+        strategy_multiplier = strategy_settings.get("profit", 1.0)
+
+        # Enhanced volatility adjustments
         volatility = indicators.get('volatility', 2.0)
-        if volatility > 4.0:  # High volatility = higher potential profits
+        if volatility > 5.0:  # Very high volatility
+            volatility_multiplier = 1.4
+        elif volatility > 4.0:  # High volatility
+            volatility_multiplier = 1.3
+        elif volatility > 3.0:  # Medium-high volatility
             volatility_multiplier = 1.2
-        elif volatility > 3.0:
+        elif volatility > 2.0:  # Medium volatility
             volatility_multiplier = 1.1
-        elif volatility < 1.0:  # Low volatility = lower targets
-            volatility_multiplier = 0.9
+        elif volatility < 1.0:  # Low volatility
+            volatility_multiplier = 0.85
         else:
             volatility_multiplier = 1.0
 
-        # Momentum-based adjustments
+        # Enhanced momentum adjustments
         momentum_5 = indicators.get('momentum_5', 0)
-        if momentum_5 > 5:  # Strong positive momentum
-            momentum_multiplier = 1.15
-        elif momentum_5 > 2:
-            momentum_multiplier = 1.05
-        elif momentum_5 < -5:  # Strong negative momentum
+        if momentum_5 > 8:  # Very strong momentum
+            momentum_multiplier = 1.25
+        elif momentum_5 > 5:  # Strong momentum
+            momentum_multiplier = 1.20
+        elif momentum_5 > 2:  # Good momentum
+            momentum_multiplier = 1.10
+        elif momentum_5 < -8:  # Very negative momentum
+            momentum_multiplier = 0.75
+        elif momentum_5 < -5:  # Negative momentum
             momentum_multiplier = 0.85
         else:
             momentum_multiplier = 1.0
 
-        # Volume confirmation bonus
+        # Volume confirmation bonus (enhanced)
         volume_relative = indicators.get('volume_relative', 1.0)
-        if volume_relative > 2.0:  # High volume confirmation
-            volume_bonus = 1.1
-        elif volume_relative > 1.5:
-            volume_bonus = 1.05
+        if volume_relative > 3.0:  # Massive volume
+            volume_bonus = 1.25
+        elif volume_relative > 2.5:  # Very high volume
+            volume_bonus = 1.20
+        elif volume_relative > 2.0:  # High volume
+            volume_bonus = 1.15
+        elif volume_relative > 1.5:  # Good volume
+            volume_bonus = 1.10
         else:
             volume_bonus = 1.0
 
-        # Calculate final target
-        final_target = base_target * time_multiplier * volatility_multiplier * momentum_multiplier * volume_bonus
+        # Market regime bonus
+        regime_bonus = 1.0
+        rsi_14 = indicators.get('rsi_14', 50)
+        macd_hist = indicators.get('macd_histogram', 0)
 
-        # Apply reasonable bounds
-        final_target = max(0.02, min(final_target, 0.25))  # Between 2% and 25%
+        # Strong bullish regime
+        if rsi_14 < 40 and macd_hist > 0:
+            regime_bonus = 1.15
+        elif rsi_14 < 50 and macd_hist > 0:
+            regime_bonus = 1.10
 
-        self.log(f"Dynamic target calculation for {symbol}:", "INFO")
+        # CALCULATE FINAL TARGET (with all multipliers applied)
+        final_target = (base_target *
+                        time_multiplier *
+                        strategy_multiplier *  # Now properly applied
+                        volatility_multiplier *
+                        momentum_multiplier *
+                        volume_bonus *
+                        regime_bonus)
+
+        # Enhanced bounds based on time horizon and strategy
+        if strategy_settings.get("profit", 1.0) >= 1.8:  # Swing trading
+            max_target = 0.60 if investment_days >= 90 else 0.45  # Up to 60% for swing trading
+            min_target = 0.03
+        elif strategy_settings.get("profit", 1.0) >= 1.4:  # Aggressive strategy
+            max_target = 0.50 if investment_days >= 60 else 0.35  # Up to 50% for aggressive
+            min_target = 0.025
+        else:  # Conservative/Balanced
+            max_target = 0.30 if investment_days >= 60 else 0.20
+            min_target = 0.02
+
+        final_target = max(min_target, min(final_target, max_target))
+
+        # Log detailed breakdown
+        self.log(f"Enhanced profit calculation for {symbol}:", "INFO")
         self.log(f"  Base target: {base_target:.1%} (confidence: {confidence}%)", "INFO")
         self.log(f"  Time multiplier: {time_multiplier:.2f} ({investment_days} days)", "INFO")
+        self.log(f"  Strategy multiplier: {strategy_multiplier:.2f} ({getattr(self, 'current_strategy', 'Unknown')})",
+                 "INFO")
         self.log(f"  Volatility multiplier: {volatility_multiplier:.2f}", "INFO")
         self.log(f"  Momentum multiplier: {momentum_multiplier:.2f}", "INFO")
         self.log(f"  Volume bonus: {volume_bonus:.2f}", "INFO")
-        self.log(f"  Final target: {final_target:.1%}", "SUCCESS")
+        self.log(f"  Regime bonus: {regime_bonus:.2f}", "INFO")
+        self.log(f"  FINAL TARGET: {final_target:.1%}", "SUCCESS")
 
         return final_target
 
@@ -1198,19 +1783,19 @@ class EnhancedStockAdvisor:
         return breakdown
 
     def generate_enhanced_recommendation(self, indicators, symbol):
-
         """Generate high-confidence recommendations using multi-factor analysis"""
-        self.log(f"Starting generate_enhanced_recommendation: "
-                 f"indicators={indicators}, "
-                 f"symbol={symbol}",
-                 "INFO")
+        self.log(f"Starting generate_enhanced_recommendation: symbol={symbol}", "INFO")
 
         self.active_symbol = symbol
-
         current_price = indicators['current_price']
+
+        # Get strategy settings
+        strategy_settings = getattr(self, 'strategy_settings', {"profit": 1.0, "risk": 1.0, "confidence_req": 75})
+
         self.log(f"\n=== ENHANCED RECOMMENDATION DEBUG for {symbol} ===", "INFO")
         self.log(f"Current Price: ${current_price:.2f}", "INFO")
         self.log(f"Investment Days: {self.investment_days}", "INFO")
+        self.log(f"Strategy Settings: {strategy_settings}", "INFO")
 
         # Signal weights
         signal_weights = {
@@ -1222,37 +1807,19 @@ class EnhancedStockAdvisor:
         }
         self.log(f"Signal Weights: {signal_weights}", "INFO")
 
-        # 1. Trend Analysis
+        # Run all signal analysis
         trend_score, trend_signals = self.analyze_trend(indicators, current_price)
-
-        # 2. Momentum Analysis
         momentum_score, momentum_signals = self.analyze_momentum(indicators)
-
-        # 3. Volume Analysis
         volume_score, volume_signals = self.analyze_volume(indicators)
-
-        # 4. Support/Resistance Analysis
         sr_score, sr_signals = self.analyze_support_resistance(indicators)
-
-        # 5. Model Analysis
         model_score, model_signals = self.analyze_ml_model(symbol, indicators, current_price)
 
-        # Conflict resolution
-        technical_score = (trend_score + momentum_score + volume_score + sr_score) / 4
-        if abs(technical_score) >= 1.5 and model_score * technical_score < 0:
-            signal_weights = {
-                'trend': 0.30,
-                'momentum': 0.25,
-                'volume': 0.20,
-                'support_resistance': 0.15,
-                'model': 0.10
-            }
-            model_signals.append("⚖️ Technical analysis overrides conflicting ML prediction")
-            self.log("🔄 Conflict detected: ML weight reduced", "INFO")
+        # Log individual scores
+        self.log(
+            f"Individual Scores - Trend: {trend_score:.2f}, Momentum: {momentum_score:.2f}, Volume: {volume_score:.2f}, S/R: {sr_score:.2f}, Model: {model_score:.2f}",
+            "INFO")
 
-        self.log(f"Final Weights: {signal_weights}", "INFO")
-
-        # Final score calculation
+        # Calculate final score
         final_score = (
                 trend_score * signal_weights['trend'] +
                 momentum_score * signal_weights['momentum'] +
@@ -1261,70 +1828,102 @@ class EnhancedStockAdvisor:
                 model_score * signal_weights['model']
         )
 
-        self.log(f"\n=== FINAL SCORE CALCULATION ===", "INFO")
-        self.log(f"FINAL SCORE: {final_score:.3f}", "INFO")
+        self.log(f"Calculated Final Score: {final_score:.2f}", "INFO")
 
         # Combine all signals
         all_signals = trend_signals + momentum_signals + volume_signals + sr_signals + model_signals
 
-        stop_loss_presntage = 0.06
+        # CALCULATE THRESHOLDS
+        confidence_req = strategy_settings.get("confidence_req", 75)
+        profit_multiplier = strategy_settings.get("profit", 1.0)
 
-        # Action decision logic
-        # FIXED: Action decision logic with proper variable handling
-        if final_score >= 1.2:
+        self.log(f"Profit Multiplier: {profit_multiplier}", "INFO")
+
+        # Strategy-based threshold adjustments
+        if profit_multiplier >= 1.8:  # Swing Trading
+            buy_threshold = 0.8
+            sell_threshold = -0.8
+            strategy_name = "Swing Trading"
+        elif profit_multiplier >= 1.4:  # Aggressive
+            buy_threshold = 0.9
+            sell_threshold = -0.9
+            strategy_name = "Aggressive"
+        else:  # Conservative/Balanced
+            buy_threshold = 1.0
+            sell_threshold = -1.0
+            strategy_name = "Conservative/Balanced"
+
+        self.log(f"Strategy Detected: {strategy_name}", "INFO")
+        self.log(f"Using thresholds: BUY≥{buy_threshold}, SELL≤{sell_threshold}", "INFO")
+
+        # CRITICAL DEBUG: Check decision logic step by step
+        self.log("=== DECISION LOGIC DEBUG ===", "INFO")
+        self.log(f"Final Score: {final_score:.2f}", "INFO")
+        self.log(f"Buy Threshold: {buy_threshold}", "INFO")
+        self.log(f"Sell Threshold: {sell_threshold}", "INFO")
+        self.log(f"Score >= Buy Threshold: {final_score >= buy_threshold} ({final_score:.2f} >= {buy_threshold})",
+                 "INFO")
+        self.log(f"Score <= Sell Threshold: {final_score <= sell_threshold} ({final_score:.2f} <= {sell_threshold})",
+                 "INFO")
+
+        # ACTION DECISION LOGIC with detailed logging
+        if final_score >= buy_threshold:
             action = "BUY"
+            self.log(f"✅ BUY DECISION: {final_score:.2f} >= {buy_threshold} threshold", "SUCCESS")
+
             base_confidence = 70 + min(25, final_score * 8)
             buy_price = current_price
 
-            # Calculate target multiplier based on investment period
-            if self.investment_days <= 7:
-                target_multiplier = 1.025 + (final_score * 0.01)
-            elif self.investment_days <= 21:
-                target_multiplier = 1.04 + (final_score * 0.015)
+            # Use enhanced profit calculation with strategy integration
+            target_profit = self.calculate_dynamic_profit_target(
+                indicators, base_confidence, self.investment_days, symbol, strategy_settings
+            )
+
+            sell_price = current_price * (1 + target_profit)
+
+            # Enhanced stop loss based on strategy
+            if strategy_settings.get("risk", 1.0) >= 1.3:  # Aggressive/Swing
+                stop_loss_pct = min(0.08, 0.04 + (self.investment_days * 0.001))
             else:
-                target_multiplier = 1.06 + (final_score * 0.02)
+                stop_loss_pct = min(0.06, 0.03 + (self.investment_days * 0.0005))
 
-            sell_price = current_price * target_multiplier
-            stop_loss_percentage = 0.06  # FIXED: Define the variable
-            stop_loss = current_price * (1 - stop_loss_percentage)
+            stop_loss = current_price * (1 - stop_loss_pct)
 
-            # FIXED: Calculate gross profit percentage correctly
-            gross_profit_pct = (target_multiplier - 1) * 100
-
-            # FIXED: Apply fees and taxes to percentage
+            # Calculate profit percentages
+            gross_profit_pct = target_profit * 100
             net_profit_pct = self.apply_israeli_fees_and_tax(gross_profit_pct)
 
-            self.log(f"BUY Decision → Sell @ ${sell_price:.2f}, Stop @ ${stop_loss:.2f}", "SUCCESS")
-            self.log(f"Gross profit: {gross_profit_pct:.2f}%, Net profit: {net_profit_pct:.2f}%", "INFO")
-
-        elif final_score <= -1.2:
+        elif final_score <= sell_threshold:
             action = "SELL/AVOID"
+            self.log(f"❌ SELL DECISION: {final_score:.2f} <= {sell_threshold} threshold", "INFO")
+
             base_confidence = 70 + min(25, abs(final_score) * 8)
             buy_price = None
             sell_price = current_price
-            target_multiplier = 0.95 - (abs(final_score) * 0.01)
-            stop_loss_percentage = 0.06  # FIXED: Define the variable
-            stop_loss = current_price * (1 + stop_loss_percentage)
-
-            # For sell recommendations, profit represents potential loss avoided
-            gross_profit_pct = (1 - target_multiplier) * 100
-            net_profit_pct = gross_profit_pct  # No fees/taxes on avoided losses
-
-            self.log(f"SELL Decision: Target Multiplier={target_multiplier:.2f}, "
-                     f"Potential loss avoided: {gross_profit_pct:.1f}%", "INFO")
-        else:
-            action = "WAIT"
-            base_confidence = 50 + abs(final_score) * 5
-            stop_loss_percentage = 0.06  # FIXED: Define the variable
-            stop_loss = current_price * (1 - stop_loss_percentage + 0.01)
+            target_profit = 0
+            stop_loss_pct = 0.06
+            stop_loss = current_price * (1 + stop_loss_pct)
             gross_profit_pct = 0
             net_profit_pct = 0
-            buy_price = None
-            sell_price = None
-            all_signals.append("🤔 Mixed signals - waiting for stronger confirmation")
-            self.log(f"WAIT Decision: Final Score too weak", "INFO")
 
-            # ⚙️ Confidence Booster
+        else:
+            action = "WAIT"
+            self.log(f"⏳ WAIT DECISION: {sell_threshold} < {final_score:.2f} < {buy_threshold}", "INFO")
+
+            base_confidence = 50 + abs(final_score) * 5
+            buy_price = None
+            sell_price = current_price  # FIXED: For WAIT, sell_price should be current_price, not None
+            target_profit = 0
+            stop_loss_pct = 0.06
+            stop_loss = current_price * (1 - stop_loss_pct)
+            gross_profit_pct = 0
+            net_profit_pct = 0
+            all_signals.append(f"🤔 Score {final_score:.2f} between thresholds ({sell_threshold} to {buy_threshold})")
+
+        # Log the final action
+        self.log(f"FINAL ACTION: {action}", "SUCCESS")
+
+        # Confidence calculation
         confirming_indicators = sum([
             1 if abs(trend_score) > 1 else 0,
             1 if abs(momentum_score) > 1 else 0,
@@ -1334,18 +1933,16 @@ class EnhancedStockAdvisor:
         ])
         confidence_bonus = min(10, confirming_indicators * 2)
         final_confidence = min(95, base_confidence + confidence_bonus)
-        self.log(f"💡 Confidence Boost: +{confidence_bonus} → {final_confidence}%", "INFO")
 
-        # 📈 Trading Plan
-        trading_plan = self.build_trading_plan(current_price, target_gain=0.037, max_loss=0.06,
-                                               days=self.investment_days)
-        self.log(f"📊 Trading Plan: {trading_plan}", "INFO")
+        # Enhanced trading plan
+        trading_plan = self.build_enhanced_trading_plan(current_price, target_profit, stop_loss_pct,
+                                                        self.investment_days)
 
-        # 🔍 Signal Breakdown
+        # Signal breakdown
         signal_strengths = self.extract_signal_strengths(trend_score, momentum_score, volume_score, sr_score,
                                                          model_score)
 
-        # 🛡️ Risk Profile
+        # Risk profile
         risk_level = (
             "Short-term" if self.investment_days <= 7 else
             "Medium-term" if self.investment_days <= 21 else
@@ -1358,21 +1955,219 @@ class EnhancedStockAdvisor:
             'buy_price': buy_price,
             'sell_price': sell_price,
             'stop_loss': stop_loss,
-            'expected_profit_pct': round(net_profit_pct, 2),  # FIXED: Use net_profit_pct
-            'gross_profit_pct': round(gross_profit_pct, 2),  # FIXED: Add gross profit
+            'expected_profit_pct': round(net_profit_pct, 2),
+            'gross_profit_pct': round(gross_profit_pct, 2),
             'tax_paid': round(self.tax, 2),
             'broker_fee_paid': round(self.broker_fee, 2),
-            'reasons': all_signals,
+            'reasons': all_signals + [
+                f"📈 Strategy: {strategy_name} (×{strategy_settings.get('profit', 1.0):.1f})",
+                f"⏱️ Time scaling: {self.investment_days} days (×{target_profit / 0.037 if target_profit > 0 else 1:.1f})",
+                f"🎯 Score: {final_score:.2f} (BUY≥{buy_threshold}, SELL≤{sell_threshold})"
+            ],
             'risk_level': risk_level,
             'final_score': final_score,
             'current_price': current_price,
             'signal_breakdown': signal_strengths,
             'trading_plan': trading_plan,
+            'strategy_applied': True,
+            'strategy_multiplier': strategy_settings.get("profit", 1.0),
+            'time_multiplier': target_profit / 0.037 if target_profit > 0 else 1.0,
+        }
+
+    def generate_enhanced_recommendation_with_improved_confidence(self, indicators, symbol):
+        """Generate high-confidence recommendations using multi-factor analysis"""
+        self.log(f"Starting generate_enhanced_recommendation: symbol={symbol}", "INFO")
+
+        self.active_symbol = symbol
+        current_price = indicators['current_price']
+
+        # Get strategy settings
+        strategy_settings = getattr(self, 'strategy_settings', {"profit": 1.0, "risk": 1.0, "confidence_req": 75})
+
+        self.log(f"\n=== ENHANCED RECOMMENDATION DEBUG for {symbol} ===", "INFO")
+        self.log(f"Current Price: ${current_price:.2f}", "INFO")
+        self.log(f"Investment Days: {self.investment_days}", "INFO")
+        self.log(f"Strategy Settings: {strategy_settings}", "INFO")
+
+        # Signal weights
+        signal_weights = {
+            'trend': 0.25,
+            'momentum': 0.20,
+            'volume': 0.15,
+            'support_resistance': 0.15,
+            'model': 0.25
+        }
+        self.log(f"Signal Weights: {signal_weights}", "INFO")
+
+        # Run all signal analysis
+        trend_score, trend_signals = self.analyze_trend(indicators, current_price)
+        momentum_score, momentum_signals = self.analyze_momentum(indicators)
+        volume_score, volume_signals = self.analyze_volume(indicators)
+        sr_score, sr_signals = self.analyze_support_resistance(indicators)
+        model_score, model_signals = self.analyze_ml_model(symbol, indicators, current_price)
+
+        # Log individual scores
+        self.log(
+            f"Individual Scores - Trend: {trend_score:.2f}, Momentum: {momentum_score:.2f}, Volume: {volume_score:.2f}, S/R: {sr_score:.2f}, Model: {model_score:.2f}",
+            "INFO")
+
+        # Calculate final score (keep existing logic)
+        final_score = (
+                trend_score * signal_weights['trend'] +
+                momentum_score * signal_weights['momentum'] +
+                volume_score * signal_weights['volume'] +
+                sr_score * signal_weights['support_resistance'] +
+                model_score * signal_weights['model']
+        )
+
+        self.log(f"Calculated Final Score: {final_score:.2f}", "INFO")
+
+        # Combine all signals
+        all_signals = trend_signals + momentum_signals + volume_signals + sr_signals + model_signals
+
+        # CALCULATE THRESHOLDS
+        confidence_req = strategy_settings.get("confidence_req", 75)
+        profit_multiplier = strategy_settings.get("profit", 1.0)
+
+        self.log(f"Profit Multiplier: {profit_multiplier}", "INFO")
+
+        # Strategy-based threshold adjustments
+        if profit_multiplier >= 1.8:  # Swing Trading
+            buy_threshold = 0.8
+            sell_threshold = -0.8
+            strategy_name = "Swing Trading"
+        elif profit_multiplier >= 1.4:  # Aggressive
+            buy_threshold = 0.9
+            sell_threshold = -0.9
+            strategy_name = "Aggressive"
+        else:  # Conservative/Balanced
+            buy_threshold = 1.0
+            sell_threshold = -1.0
+            strategy_name = "Conservative/Balanced"
+
+        self.log(f"Strategy Detected: {strategy_name}", "INFO")
+        self.log(f"Using thresholds: BUY≥{buy_threshold}, SELL≤{sell_threshold}", "INFO")
+
+        # CRITICAL DEBUG: Check decision logic step by step
+        self.log("=== DECISION LOGIC DEBUG ===", "INFO")
+        self.log(f"Final Score: {final_score:.2f}", "INFO")
+        self.log(f"Buy Threshold: {buy_threshold}", "INFO")
+        self.log(f"Sell Threshold: {sell_threshold}", "INFO")
+        self.log(f"Score >= Buy Threshold: {final_score >= buy_threshold} ({final_score:.2f} >= {buy_threshold})",
+                 "INFO")
+        self.log(f"Score <= Sell Threshold: {final_score <= sell_threshold} ({final_score:.2f} <= {sell_threshold})",
+                 "INFO")
+
+        # ACTION DECISION LOGIC with detailed logging
+        if final_score >= buy_threshold:
+            action = "BUY"
+            self.log(f"✅ BUY DECISION: {final_score:.2f} >= {buy_threshold} threshold", "SUCCESS")
+
+            base_confidence = 70 + min(25, final_score * 8)
+            buy_price = current_price
+
+            # Use enhanced profit calculation with strategy integration
+            target_profit = self.calculate_dynamic_profit_target(
+                indicators, base_confidence, self.investment_days, symbol, strategy_settings
+            )
+
+            sell_price = current_price * (1 + target_profit)
+
+            # Enhanced stop loss based on strategy
+            if strategy_settings.get("risk", 1.0) >= 1.3:  # Aggressive/Swing
+                stop_loss_pct = min(0.08, 0.04 + (self.investment_days * 0.001))
+            else:
+                stop_loss_pct = min(0.06, 0.03 + (self.investment_days * 0.0005))
+
+            stop_loss = current_price * (1 - stop_loss_pct)
+
+            # Calculate profit percentages
+            gross_profit_pct = target_profit * 100
+            net_profit_pct = self.apply_israeli_fees_and_tax(gross_profit_pct)
+
+        elif final_score <= sell_threshold:
+            action = "SELL/AVOID"
+            self.log(f"❌ SELL DECISION: {final_score:.2f} <= {sell_threshold} threshold", "INFO")
+
+            base_confidence = 70 + min(25, abs(final_score) * 8)
+            buy_price = None
+            sell_price = current_price
+            target_profit = 0
+            stop_loss_pct = 0.06
+            stop_loss = current_price * (1 + stop_loss_pct)
+            gross_profit_pct = 0
+            net_profit_pct = 0
+
+        else:
+            action = "WAIT"
+            self.log(f"⏳ WAIT DECISION: {sell_threshold} < {final_score:.2f} < {buy_threshold}", "INFO")
+
+            base_confidence = 50 + abs(final_score) * 5
+            buy_price = None
+            sell_price = current_price  # FIXED: For WAIT, sell_price should be current_price, not None
+            target_profit = 0
+            stop_loss_pct = 0.06
+            stop_loss = current_price * (1 - stop_loss_pct)
+            gross_profit_pct = 0
+            net_profit_pct = 0
+            all_signals.append(f"🤔 Score {final_score:.2f} between thresholds ({sell_threshold} to {buy_threshold})")
+
+        # Log the final action
+        self.log(f"FINAL ACTION: {action}", "SUCCESS")
+
+        # Confidence calculation
+        confirming_indicators = sum([
+            1 if abs(trend_score) > 1 else 0,
+            1 if abs(momentum_score) > 1 else 0,
+            1 if abs(volume_score) > 0 else 0,
+            1 if abs(sr_score) > 0 else 0,
+            1 if abs(model_score) > 1 else 0
+        ])
+        confidence_bonus = min(10, confirming_indicators * 2)
+        final_confidence = min(95, base_confidence + confidence_bonus)
+
+        # Enhanced trading plan
+        trading_plan = self.build_enhanced_trading_plan(current_price, target_profit, stop_loss_pct,
+                                                        self.investment_days)
+
+        # Signal breakdown
+        signal_strengths = self.extract_signal_strengths(trend_score, momentum_score, volume_score, sr_score,
+                                                         model_score)
+
+        # Risk profile
+        risk_level = (
+            "Short-term" if self.investment_days <= 7 else
+            "Medium-term" if self.investment_days <= 21 else
+            "Long-term"
+        )
+
+        return {
+            'action': action,
+            'confidence': final_confidence,
+            'buy_price': buy_price,
+            'sell_price': sell_price,
+            'stop_loss': stop_loss,
+            'expected_profit_pct': round(net_profit_pct, 2),
+            'gross_profit_pct': round(gross_profit_pct, 2),
+            'tax_paid': round(self.tax, 2),
+            'broker_fee_paid': round(self.broker_fee, 2),
+            'reasons': all_signals + [
+                f"📈 Strategy: {strategy_name} (×{strategy_settings.get('profit', 1.0):.1f})",
+                f"⏱️ Time scaling: {self.investment_days} days (×{target_profit / 0.037 if target_profit > 0 else 1:.1f})",
+                f"🎯 Score: {final_score:.2f} (BUY≥{buy_threshold}, SELL≤{sell_threshold})"
+            ],
+            'risk_level': risk_level,
+            'final_score': final_score,
+            'current_price': current_price,
+            'signal_breakdown': signal_strengths,
+            'trading_plan': trading_plan,
+            'strategy_applied': True,
+            'strategy_multiplier': strategy_settings.get("profit", 1.0),
+            'time_multiplier': target_profit / 0.037 if target_profit > 0 else 1.0,
         }
 
     def create_enhanced_chart(self, symbol, data):
-        """Create enhanced chart with more technical indicators"""
-
+        """Create enhanced chart with FIXED target price display"""
         self.log(f"Creating enhanced chart for {symbol}", "INFO")
 
         df = self.get_stock_data(symbol, data['analysis_date'], days_back=60)
@@ -1392,7 +2187,6 @@ class EnhancedStockAdvisor:
             name='Price',
             showlegend=False
         ))
-        self.log(f"figure created: {fig}", "SUCCESS")
 
         # Add multiple moving averages
         for period, color in [(5, 'orange'), (20, 'blue'), (50, 'red')]:
@@ -1403,7 +2197,6 @@ class EnhancedStockAdvisor:
                     mode='lines', name=f'MA{period}',
                     line=dict(color=color, width=1)
                 ))
-        self.log(f"Add multiple moving averages to figure", "SUCCESS")
 
         # Bollinger Bands
         if len(df) >= 20:
@@ -1422,30 +2215,24 @@ class EnhancedStockAdvisor:
                     fill='tonexty', fillcolor='rgba(128,128,128,0.1)',
                     showlegend=False
                 ))
-                self.log(f"Add Bollinger Bands to figure", "SUCCESS")
             except:
-                self.log(f"Failed to calculate Bollinger Bands for {symbol}", "ERROR")
                 pass
 
         # Mark analysis point
         analysis_date = data['analysis_date']
         current_price = data['current_price']
         action = data['action']
-        self.log(f"Mark analysis point to figure: {analysis_date}, {current_price}, {action}", "SUCCESS")
 
         # Action marker
         if action == "BUY":
-            marker_color = 'blue'
+            marker_color = 'green'
             marker_symbol = 'triangle-up'
-            self.log(f"Buy signal: {marker_color}, {marker_symbol}", "SUCCESS")
         elif action == "SELL/AVOID":
             marker_color = 'red'
             marker_symbol = 'triangle-down'
-            self.log(f"Sell signal: {marker_color}, {marker_symbol}", "SUCCESS")
         else:
             marker_color = 'orange'
             marker_symbol = 'circle'
-            self.log(f"No signal: {marker_color}, {marker_symbol}", "SUCCESS")
 
         fig.add_trace(go.Scatter(
             x=[analysis_date],
@@ -1460,24 +2247,41 @@ class EnhancedStockAdvisor:
             )
         ))
 
-        # Add target and stop loss lines
-        if data.get('buy_price') and data.get('sell_price'):
+        # 🔧 FIXED: ADD TARGET AND STOP LOSS LINES FOR ALL SCENARIOS
+        # Always show target lines, even for WAIT signals
+
+        if data.get('sell_price') and data['sell_price'] != current_price:
             fig.add_hline(
                 y=data['sell_price'],
                 line_dash="dash",
                 line_color="green",
-                annotation_text=f"Target: ${data['sell_price']:.2f}"
+                annotation_text=f"Target: ${data['sell_price']:.2f}",
+                annotation_position="top right"
             )
-            self.log(f"Add target and stop loss lines to figure", "SUCCESS")
+            self.log(f"Added target line at ${data['sell_price']:.2f}", "SUCCESS")
 
         if data.get('stop_loss'):
             fig.add_hline(
                 y=data['stop_loss'],
                 line_dash="dot",
                 line_color="red",
-                annotation_text=f"Stop Loss: ${data['stop_loss']:.2f}"
+                annotation_text=f"Stop Loss: ${data['stop_loss']:.2f}",
+                annotation_position="bottom right"
             )
-            self.log(f"Add stop loss line to figure", "SUCCESS")
+            self.log(f"Added stop loss line at ${data['stop_loss']:.2f}", "SUCCESS")
+
+        # 🔧 NEW: Add potential target lines even for WAIT signals
+        if action == "WAIT" and data.get('expected_profit_pct', 0) > 0:
+            # Calculate what the target would be if this were a BUY
+            potential_target = current_price * (1 + (data['gross_profit_pct'] / 100))
+            fig.add_hline(
+                y=potential_target,
+                line_dash="dashdot",
+                line_color="yellow",
+                annotation_text=f"Potential Target: ${potential_target:.2f}",
+                annotation_position="top left"
+            )
+            self.log(f"Added potential target line at ${potential_target:.2f}", "INFO")
 
         fig.update_layout(
             title=f'{symbol} - Enhanced Technical Analysis',
@@ -1486,8 +2290,223 @@ class EnhancedStockAdvisor:
             height=500,
             showlegend=True
         )
-        self.log(f"figure updated: {fig}", "SUCCESS")
+
         return fig
+
+    def validate_strategy_integration(self, result, expected_strategy):
+        """🔍 Validation function to ensure strategy effects are applied"""
+
+        # Check if strategy was applied
+        if not result.get('strategy_applied', False):
+            self.log("❌ VALIDATION FAILED: Strategy not applied", "ERROR")
+            return False
+
+        # Check if multipliers are reasonable
+        strategy_mult = result.get('strategy_multiplier', 1.0)
+        time_mult = result.get('time_multiplier', 1.0)
+
+        expected_multipliers = {
+            "Conservative": 0.8,
+            "Balanced": 1.0,
+            "Aggressive": 1.4,
+            "Swing Trading": 1.8
+        }
+
+        expected_mult = expected_multipliers.get(expected_strategy, 1.0)
+
+        if abs(strategy_mult - expected_mult) > 0.1:
+            self.log(f"❌ VALIDATION FAILED: Expected {expected_mult}, got {strategy_mult}", "ERROR")
+            return False
+
+        # Check if profit scaling is working
+        gross_profit = result.get('gross_profit_pct', 0)
+        if gross_profit <= 3.7 and (strategy_mult > 1.0 or time_mult > 1.0):
+            self.log(f"❌ VALIDATION FAILED: No profit scaling despite multipliers", "ERROR")
+            return False
+
+        self.log("✅ Strategy integration validation passed", "SUCCESS")
+        return True
+
+    def calculate_dynamic_profit_target_with_validation(self, indicators, confidence, investment_days, symbol,
+                                                        strategy_settings=None):
+        """🎯 Profit calculation with built-in validation"""
+
+        # Store original values for validation
+        original_base = 0.037
+
+        # Get strategy settings with validation
+        if strategy_settings is None:
+            strategy_settings = getattr(self, 'strategy_settings', {"profit": 1.0, "risk": 1.0})
+            if not hasattr(self, 'strategy_settings'):
+                self.log("⚠️ WARNING: No strategy_settings found, using defaults", "WARNING")
+
+        # Run calculation
+        final_target = self.calculate_dynamic_profit_target(indicators, confidence, investment_days, symbol,
+                                                                  strategy_settings)
+
+        # VALIDATION: Ensure scaling actually happened
+        strategy_mult = strategy_settings.get("profit", 1.0)
+
+        # Calculate expected minimum based on multipliers
+        time_mult = 1.0 + (investment_days - 7) * 0.05  # Simplified time calc
+        expected_minimum = original_base * strategy_mult * time_mult
+
+        if final_target < expected_minimum * 0.8:  # Allow 20% variance
+            self.log(f"🚨 PROFIT SCALING ISSUE: Expected min {expected_minimum:.1%}, got {final_target:.1%}", "ERROR")
+            self.log(f"   Strategy mult: {strategy_mult}, Time mult: {time_mult}", "ERROR")
+
+        return final_target
+
+    def test_strategy_profit_scaling(self):
+        """🧪 Unit test to verify strategy scaling works"""
+
+        # Mock advisor with different strategies
+        self.mock_indicators = {
+            'current_price': 100.0,
+            'volatility': 2.0,
+            'momentum_5': 3.0,
+            'volume_relative': 1.2,
+            'rsi_14': 45,
+            'macd_histogram': 0.1
+        }
+
+        strategies_to_test = {
+            "Conservative": {"profit": 0.8, "expected_range": (0.03, 0.08)},
+            "Balanced": {"profit": 1.0, "expected_range": (0.037, 0.12)},
+            "Aggressive": {"profit": 1.4, "expected_range": (0.05, 0.20)},
+            "Swing Trading": {"profit": 1.8, "expected_range": (0.06, 0.30)}
+        }
+
+        time_periods = [7, 30, 60, 90]
+
+        for strategy_name, strategy_data in strategies_to_test.items():
+            for days in time_periods:
+                strategy_settings = {"profit": strategy_data["profit"], "risk": 1.0}
+
+                # Test profit calculation
+                target = self.calculate_dynamic_profit_target(
+                    self.mock_indicators, 80, days, "TEST", strategy_settings
+                )
+
+                min_expected, max_expected = strategy_data["expected_range"]
+
+                # Adjust expectations for time
+                if days >= 60:
+                    max_expected *= 2.0
+                elif days >= 30:
+                    max_expected *= 1.5
+
+                assert min_expected <= target <= max_expected, \
+                    f"❌ {strategy_name} + {days}d: Expected {min_expected:.1%}-{max_expected:.1%}, got {target:.1%}"
+
+                print(f"✅ {strategy_name} + {days}d: {target:.1%} (within expected range)")
+
+    def monitor_profit_calculations(self, symbol, result):
+        """📊 Real-time monitoring of profit calculations"""
+
+        expected_profit = result.get('gross_profit_pct', 0)
+        strategy_mult = result.get('strategy_multiplier', 1.0)
+        time_mult = result.get('time_multiplier', 1.0)
+
+        # Flag unusual cases
+        if expected_profit <= 3.7 and strategy_mult > 1.0:
+            self.log(f"🚨 ANOMALY: {symbol} - No profit scaling despite {strategy_mult}x strategy multiplier", "ERROR")
+
+        if expected_profit <= 3.7 and self.investment_days >= 30:
+            self.log(f"🚨 ANOMALY: {symbol} - No time scaling for {self.investment_days} days", "ERROR")
+
+        if strategy_mult == 1.0 and hasattr(self, 'current_strategy'):
+            if self.current_strategy in ["Aggressive", "Swing Trading"]:
+                self.log(f"🚨 ANOMALY: {symbol} - {self.current_strategy} strategy not applied", "ERROR")
+
+        # Log success cases
+        if expected_profit > 10 and strategy_mult > 1.0:
+            self.log(f"✅ SUCCESS: {symbol} - Enhanced targeting: {expected_profit:.1f}% (strategy: {strategy_mult}x)",
+                     "SUCCESS")
+
+    def validate_advisor_configuration(self):
+        """🔧 Validate advisor configuration on startup"""
+
+        issues = []
+
+        # Check if strategy settings exist
+        if not hasattr(self, 'strategy_settings'):
+            issues.append("Missing strategy_settings attribute")
+
+        # Check if current_strategy exists
+        if not hasattr(self, 'current_strategy'):
+            issues.append("Missing current_strategy attribute")
+
+        # Check if enhanced methods exist
+        required_methods = [
+            'calculate_dynamic_profit_target',
+            'generate_enhanced_recommendation',
+            'build_enhanced_trading_plan'
+        ]
+
+        for method_name in required_methods:
+            if not hasattr(self, method_name):
+                issues.append(f"Missing method: {method_name}")
+
+        # Check if investment_days is reasonable
+        if not hasattr(self, 'investment_days') or self.investment_days <= 0:
+            issues.append("Invalid investment_days setting")
+
+        if issues:
+            self.log("🚨 CONFIGURATION ISSUES DETECTED:", "ERROR")
+            for issue in issues:
+                self.log(f"   • {issue}", "ERROR")
+            return False
+        else:
+            self.log("✅ Advisor configuration validation passed", "SUCCESS")
+            return True
+
+
+    def run_comprehensive_profit_tests(self):
+        """🧪 Comprehensive test suite for profit calculations"""
+
+        print("🚀 Running Enhanced Profit System Tests...")
+        print("=" * 60)
+
+        # Test 1: Strategy multiplier application
+        print("\n📊 Test 1: Strategy Multiplier Application")
+        self.test_strategy_profit_scaling()
+
+        # Test 2: Time scaling verification
+        print("\n⏱️ Test 2: Time Scaling Verification")
+        for days in [7, 14, 30, 60, 90]:
+            target = self.calculate_dynamic_profit_target(
+                self.mock_indicators, 80, days, "TEST", {"profit": 1.0, "risk": 1.0}
+            )
+            base_multiplier = target / 0.037
+            print(f"   {days} days: {target:.1%} ({base_multiplier:.1f}x base)")
+
+            if days >= 60 and base_multiplier < 2.0:
+                print(f"   ❌ WARNING: {days} days should have higher multiplier")
+            else:
+                print(f"   ✅ {days} days scaling looks good")
+
+        # Test 3: Combined effects
+        print("\n🎯 Test 3: Combined Strategy + Time Effects")
+        strategies = ["Conservative", "Balanced", "Aggressive", "Swing Trading"]
+        multipliers = [0.8, 1.0, 1.4, 1.8]
+
+        for strategy, mult in zip(strategies, multipliers):
+            for days in [7, 30, 90]:
+                target = self.calculate_dynamic_profit_target(
+                    self.mock_indicators, 80, days, "TEST", {"profit": mult, "risk": 1.0}
+                )
+                print(f"   {strategy} + {days}d: {target:.1%}")
+
+                # Verify scaling
+                expected_min = 0.037 * mult * (1.0 if days == 7 else 1.5 if days == 30 else 3.0)
+                if target >= expected_min:
+                    print(f"   ✅ Scaling verified (≥{expected_min:.1%})")
+                else:
+                    print(f"   ❌ Scaling issue (expected ≥{expected_min:.1%})")
+
+        print("\n" + "=" * 60)
+        print("✅ Enhanced Profit System Tests Complete!")
 
 
 def show_debug_logs_safely(result, show_debug):
@@ -1533,6 +2552,98 @@ def show_debug_logs_safely(result, show_debug):
 
         else:
             st.info("No debug logs available. Make sure debug mode is enabled in the sidebar.")
+
+
+# ALSO ADD: Enhanced profit display in results section
+def show_enhanced_profit_breakdown(result, strategy_type, investment_days):
+    """Show detailed profit breakdown with strategy effects"""
+
+    with st.expander("🚀 Enhanced Profit Analysis (Strategy Effects)", expanded=True):
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            st.markdown("**📊 Profit Calculation Breakdown:**")
+
+            # Show the actual multipliers used
+            base_target = 3.7  # Or get from result
+            strategy_mult = result.get('strategy_multiplier', 1.0)
+            time_mult = result.get('time_multiplier', 1.0)
+            final_target = result.get('gross_profit_pct', 3.7)
+
+            st.write(f"• Base Target: {base_target:.1f}%")
+            st.write(f"• Strategy Multiplier ({strategy_type}): {strategy_mult:.2f}x")
+            st.write(f"• Time Multiplier ({investment_days} days): {time_mult:.2f}x")
+            st.write(f"• **Gross Target: {final_target:.1f}%**")
+            st.write(f"• **Net Profit: {result.get('expected_profit_pct', 0):.1f}%**")
+
+        with col2:
+            st.markdown("**⚡ Strategy Comparison:**")
+
+            strategies = {
+                "Conservative": {"mult": 0.8, "desc": "Lower risk, steady gains"},
+                "Balanced": {"mult": 1.0, "desc": "Moderate risk/reward"},
+                "Aggressive": {"mult": 1.4, "desc": "Higher risk, bigger gains"},
+                "Swing Trading": {"mult": 1.8, "desc": "Maximum profit potential"}
+            }
+
+            for strat_name, strat_info in strategies.items():
+                if strat_name == strategy_type:
+                    st.write(f"🎯 **{strat_name}**: {strat_info['mult']}x - {strat_info['desc']}")
+                else:
+                    st.write(f"• {strat_name}: {strat_info['mult']}x - {strat_info['desc']}")
+
+        with col3:
+            st.markdown("**📈 Time vs Strategy Effect:**")
+
+            # Show how the combination works
+            current_mult = strategy_mult * time_mult
+
+            if current_mult >= 3.0:
+                st.success(f"🚀 **{current_mult:.1f}x multiplier** - Maximum profit mode!")
+            elif current_mult >= 2.0:
+                st.info(f"📈 **{current_mult:.1f}x multiplier** - High profit targeting")
+            elif current_mult >= 1.5:
+                st.info(f"📊 **{current_mult:.1f}x multiplier** - Enhanced targeting")
+            else:
+                st.warning(f"⚖️ **{current_mult:.1f}x multiplier** - Conservative targeting")
+
+            st.write(f"• Your settings: {strategy_type} + {investment_days} days")
+            st.write(f"• Combined effect: {current_mult:.1f}x base profit")
+
+
+# UPDATE: The analysis results section to show strategy effects
+def show_strategy_effects_in_results(result, strategy_type, advisor):
+    """Show how strategy affected the recommendation"""
+
+    if result.get('strategy_applied', False):
+        st.success("✅ **Strategy Effects Applied Successfully**")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("**🎯 Strategy Impact:**")
+            strategy_mult = advisor.strategy_settings.get("profit", 1.0)
+            st.write(f"• Strategy: {strategy_type}")
+            st.write(f"• Profit Multiplier: {strategy_mult:.1f}x")
+            st.write(f"• Risk Multiplier: {advisor.strategy_settings.get('risk', 1.0):.1f}x")
+            st.write(f"• Confidence Requirement: {advisor.strategy_settings.get('confidence_req', 75)}%")
+
+        with col2:
+            st.markdown("**📊 Scaling Effect:**")
+            time_mult = result.get('time_multiplier', 1.0)
+            total_mult = strategy_mult * time_mult
+            st.write(f"• Time Multiplier: {time_mult:.2f}x")
+            st.write(f"• **Total Scaling: {total_mult:.2f}x**")
+            st.write(f"• Base 3.7% → Target {result.get('gross_profit_pct', 3.7):.1f}%")
+
+            if total_mult >= 3.0:
+                st.success("🚀 Maximum profit mode!")
+            elif total_mult >= 2.0:
+                st.info("📈 High profit targeting")
+            else:
+                st.info("📊 Standard targeting")
+    else:
+        st.warning("⚠️ Strategy effects not applied - check system integration")
 
 
 def create_enhanced_interface():
@@ -1626,7 +2737,7 @@ def create_enhanced_interface():
     )
     advisor.log(f"Strategy type selection: {strategy_type}", "INFO")
 
-    # Map strategy to multipliers
+    # Map strategy to multipliers and store in advisor
     strategy_multipliers = {
         "Conservative": {"profit": 0.8, "risk": 0.8, "confidence_req": 85},
         "Balanced": {"profit": 1.0, "risk": 1.0, "confidence_req": 75},
@@ -1634,15 +2745,48 @@ def create_enhanced_interface():
         "Swing Trading": {"profit": 1.8, "risk": 1.5, "confidence_req": 70}
     }
     advisor.strategy_settings = strategy_multipliers[strategy_type]
+    advisor.current_strategy = strategy_type  # Store strategy name for logging
     advisor.log(f"Strategy: {strategy_type}, Investment Days: {advisor.investment_days}", "INFO")
 
-    # Add profit target preview
+    # ENHANCED: Show realistic profit targets based on selection
+    base_profit = 3.7  # Base 3.7%
+    strategy_multiplier = advisor.strategy_settings["profit"]
+    time_multiplier = 1.0 + (advisor.investment_days - 7) * 0.05  # More aggressive time scaling
+
+    estimated_profit = base_profit * strategy_multiplier * time_multiplier
+
+    # Enhanced profit target preview with strategy effect
     if advisor.investment_days >= 30:
-        st.sidebar.info(f"💡 Longer timeframes (≥30 days) can target 8-15% profits with high confidence signals")
+        if strategy_type == "Swing Trading":
+            profit_range = f"15-35% profits"
+        elif strategy_type == "Aggressive":
+            profit_range = f"12-25% profits"
+        else:
+            profit_range = f"8-15% profits"
+        st.sidebar.info(f"💡 {strategy_type} + Long timeframe (≥30 days): Target {profit_range}")
     elif advisor.investment_days >= 14:
-        st.sidebar.info(f"💡 Medium timeframes (14-30 days) can target 5-10% profits")
+        if strategy_type == "Swing Trading":
+            profit_range = f"10-20% profits"
+        elif strategy_type == "Aggressive":
+            profit_range = f"8-15% profits"
+        else:
+            profit_range = f"5-10% profits"
+        st.sidebar.info(f"💡 {strategy_type} + Medium timeframe: Target {profit_range}")
     else:
-        st.sidebar.info(f"💡 Short timeframes (<14 days) typically target 3-6% profits")
+        if strategy_type == "Swing Trading":
+            profit_range = f"6-12% profits"
+        elif strategy_type == "Aggressive":
+            profit_range = f"5-8% profits"
+        else:
+            profit_range = f"3-6% profits"
+        st.sidebar.info(f"💡 {strategy_type} + Short timeframe: Target {profit_range}")
+
+    # Show the estimated profit for current settings
+    st.sidebar.metric(
+        "📊 Estimated Target Profit",
+        f"{estimated_profit:.1f}%",
+        delta=f"vs base {base_profit}%"
+    )
 
     # Show model availability
     if stock_symbol in advisor.models:
@@ -1875,7 +3019,6 @@ def create_enhanced_interface():
                             else:
                                 st.write(f"• {timeframe}: {profit_range}")
 
-            # Add this after your existing price information section
             show_enhanced_profit_analysis(result, strategy_type, advisor.investment_days)
 
             # Show signal strength breakdown
