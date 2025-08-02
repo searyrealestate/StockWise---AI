@@ -43,6 +43,7 @@ class EnhancedStockAdvisor:
         self.failed_models = []
         self.tax = 0
         self.broker_fee = 0
+        self.log_file = f"debug_log_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.log"
 
         # Initialize 95% confidence system if available
         if ENHANCEMENTS_AVAILABLE:
@@ -72,9 +73,39 @@ class EnhancedStockAdvisor:
             formatted = f"{color_map.get(level, '')}{prefix} [{level}] {symbol}: {message}{reset}"
             self.debug_log.append(formatted)
             print(formatted)
+
+            # File logging - ensure directory exists and handle errors
             if self.download_log:
-                with open("debug_log.txt", "a") as f:
-                    f.write(formatted + "\n")
+                try:
+                    # Ensure log_file attribute exists
+                    if not hasattr(self, 'log_file') or not self.log_file:
+                        self.log_file = f"debug_log_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.log"
+
+                    # Get directory path (only if there is one)
+                    log_dir = os.path.dirname(self.log_file)
+                    if log_dir:  # Only create directory if there is one
+                        os.makedirs(log_dir, exist_ok=True)
+
+                    # Create a clean version for file logging (remove ANSI color codes and handle encoding)
+                    clean_formatted = f"{prefix} [{level}] {symbol}: {message}"
+
+                    # Write to file with explicit UTF-8 encoding and error handling
+                    with open(self.log_file, "a", encoding='utf-8', errors='replace') as f:
+                        f.write(clean_formatted + "\n")
+                        f.flush()  # Ensure immediate write
+
+                except Exception as e:
+                    # Create a fallback message without emojis
+                    fallback_msg = f"[{level}] {symbol}: {message}"
+                    try:
+                        # Try writing without emojis as last resort
+                        with open(self.log_file, "a", encoding='utf-8', errors='ignore') as f:
+                            f.write(fallback_msg + "\n")
+                            f.flush()
+                    except:
+                        # If all else fails, just print the error but don't break the app
+                        print(f"Error writing to log file: {e}")
+                        pass
 
     def apply_israeli_fees_and_tax(self, profit_pct, apply_tax=True, apply_fees=True):
         """
@@ -628,13 +659,13 @@ class EnhancedStockAdvisor:
         # Log the final recommendation to CSV
         self.log_recommendation(symbol, recommendation, analysis_date)
 
-        # FIXED: Include debug_log in the return dictionary
+        # Include debug_log in the return dictionary
         return {
             'symbol': symbol,
             'analysis_date': analysis_date,
             'indicators': indicators,
             'investment_days': self.investment_days,
-            'debug_log': self.debug_log,  # Add this line
+            'debug_log': self.debug_log,
             **recommendation
         }
 
@@ -1207,7 +1238,7 @@ def show_debug_logs_safely(result, show_debug):
         # Safely get debug logs
         debug_logs = result.get("debug_log", [])
 
-        if debug_logs and len(debug_logs) > 0:
+        if debug_logs:
             with st.expander("🔍 Full Debug Output", expanded=False):
                 try:
                     # Convert all log entries to strings and join
@@ -1242,6 +1273,7 @@ def show_debug_logs_safely(result, show_debug):
         else:
             st.info("No debug logs available. Make sure debug mode is enabled in the sidebar.")
 
+
 def create_enhanced_interface():
     """Create enhanced interface with 95% confidence targeting"""
     st.set_page_config(
@@ -1255,17 +1287,18 @@ def create_enhanced_interface():
     st.markdown("### Advanced AI system with 95% confidence targeting!")
     st.markdown("---")
 
-    # DEBUG CHECKBOX
-    show_debug = st.sidebar.checkbox("🐛 Show Debug Logs", value=False, help="Enable to see detailed calculation logs")
-    # Todo: need to enable this and find better location in GUI
-    if show_debug:
-        download_file = st.sidebar.checkbox("Download Debug Logs?", value=False, help="download log file")
-    else:
-        download_file = False
+    # INITIALIZE DEBUG SETTINGS IN SESSION STATE
+    if 'show_debug' not in st.session_state:
+        st.session_state.show_debug = False
+    if 'download_file' not in st.session_state:
+        st.session_state.download_file = False
 
-    # Initialize advisor
+    # Initialize advisor with current settings
     if 'enhanced_advisor' not in st.session_state:
-        st.session_state.enhanced_advisor = EnhancedStockAdvisor(debug=show_debug, download_log=download_file)
+        st.session_state.enhanced_advisor = EnhancedStockAdvisor(
+            debug=True,  # Always enable debug for potential logging
+            download_log=st.session_state.download_file
+        )
 
     advisor = st.session_state.enhanced_advisor
 
@@ -1304,10 +1337,10 @@ def create_enhanced_interface():
                 advisor.log(f"Target Date: {target_date}", "INFO")
             else:
                 target_date = datetime.now().date()
-                advisor.log("Target Date: {target_date}", "INFO")
+                advisor.log(f"Target Date: {target_date}", "INFO")
         else:
             target_date = datetime.now().date()
-            advisor.log("Target Date: {target_date}", "INFO")
+            advisor.log(f"Target Date: {target_date}", "INFO")
     except:
         target_date = datetime.now().date()
         st.sidebar.warning("⚠️ Invalid date format. Using today's date.")
@@ -1326,7 +1359,6 @@ def create_enhanced_interface():
     if stock_symbol in advisor.models:
         st.sidebar.success(f"🤖 AI Model Available for {stock_symbol}")
         advisor.log(f"AI Model Available for {stock_symbol}", "SUCCESS")
-
     else:
         st.sidebar.info(f"📊 Using Technical Analysis for {stock_symbol}")
         advisor.log(f"Using Technical Analysis for {stock_symbol}", "INFO")
@@ -1334,6 +1366,66 @@ def create_enhanced_interface():
     # Analyze button
     analyze_btn = st.sidebar.button("🚀 Get Enhanced Trading Advice", type="primary", use_container_width=True)
     advisor.log("Analyze Button Clicked", "INFO")
+
+    # ADD SEPARATOR BEFORE DEBUG CONTROLS
+    st.sidebar.markdown("---")
+
+    # DEBUG CONTROLS - AT THE BOTTOM OF SIDEBAR
+    st.sidebar.markdown("### 🐛 Debug Options")
+
+    # Update session state with current checkbox values
+    st.session_state.show_debug = st.sidebar.checkbox(
+        "Show Debug Logs",
+        value=st.session_state.show_debug,
+        help="Display detailed calculation logs on screen"
+    )
+
+    st.session_state.download_file = st.sidebar.checkbox(
+        "Enable Log File Creation",
+        value=st.session_state.download_file,
+        help="Create downloadable log file"
+    )
+
+    # UPDATE ADVISOR SETTINGS BASED ON CURRENT STATE
+    advisor.download_log = st.session_state.download_file
+    if st.session_state.download_file and not hasattr(advisor, 'log_file'):
+        # Create log file if it doesn't exist
+        advisor.log_file = f"debug_log_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.log"
+
+    # Show download button if log file exists and download is enabled
+    if st.session_state.download_file and 'enhanced_advisor' in st.session_state:
+        # Ensure advisor has log_file attribute
+        if not hasattr(advisor, 'log_file') or not advisor.log_file:
+            advisor.log_file = f"debug_log_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.log"
+
+        # Check if log file exists and has content
+        if os.path.exists(advisor.log_file):
+            try:
+                with open(advisor.log_file, 'r', encoding='utf-8') as f:
+                    log_content = f.read()
+
+                if log_content.strip():  # Only show if file has content
+                    st.sidebar.download_button(
+                        label="📥 Download Debug Log",
+                        data=log_content,
+                        file_name=f"debug_log_{stock_symbol}_{datetime.now().strftime('%Y%m%d_%H%M')}.log",
+                        mime="text/plain",
+                        help="Download the complete debug log file"
+                    )
+                else:
+                    st.sidebar.info("📝 Log file is empty. Run an analysis first.")
+
+            except Exception as e:
+                st.sidebar.error(f"Error accessing log file: {e}")
+        else:
+            if advisor.debug_log:  # If there are debug logs in memory but no file
+                st.sidebar.info("📝 Debug logs available. Run an analysis to create downloadable file.")
+            else:
+                st.sidebar.info("📝 No debug logs yet. Run an analysis first.")
+
+    # Use session state values for the rest of the application
+    show_debug = st.session_state.show_debug
+    download_file = st.session_state.download_file
 
     # Analysis results
     if analyze_btn and stock_symbol:
