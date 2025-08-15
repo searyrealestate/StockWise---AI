@@ -27,44 +27,42 @@ except Exception as e:
 
 warnings.filterwarnings('ignore')
 
-class ProfessionalStockAdvisor:
-    """
-    Dummy ProfessionalStockAdvisor class for algo_configurator.py to import.
-    This prevents ImportError if stockwise_simulation.py is not in the same directory
-    or if IBKR is not set up.
-    The real ProfessionalStockAdvisor from stockwise_simulation.py will be used at runtime
-    when the calibration is initiated.
-    """
-    def __init__(self, model_dir="models/NASDAQ-training set", debug=False, use_ibkr=False,
-                 ibkr_host="127.0.0.1", ibkr_port=7497, download_log=True):
-        self.model_dir = model_dir
-        self.debug = debug
-        self.use_ibkr = use_ibkr
-        self.ibkr_host = ibkr_host
-        self.ibkr_port = ibkr_port
-        self.download_log = download_log
-        self.strategy_settings = {
-            'Conservative': {'profit': 0.03, 'risk': 0.05, 'confidence_req': 85, 'buy_threshold': 2.0, 'sell_threshold': -1.5},
-            'Balanced': {'profit': 0.04, 'risk': 0.06, 'confidence_req': 75, 'buy_threshold': 1.2, 'sell_threshold': -1.0},
-            'Aggressive': {'profit': 0.05, 'risk': 0.08, 'confidence_req': 65, 'buy_threshold': 0.8, 'sell_threshold': -0.8},
-            'Swing Trading': {'profit': 0.06, 'risk': 0.10, 'confidence_req': 70, 'buy_threshold': 1.4, 'sell_threshold': -1.2}
-        }
-        self.current_strategy = 'Balanced'
-        self.signal_weights = {
-            'trend': 0.45, 'momentum': 0.30, 'volume': 0.10, 'support_resistance': 0.05, 'model': 0.10
-        }
-        self.confidence_params = {
-            'base_multiplier': 1.0, 'confluence_weight': 1.0, 'penalty_strength': 1.0
-        }
-        self.investment_days = 7
-
-    def analyze_stock_enhanced(self, symbol, target_date_str=None):
-        # This is a dummy method. The real one is in stockwise_simulation.py
-        # It's here purely to satisfy the import and allow the calibrator to initialize.
-        # In a real run, this method would be called on the *actual* ProfessionalStockAdvisor instance.
-        return {'action': 'WAIT', 'confidence': 50.0, 'expected_profit_pct': 0.0, 'reasons': ['Dummy recommendation']}
-
-
+# class ProfessionalStockAdvisor:
+#     """
+#     Dummy ProfessionalStockAdvisor class for algo_configurator.py to import.
+#     This prevents ImportError if stockwise_simulation.py is not in the same directory
+#     or if IBKR is not set up.
+#     The real ProfessionalStockAdvisor from stockwise_simulation.py will be used at runtime
+#     when the calibration is initiated.
+#     """
+#     def __init__(self, model_dir="models/NASDAQ-training set", debug=False, use_ibkr=False,
+#                  ibkr_host="127.0.0.1", ibkr_port=7497, download_log=True):
+#         self.model_dir = model_dir
+#         self.debug = debug
+#         self.use_ibkr = use_ibkr
+#         self.ibkr_host = ibkr_host
+#         self.ibkr_port = ibkr_port
+#         self.download_log = download_log
+#         self.strategy_settings = {
+#             'Conservative': {'profit': 0.03, 'risk': 0.05, 'confidence_req': 85, 'buy_threshold': 2.0, 'sell_threshold': -1.5},
+#             'Balanced': {'profit': 0.04, 'risk': 0.06, 'confidence_req': 75, 'buy_threshold': 1.2, 'sell_threshold': -1.0},
+#             'Aggressive': {'profit': 0.05, 'risk': 0.08, 'confidence_req': 65, 'buy_threshold': 0.8, 'sell_threshold': -0.8},
+#             'Swing Trading': {'profit': 0.06, 'risk': 0.10, 'confidence_req': 70, 'buy_threshold': 1.4, 'sell_threshold': -1.2}
+#         }
+#         self.current_strategy = 'Balanced'
+#         self.signal_weights = {
+#             'trend': 0.45, 'momentum': 0.30, 'volume': 0.10, 'support_resistance': 0.05, 'model': 0.10
+#         }
+#         self.confidence_params = {
+#             'base_multiplier': 1.0, 'confluence_weight': 1.0, 'penalty_strength': 1.0
+#         }
+#         self.investment_days = 7
+#
+#     def analyze_stock_enhanced(self, symbol, target_date_str=None):
+#         # This is a dummy method. The real one is in stockwise_simulation.py
+#         # It's here purely to satisfy the import and allow the calibrator to initialize.
+#         # In a real run, this method would be called on the *actual* ProfessionalStockAdvisor instance.
+#         return {'action': 'WAIT', 'confidence': 50.0, 'expected_profit_pct': 0.0, 'reasons': ['Dummy recommendation']}
 
 
 class StockWiseAutoCalibrator:
