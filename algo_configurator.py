@@ -15,7 +15,6 @@ import logging
 import sys  # Import sys for stdout/stderr reconfiguration
 
 # Attempt to reconfigure stdout and stderr to UTF-8 for better console emoji/Unicode support.
-# This should be done as early as possible in the script.
 try:
     if sys.stdout.encoding != 'utf-8':
         # Re-open stdout with UTF-8 encoding. Buffering=1 ensures line-buffering.
@@ -417,13 +416,7 @@ class StockWiseAutoCalibrator:
         try:
             # Step 1: Generate Walk-Forward Validation Windows
             logging.info("Generating walk-forward validation windows...")
-            self.generate_walk_forward_windows(
-                self.config['start_date'],
-                self.config['end_date'],
-                self.config['training_period'],
-                self.config['validation_period'],
-                self.config['num_walk_forward_windows']
-            )
+            self.validation_windows = self.create_walk_forward_windows()
             logging.info(f"Generated {len(self.validation_windows)} validation windows.")
 
             # Step 2: Fetch and filter initial stock universe
@@ -1142,7 +1135,7 @@ class StockWiseAutoCalibrator:
                     'min_confidence': params.get('min_confidence', None)
                 }
             }
-            logging.info(
+            logging.debug(
                 f"Summary for {strategy}: Fitness Score {results['fitness_score']:.2f}, Optimal Params: {params}")
 
         return summary
