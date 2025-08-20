@@ -14,3 +14,9 @@ git cherry-pick <commit_hash>
 
 # check commit number
 git rev-parse HEAD
+
+# How to used the scripts:
+1. run Create_parquet_file_NASDAQ.py - created parquet file
+2. run model_trainer.py - train the model
+3. run model_evaluator.py - This will assess how well your model performs on unseen test data, giving you a better understanding of its real-world effectiveness.
+4. 
