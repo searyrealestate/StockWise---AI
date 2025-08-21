@@ -11,7 +11,6 @@ import pandas as pd
 import numpy as np
 import time
 import threading
-import json
 import os
 import sys # For logging handler setup
 import logging # For structured logging
@@ -43,12 +42,15 @@ class DataSourceManager(EWrapper, EClient):
     Inherits from IBAPI's EWrapper and EClient for IBKR connectivity.
     """
 
-    def __init__(self, use_ibkr=True, ibkr_host="127.0.0.1", ibkr_port=7497, debug=False):
+    def __init__(self, use_ibkr=True, ibkr_host="127.0.0.1", ibkr_port=7497, debug=False,
+                 yfinance_max_retries=10, yfinance_retry_delay=1):
         EClient.__init__(self, self)
         self.use_ibkr = use_ibkr
         self.ibkr_host = ibkr_host
         self.ibkr_port = ibkr_port
         self.debug = debug
+        self.yfinance_max_retries = yfinance_max_retries
+        self.yfinance_retry_delay = yfinance_retry_delay
 
         # Data storage
         self.historical_data = {}
@@ -146,7 +148,7 @@ class DataSourceManager(EWrapper, EClient):
             'SOFI', 'AFRM', 'UPST', 'LC', 'TREE', 'ENVA', 'EVCM', 'IIPR',
 
             # Retail/Consumer
-            'AMZN', 'COST', 'WMT', 'TGT', 'BBY', 'EBAY', 'ETSY', 'W',
+            'AMZN', 'COST', 'WMT', 'TGT', 'LOW', 'BBY', 'EBAY', 'ETSY', 'W',
             'CHWY', 'PETS', 'CHEWY', 'OSTK', 'OVLV', 'FVRR', 'UPWK', 'FREELANCER'
         ]
 
@@ -158,11 +160,8 @@ class DataSourceManager(EWrapper, EClient):
 
         try:
             self.log(f"Connecting to IBKR TWS Paper Trading ({self.ibkr_host}:{self.ibkr_port})...")
-            # Using a fixed client ID for this specific script's context.
-            # In multi-threaded/multi-instance setups, ensure unique client IDs.
             self.connect(self.ibkr_host, self.ibkr_port, clientId=1)
 
-            # Store the thread so we can potentially manage it (though join() is being removed)
             self.thread = threading.Thread(target=self.run, daemon=True)
             self.thread.start()
 
@@ -184,15 +183,12 @@ class DataSourceManager(EWrapper, EClient):
         """Disconnects from IBKR."""
         if self.ibkr_connected:
             self.log("Disconnecting from IBKR...", "INFO")
-            # Corrected: Call the parent class's disconnect method to avoid recursion
-            # Removed self.thread.join() to prevent "cannot join current thread" warning.
-            # The daemon thread will terminate with the main program.
             super().disconnect()
             self.ibkr_connected = False
             self.log("Disconnected from IBKR.", "INFO")
 
 
-    def get_stock_data(self, symbol: str, days_back: int = 730) -> pd.DataFrame: # Defaulting to 2 years (730 days)
+    def get_stock_data(self, symbol: str, days_back: int = 730) -> pd.DataFrame:
         """
         Fetches historical stock data, preferring IBKR and falling back to yfinance.
         Returns a DataFrame with OHLCV and basic indicators.
@@ -210,7 +206,7 @@ class DataSourceManager(EWrapper, EClient):
             else:
                 self.log(f"Failed to get data for {symbol} from IBKR after retries. Trying yfinance...", "WARNING")
 
-        if df.empty: # If IBKR failed or was not used
+        if df.empty:
             self.log(f"Fetching {symbol} data from yfinance (fallback).", "INFO")
             df_yf = self._download_from_yfinance(symbol, days_back=days_back)
             if not df_yf.empty:
@@ -219,9 +215,11 @@ class DataSourceManager(EWrapper, EClient):
                 self.log(f"Successfully retrieved {len(df)} bars for {symbol} from yfinance.", "SUCCESS")
             else:
                 self.log(f"Failed to get data for {symbol} from yfinance.", "ERROR")
+                logger.critical(f"❌ CRITICAL ERROR: Could not retrieve data for {symbol} from any source after all retries. Stopping script.")
+                sys.exit(1)
+
 
         if not df.empty:
-            # Add technical indicators if data was successfully fetched
             df['SMA_20'] = df['Close'].rolling(20).mean()
             df['SMA_50'] = df['Close'].rolling(50).mean()
             df['Returns'] = df['Close'].pct_change()
@@ -233,7 +231,7 @@ class DataSourceManager(EWrapper, EClient):
         for attempt in range(retries):
             try:
                 self.log(f"📊 Downloading {symbol} from IBKR (attempt {attempt + 1}/{retries})", "INFO")
-                time.sleep(2) # Rate limiting
+                time.sleep(2)
 
                 contract = Contract()
                 contract.symbol = symbol
@@ -253,52 +251,77 @@ class DataSourceManager(EWrapper, EClient):
                 self.reqHistoricalData(req_id, contract, end_date_time, "2 Y", "1 day", "TRADES", 1, 1, False, [])
 
                 if self.data_ready.wait(timeout=60):
-                    if not self.error_occurred or (self.error_occurred and "2174" in self.error_message):
-                        data = self.historical_data.get(req_id, [])
-                        if data and len(data) > 100:
-                            rows = []
-                            for bar in data:
-                                rows.append({
-                                    'Date': pd.to_datetime(bar.date),
-                                    'Open': float(bar.open),
-                                    'High': float(bar.high),
-                                    'Low': float(bar.low),
-                                    'Close': float(bar.close),
-                                    'Volume': int(bar.volume)
-                                })
-                            df = pd.DataFrame(rows)
-                            df.set_index('Date', inplace=True)
-                            df.sort_index(inplace=True)
-                            return df
-                        else:
-                            self.log(f"IBKR: Insufficient data for {symbol} ({len(data)} bars).", "WARNING")
+                    if self.error_occurred and self.error_message and not ("2174" in self.error_message):
+                        self.log(
+                            f"IBKR error for {symbol} (ReqId {req_id}): {self.error_message}. Falling back to yfinance.",
+                            "ERROR")
+                        del self.historical_data[req_id]
+                        return pd.DataFrame()
+
+                    data = self.historical_data.get(req_id, [])
+                    if data and len(data) > 100:
+                        rows = []
+                        for bar in data:
+                            rows.append({
+                                'Date': pd.to_datetime(bar.date),
+                                'Open': float(bar.open),
+                                'High': float(bar.high),
+                                'Low': float(bar.low),
+                                'Close': float(bar.close),
+                                'Volume': int(bar.volume)
+                            })
+                        df = pd.DataFrame(rows)
+                        df.set_index('Date', inplace=True)
+                        df.sort_index(inplace=True)
+                        return df
                     else:
-                        self.log(f"IBKR error for {symbol} (ReqId {req_id}): {self.error_message}", "ERROR")
+                        self.log(f"IBKR: Insufficient data for {symbol} ({len(data)} bars).", "WARNING")
                 else:
                     self.log(f"IBKR: Timeout for {symbol} on attempt {attempt + 1}.", "WARNING")
 
             except Exception as e:
                 self.log(f"IBKR: Exception for {symbol} on attempt {attempt + 1}: {e}", "ERROR")
-        return pd.DataFrame() # Return empty DataFrame if all IBKR attempts fail
+        return pd.DataFrame()
 
     def _download_from_yfinance(self, symbol, days_back=730):
-        """Internal method to download historical data for a single symbol from yfinance."""
-        try:
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=days_back)
-            data = yf.download(symbol, start=start_date, end=end_date, progress=False)
-            if not data.empty:
-                data.index.name = 'Date'
-                # Ensure column names match expected format from IBKR data for consistency
-                data.columns = [col.capitalize() for col in data.columns]
-                data = data[['Open', 'High', 'Low', 'Close', 'Volume']] # Filter to essential columns
-                return data
-            else:
-                self.log(f"yfinance: No data found for {symbol}.", "WARNING")
-                return pd.DataFrame()
-        except Exception as e:
-            self.log(f"yfinance: Error downloading {symbol}: {e}", "ERROR")
-            return pd.DataFrame()
+        """
+        Internal method to download historical data for a single symbol from yfinance with retries.
+        """
+        for attempt in range(self.yfinance_max_retries):
+            try:
+                self.log(f"📊 Downloading {symbol} from yfinance (attempt {attempt + 1}/{self.yfinance_max_retries})", "INFO")
+                end_date = datetime.now()
+                start_date = end_date - timedelta(days=days_back)
+                data = yf.download(symbol, start=start_date, end=end_date, progress=False)
+                if not data.empty:
+                    # ⭐ FIX: Robustly flatten and standardize column names
+                    new_columns = []
+                    for col in data.columns:
+                        if isinstance(col, tuple): # Handle MultiIndex columns
+                            new_columns.append(col[0].capitalize())
+                        elif isinstance(col, str): # Handle single-level string columns
+                            new_columns.append(col.capitalize())
+                        else: # Fallback for unexpected types
+                            new_columns.append(str(col))
+                    data.columns = new_columns
+
+                    # Ensure 'Adj Close' is renamed to 'Close' if present
+                    if 'Adj close' in data.columns:
+                        data = data.rename(columns={'Adj close': 'Close'})
+
+                    data.index.name = 'Date'
+                    data = data[['Open', 'High', 'Low', 'Close', 'Volume']] # Filter to essential columns
+                    return data
+                else:
+                    self.log(f"yfinance: No data found for {symbol} on attempt {attempt + 1}.", "WARNING")
+            except Exception as e:
+                self.log(f"yfinance: Error downloading {symbol} on attempt {attempt + 1}: {e}", "ERROR")
+
+            if attempt < self.yfinance_max_retries - 1:
+                time.sleep(self.yfinance_retry_delay)
+
+        self.log(f"yfinance: Failed to download {symbol} after {self.yfinance_max_retries} attempts.", "ERROR")
+        return pd.DataFrame()
 
 
     def save_symbol_data(self, symbol, df, source):
@@ -537,6 +560,3 @@ def main():
         downloader.disconnect()
         logger.info("👋 Finished data download operations.")
 
-
-if __name__ == "__main__":
-    main()
