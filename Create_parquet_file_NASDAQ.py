@@ -1,3 +1,21 @@
+"""
+📊 StockWise NASDAQ Pipeline - COMPREHENSIVE VERSION
+───────────────────────────────────────────────────
+
+This script handles the comprehensive fetching, processing, and saving of NASDAQ
+stock data into Parquet files, suitable for model training and evaluation.
+It now integrates with DataSourceManager for robust data retrieval (IBKR with yfinance fallback).
+
+Usage:
+    python Create_parquet_file_NASDAQ.py                    # Process all available stocks (default: 1000 max)
+    python Create_parquet_file_NASDAQ.py --debug            # Enable debug mode with detailed output
+    python Create_parquet_file_NASDAQ.py --stock AAPL       # Process only a specific stock (for debugging)
+    python Create_parquet_file_NASDAQ.py --max-stocks 500   # Limit the number of stocks to process
+    python Create_parquet_file_NASDAQ.py --quick            # Quick mode - use a smaller, predefined list of quality stocks
+    python Create_parquet_file_NASDAQ.py --use-ibkr         # Attempt to use IBKR for data retrieval (requires TWS/Gateway)
+    python Create_parquet_file_NASDAQ.py --ibkr-host 127.0.0.1 --ibkr-port 7497 # Specify IBKR host/port
+"""
+
 import os
 import glob
 import gc
@@ -165,11 +183,11 @@ def get_symbols_from_csv(file_path):
         # Filter out symbols matching any problematic pattern AND ensure it's alphanumeric and not too long
         # Keep only symbols that are composed purely of alphabetic characters
         nasdaq_symbols = df[
-            df['Symbol'].str.len() > 0 & # Not empty
-            ~df['Symbol'].str.contains(combined_pattern, regex=True) & # Does not contain problematic patterns
-            df['Symbol'].str.isalpha() & # Strictly alphabetic characters (e.g., no numbers, no special chars)
-            (df['Symbol'].str.len() <= 5) # Keep length reasonable for common tickers
-        ]['Symbol'].tolist()
+            (df['Symbol'].str.len() > 0) &  # Not empty
+            (~df['Symbol'].str.contains(combined_pattern, regex=True)) &  # Does not contain problematic patterns
+            (df['Symbol'].str.isalpha()) &  # Strictly alphabetic characters (e.g., no numbers, no special chars)
+            (df['Symbol'].str.len() <= 5)  # Keep length reasonable for common tickers
+            ]['Symbol'].tolist()
 
         logger.info(f"✅ Loaded {len(nasdaq_symbols)} symbols from CSV: {file_path} after robust filtering.")
         return nasdaq_symbols
@@ -320,13 +338,9 @@ def add_technical_indicators_and_features(df: pd.DataFrame) -> pd.DataFrame:
     df['BB_Middle'] = bb.bollinger_mavg()
     bb_range = df['BB_Upper'] - df['BB_Lower']
     df['BB_Position'] = (df['Close'] - df['BB_Lower']) / (bb_range + 1e-9)
-    # df['BB_Position'].replace([np.inf, -np.inf], np.nan, inplace=True)
-    # df['BB_Position'].fillna(0.5, inplace=True)
     df['BB_Position'] = df['BB_Position'].replace([np.inf, -np.inf], np.nan).fillna(0.5)
 
     df['BB_Width'] = (df['BB_Upper'] - df['BB_Lower']) / (df['BB_Middle'] + 1e-9)
-    # df['BB_Width'].replace([np.inf, -np.inf], np.nan, inplace=True)
-    # df['BB_Width'].fillna(0, inplace=True)
     df['BB_Width'] = df['BB_Width'].replace([np.inf, -np.inf], np.nan).fillna(0)
 
     df['Daily_Return'] = df['Close'].pct_change()
@@ -480,8 +494,8 @@ def process_ticker_list(tickers, output_base_dir, train=True, data_source_manage
                 if train:
                     model, trained_df = train_model(df, symbol, output_models_dir)
                     if model is None:
-                        error_msg = f"❌ Critical: Failed to train/get model for {symbol}."
-                        logger.critical(error_msg)
+                        error_msg = f"Skipping model training for {symbol} due to data issues (e.g., single class in target)."
+                        logger.warning(error_msg)
                         skipped_tickers_log.append(f"{symbol}: Model training failed.")
                         if debug_stock and symbol == debug_stock:
                             sys.exit(1)
