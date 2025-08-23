@@ -12,6 +12,7 @@ import os
 import time
 import logging
 import sys
+from stockwise_simulation import ProfessionalStockAdvisor
 
 # Attempt to reconfigure stdout and stderr to UTF-8 for better console emoji/Unicode support.
 try:
@@ -27,43 +28,6 @@ except Exception as e:
 
 warnings.filterwarnings('ignore')
 
-# class ProfessionalStockAdvisor:
-#     """
-#     Dummy ProfessionalStockAdvisor class for algo_configurator.py to import.
-#     This prevents ImportError if stockwise_simulation.py is not in the same directory
-#     or if IBKR is not set up.
-#     The real ProfessionalStockAdvisor from stockwise_simulation.py will be used at runtime
-#     when the calibration is initiated.
-#     """
-#     def __init__(self, model_dir="models/NASDAQ-training set", debug=False, use_ibkr=False,
-#                  ibkr_host="127.0.0.1", ibkr_port=7497, download_log=True):
-#         self.model_dir = model_dir
-#         self.debug = debug
-#         self.use_ibkr = use_ibkr
-#         self.ibkr_host = ibkr_host
-#         self.ibkr_port = ibkr_port
-#         self.download_log = download_log
-#         self.strategy_settings = {
-#             'Conservative': {'profit': 0.03, 'risk': 0.05, 'confidence_req': 85, 'buy_threshold': 2.0, 'sell_threshold': -1.5},
-#             'Balanced': {'profit': 0.04, 'risk': 0.06, 'confidence_req': 75, 'buy_threshold': 1.2, 'sell_threshold': -1.0},
-#             'Aggressive': {'profit': 0.05, 'risk': 0.08, 'confidence_req': 65, 'buy_threshold': 0.8, 'sell_threshold': -0.8},
-#             'Swing Trading': {'profit': 0.06, 'risk': 0.10, 'confidence_req': 70, 'buy_threshold': 1.4, 'sell_threshold': -1.2}
-#         }
-#         self.current_strategy = 'Balanced'
-#         self.signal_weights = {
-#             'trend': 0.45, 'momentum': 0.30, 'volume': 0.10, 'support_resistance': 0.05, 'model': 0.10
-#         }
-#         self.confidence_params = {
-#             'base_multiplier': 1.0, 'confluence_weight': 1.0, 'penalty_strength': 1.0
-#         }
-#         self.investment_days = 7
-#
-#     def analyze_stock_enhanced(self, symbol, target_date_str=None):
-#         # This is a dummy method. The real one is in stockwise_simulation.py
-#         # It's here purely to satisfy the import and allow the calibrator to initialize.
-#         # In a real run, this method would be called on the *actual* ProfessionalStockAdvisor instance.
-#         return {'action': 'WAIT', 'confidence': 50.0, 'expected_profit_pct': 0.0, 'reasons': ['Dummy recommendation']}
-
 
 class StockWiseAutoCalibrator:
     """
@@ -77,263 +41,229 @@ class StockWiseAutoCalibrator:
         self.results = {}
         self.best_parameters = {}
         self.validation_windows = []
-        self.configuration_files = 'configuration_files/'
+        self.configuration_files = 'configuration/'
 
         os.makedirs(self.configuration_files, exist_ok=True)
         logging.info("⭐ Initializing StockWiseAutoCalibrator...")
         logging.info(f"Configuration files will be saved to: {self.configuration_files}")
 
-
-    def _normalize_numeric_values(self, data):
+    def _normalize_numeric_values(self, obj):
         """
-        Recursively converts numpy numeric types (float, int, bool) and ALL numpy arrays
-        to standard Python floats, integers, booleans, or lists respectively.
-        This helps prevent 'inhomogeneous shape' errors when creating pandas DataFrames.
+        Recursively converts numpy numeric types to standard Python types for JSON serialization.
         """
-        if isinstance(data, dict):
-            return {k: self._normalize_numeric_values(v) for k, v in data.items()}
-        elif isinstance(data, (list, tuple)):
-            return [self._normalize_numeric_values(elem) for elem in data]
-        elif isinstance(data, np.ndarray):
-            # Convert any numpy array to a standard Python list of its elements.
-            return data.tolist()
-        elif np.issubdtype(type(data), np.number):  # Catches all NumPy numeric scalars
-            return float(data)  # Convert all numpy numbers to float
-        elif isinstance(data, np.bool_):
-            return bool(data)
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.bool_):
+            return bool(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, dict):
+            return {k: self._normalize_numeric_values(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._normalize_numeric_values(elem) for elem in obj]
         else:
-            return data
+            return obj
 
-    def get_default_config(self):
-        """Default calibration configuration with expanded parameters."""
-        logging.info("📄 Loading default calibration configuration with expanded parameters...")
-        return {
-            'stock_universe': 'NASDAQ_100',
-            'market_cap_min': 1_000_000_000,
-            'price_min': 5.0,
-            'volume_min': 1_000_000,
-            'start_date': (datetime.now() - timedelta(days=730)).strftime('%Y-%m-%d'),  # 2 years back
-            'end_date': (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d'),  # End 1 month ago
-            'training_period': 365,  # days
-            'validation_period': 90,  # days
-            'num_walk_forward_windows': 4,  # Number of walk-forward validation windows
+    def save_config_for_all_strategies(self, best_params_overall):
+        """
+        Saves the optimal parameters for each strategy into separate JSON files
+        and a combined calibration report.
+        """
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
-            # Parameters for ProfessionalStockAdvisor's internal logic
-            'advisor_params': {
-                # Adjust ranges for finer tuning
-                'investment_days': [7, 14, 21, 30, 60],  # Different holding periods
-                'profit_threshold': [0.03, 0.04, 0.05, 0.06],  # Target profit percentage (e.g., 3%, 4%, 5%, 6%)
-                'stop_loss_threshold': [0.04, 0.06, 0.08, 0.10],  # Stop loss percentage (e.g., 4%, 6%, 8%, 10%)
+        # Save individual production parameter files for each strategy
+        for strategy, data in best_params_overall.items():
+            if 'optimal_parameters' in data:
+                # Construct the production config for the strategy
+                prod_config = {
+                    "strategy_multipliers": {
+                        strategy: {
+                            "profit": data['optimal_parameters'].get('profit_threshold', 1.0),
+                            "risk": data['optimal_parameters'].get('stop_loss_threshold', 1.0),
+                            # Use the correct confidence_req key based on strategy
+                            "confidence_req": data['optimal_parameters'].get(
+                                f'confidence_req_{strategy.lower().replace(" ", "_")}', 75)
+                        }
+                    },
+                    "signal_weights": {
+                        "trend": data['optimal_parameters'].get('weight_trend', 0.45),
+                        "momentum": data['optimal_parameters'].get('weight_momentum', 0.30),
+                        "volume": data['optimal_parameters'].get('weight_volume', 0.10),
+                        "sr": data['optimal_parameters'].get('weight_support_resistance', 0.05),
+                        "model": data['optimal_parameters'].get('weight_ai_model', 0.10)
+                    },
+                    "thresholds": {
+                        # Use the correct buy/sell_threshold keys based on strategy
+                        "buy_threshold": data['optimal_parameters'].get(
+                            f'buy_threshold_{strategy.lower().replace(" ", "_")}', 0.9),
+                        "sell_threshold": data['optimal_parameters'].get(
+                            f'sell_threshold_{strategy.lower().replace(" ", "_")}', -0.9)
+                    },
+                    "confidence_params": {
+                        "base_multiplier": data['optimal_parameters'].get('confidence_base_multiplier', 1.0),
+                        "confluence_weight": data['optimal_parameters'].get('confidence_confluence_weight', 1.0),
+                        "penalty_strength": data['optimal_parameters'].get('confidence_penalty_strength', 1.0)
+                    }
+                }
 
-                # Confidence requirements for each strategy
-                'confidence_req_balanced': [70, 75, 80],
-                'confidence_req_aggressive': [55, 60, 65],
-                'confidence_req_conservative': [80, 85, 90],
-                'confidence_req_swing': [65, 70, 75],
+                # Normalize any numpy types before saving
+                prod_config_normalized = self._normalize_numeric_values(prod_config)
 
-                # Indicator weights (ensure ProfessionalStockAdvisor uses these)
-                'weight_trend': [0.8, 1.0, 1.2],
-                'weight_momentum': [0.8, 1.0, 1.2],
-                'weight_volume': [0.7, 1.0, 1.3],
-                'weight_support_resistance': [0.6, 0.8, 1.0],
-                'weight_ai_model': [1.0, 1.2, 1.5],
+                file_name = f"stockwise_production_params_{strategy.lower().replace(' ', '_')}_{timestamp}.json"
+                file_path = os.path.join(self.configuration_files, file_name)
+                try:
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        json.dump(prod_config_normalized, f, indent=2)
+                    logging.info(f"✅ Saved production parameters for '{strategy}' to {file_path}")
+                except Exception as e:
+                    logging.error(f"❌ Failed to save production parameters for '{strategy}' to {file_path}: {e}")
 
-                # Strategy-specific thresholds
-                'buy_threshold_conservative': [2.0, 2.2, 2.5],
-                'sell_threshold_conservative': [-1.5, -1.8, -2.0],
-                'buy_threshold_balanced': [1.2, 1.4, 1.6],
-                'sell_threshold_balanced': [-1.0, -1.2, -1.5],
-                'buy_threshold_aggressive': [0.8, 1.0, 1.2],
-                'sell_threshold_aggressive': [-0.8, -1.0, -1.2],
-                'buy_threshold_swing': [1.4, 1.6, 1.8],
-                'sell_threshold_swing': [-1.2, -1.4, -1.6],
+        # Save the comprehensive calibration report
+        report_file_name = f"stockwise_calibration_{timestamp}.json"
+        report_file_path = os.path.join(self.configuration_files, report_file_name)
+
+        full_report = {
+            "metadata": {
+                "calibration_date": timestamp,
+                "config": self._normalize_numeric_values(self.config)  # Save the config used for this run
             },
-            'optimization_metric': 'net_profit',  # or 'win_rate', 'sharpe_ratio'
-            'num_symbols_to_test': 10,  # Number of top symbols to test in each window
-            'max_symbols_per_batch': 5,  # Process symbols in batches for stability
-            'walk_forward': {
-                'train_months': 12,
-                'test_months': 3,
-                'step_months': 3
-            },
-            'prediction_window_days': 7  # How many days into the future to predict for actual return calculation
+            "best_parameters_overall_summary": self._normalize_numeric_values(best_params_overall)
         }
 
-    def _generate_param_grid(self, advisor_params):
+        try:
+            with open(report_file_path, 'w', encoding='utf-8') as f:
+                json.dump(full_report, f, indent=2)
+            logging.info(f"✅ Saved comprehensive calibration report to {report_file_path}")
+        except Exception as e:
+            logging.error(f"❌ Failed to save calibration report to {report_file_path}: {e}")
+
+    def get_default_config(self):
         """
-        Generates a list of dictionaries, where each dictionary represents a unique
-        combination of advisor parameters.
+        Provides a flexible default configuration for calibration.
         """
+        return {
+            "stock_universe": "NASDAQ_100",
+            "market_cap_min": 1_000_000_000,
+            "price_min": 5.0,
+            "volume_min": 1_000_000,
+            "start_date": "2023-08-17", # Start date for historical data fetch
+            "end_date": "2025-07-17",   # End date for historical data fetch
+            "training_period": 365,     # Days for initial training data in each walk-forward window
+            "validation_period": 90,    # Days for testing/validation in each walk-forward window
+            "num_walk_forward_windows": 4, # Number of walk-forward validation windows
 
-        # We need to iterate over the ranges directly here, not just the keys from get_default_config.
-        # This function should be called with the output of get_parameter_space, not self.config['advisor_params']
-        # The structure of `advisor_params` when passed to this function will be different.
+            # Add walk_forward configuration
+            "walk_forward": {
+                "train_months": 12,
+                "test_months": 3,
+                "step_months": 3
+            },
 
-        # The parameter_space passed from optimize_strategy now contains the actual lists of values
-        # e.g., {'signal_weights': [...], 'buy_threshold': [...], 'sell_threshold': [...], ...}
+            "advisor_params": {
+                # These are the *ranges* for the parameters to be optimized
+                "investment_days": [7, 14, 21, 30, 60],
+                "profit_threshold": [0.03, 0.04, 0.05, 0.06], # As percentage, e.g., 0.03 = 3%
+                "stop_loss_threshold": [0.04, 0.06, 0.08, 0.10], # As percentage, e.g., 0.04 = 4%
+                # Strategy-specific thresholds
+                "confidence_req_balanced": [70, 75, 80],
+                "confidence_req_conservative": [80, 85, 90],
+                "confidence_req_aggressive": [60, 65, 70],
+                "confidence_req_swing_trading": [65, 70, 75],
 
-        # Instead of `keys = advisor_params.keys()` and `values = advisor_params.values()`,
-        # we need to explicitly extract each parameter list.
+                "buy_threshold_balanced": [0.8, 0.9, 1.0, 1.2], # Score thresholds for BUY/SELL
+                "sell_threshold_balanced": [-0.8, -0.9, -1.0, -1.2],
 
-        # This method's logic should be revised based on how generate_parameter_combinations is used.
-        # If generate_parameter_combinations is the one truly generating the full grid,
-        # then _generate_param_grid might become simpler or get refactored.
+                "buy_threshold_conservative": [1.0, 1.5, 2.0],
+                "sell_threshold_conservative": [-1.0, -1.5, -2.0],
 
-        # --- REVISED LOGIC FOR _generate_param_grid ---
-        # It looks like generate_parameter_combinations is the primary grid generator.
-        # So, _generate_param_grid might be redundant or needs to be adapted to what it actually should do.
-        # If _generate_param_grid is called by run_full_calibration_pipeline with self.config['advisor_params']
-        # and then that param_grid is filtered by strategy in optimize_strategy, it's more complex.
+                "buy_threshold_aggressive": [0.5, 0.6, 0.7, 0.8],
+                "sell_threshold_aggressive": [-0.5, -0.6, -0.7, -0.8],
 
-        # Let's assume the flow is:
-        # 1. run_calibration calls optimize_strategy for each strategy.
-        # 2. optimize_strategy calls get_parameter_space(strategy_type) to get the space for that strategy.
-        # 3. optimize_strategy then calls generate_parameter_combinations with THAT specific parameter_space.
+                "buy_threshold_swing_trading": [0.7, 0.8, 0.9],
+                "sell_threshold_swing_trading": [-0.7, -0.8, -0.9],
 
-        # Given this, _generate_param_grid as a standalone might be misinterpreted or no longer needed.
-        # If it *is* called by run_full_calibration_pipeline, it should only generate the non-strategy-specific
-        # parameters and then `optimize_strategy` handles the strategy-specific ones.
+                # Global signal weights (can be optimized if desired, sum to 1.0)
+                "weight_trend": [0.45], # Example: Fixed for now, can be a range
+                "weight_momentum": [0.30],
+                "weight_volume": [0.10],
+                "weight_support_resistance": [0.05],
+                "weight_ai_model": [0.10],
 
-        # For clarity and to fix the bug, let's ensure generate_parameter_combinations is used correctly.
-        # The issue is that `_generate_param_grid` is still referencing old structure for `advisor_params`.
+                # Confidence parameters
+                "confidence_base_multiplier": [0.85, 1.0, 1.15],
+                "confidence_confluence_weight": [0.8, 1.0, 1.2],
+                "confidence_penalty_strength": [0.8, 0.9, 1.0]
+            },
+            "test_config": {
+                "sanity": {"stocks": 2, "test_points": 10, "param_samples": 2},
+                "small": {"stocks": 10, "test_points": 100, "param_samples": 10},
+                "medium": {"stocks": 12, "test_points": 200, "param_samples": 20},
+                "full": {"stocks": 20, "test_points": 300, "param_samples": 24}
+            },
+            "prediction_window_days": 7, # How many days into the future to check actual return
+            "evaluation_thresholds": {
+                "buy_profit_min": 3.0,     # Min % return for a 'BUY' to be considered profitable
+                "sell_loss_min": -2.0,     # Max % loss for a 'SELL/AVOID' to be considered successful avoidance
+                "wait_max_change": 2.0     # Max % change for a 'WAIT' to be considered correct (sideways)
+            }
+        }
 
-        # Instead of having a separate `_generate_param_grid` in the class that relies on the `config['advisor_params']`
-        # which is flat and doesn't contain the per-strategy thresholds,
-        # the `optimize_strategy` function should directly call `generate_parameter_combinations`
-        # with the result of `get_parameter_space(strategy_type)`.
+    # From ChatGPT
+    # def _generate_param_grid(self, advisor_params, strategy_type):
+    #     """
+    #     Generate parameter grid properly for a given strategy type.
+    #     """
+    #     strategy_lower = strategy_type.lower().replace(" ", "_")
+    #
+    #     param_space = {
+    #         "investment_days": advisor_params["investment_days"],
+    #         "profit_threshold": advisor_params["profit_threshold"],
+    #         "stop_loss_threshold": advisor_params["stop_loss_threshold"],
+    #         "buy_threshold": advisor_params.get(f"buy_threshold_{strategy_lower}", [0.9]),
+    #         "sell_threshold": advisor_params.get(f"sell_threshold_{strategy_lower}", [-0.9]),
+    #         "confidence_req": advisor_params.get(f"confidence_req_{strategy_lower}", [75]),
+    #         "weight_trend": advisor_params["weight_trend"],
+    #         "weight_momentum": advisor_params["weight_momentum"],
+    #         "weight_volume": advisor_params["weight_volume"],
+    #         "weight_support_resistance": advisor_params["weight_support_resistance"],
+    #         "weight_ai_model": advisor_params["weight_ai_model"],
+    #         "confidence_base_multiplier": advisor_params["confidence_base_multiplier"],
+    #         "confidence_confluence_weight": advisor_params["confidence_confluence_weight"],
+    #         "confidence_penalty_strength": advisor_params["confidence_penalty_strength"],
+    #     }
+    #
+    #     return self.generate_parameter_combinations(param_space)
 
-        # Therefore, I recommend the following:
-        # 1. Remove the `_generate_param_grid` method from StockWiseAutoCalibrator.
-        # 2. In `optimize_strategy`, ensure `generate_parameter_combinations` is called with
-        #    `parameter_space = self.get_parameter_space(strategy_type)`.
+    def _generate_param_grid(self, advisor_params, strategy_type):
+        """
+        Generate parameter grid properly for a given strategy type.
+        This method constructs the specific parameter space for a single strategy
+        and then uses `generate_parameter_combinations` to get all combinations.
+        """
+        strategy_lower = strategy_type.lower().replace(" ", "_")
 
-        # If `_generate_param_grid` is used elsewhere, you'll need to adapt it or move its logic.
-        # Based on the current flow in `run_full_calibration_pipeline` and `optimize_strategy`,
-        # `_generate_param_grid` seems to be an artifact that's creating a flat list of parameters
-        # before the per-strategy optimization, which is not what we want for the specific thresholds.
+        param_space = {
+            "investment_days": advisor_params["investment_days"],
+            "profit_threshold": advisor_params["profit_threshold"],
+            "stop_loss_threshold": advisor_params["stop_loss_threshold"],
+            # Ensure these are correctly pulling from the strategy-specific keys
+            "buy_threshold": advisor_params.get(f"buy_threshold_{strategy_lower}", [0.9]),
+            "sell_threshold": advisor_params.get(f"sell_threshold_{strategy_lower}", [-0.9]),
+            "confidence_req": advisor_params.get(f"confidence_req_{strategy_lower}", [75]),
+            "weight_trend": advisor_params["weight_trend"],
+            "weight_momentum": advisor_params["weight_momentum"],
+            "weight_volume": advisor_params["weight_volume"],
+            "weight_support_resistance": advisor_params["weight_support_resistance"],
+            "weight_ai_model": advisor_params["weight_ai_model"],
+            "confidence_base_multiplier": advisor_params["confidence_base_multiplier"],
+            "confidence_confluence_weight": advisor_params["confidence_confluence_weight"],
+            "confidence_penalty_strength": advisor_params["confidence_penalty_strength"],
+        }
 
-        # Let's adjust `generate_parameter_combinations` to explicitly take a parameter_space
-        # that includes the nested confidence_params and strategy-specific thresholds.
-
-        logging.info(f"Generating parameter combinations for advisor_params: {len(advisor_params)} keys.")
-
-        # Filter out signal_weights and confidence_params for separate handling, as they are nested.
-        # This function should convert the flat advisor_params (from default config) into a grid.
-        # The strategy-specific thresholds need to be pulled out correctly.
-
-        # First, process non-nested parameters
-        simple_params = {k: v for k, v in advisor_params.items() if not isinstance(v, dict) and not k.startswith(
-            ('buy_threshold_', 'sell_threshold_', 'confidence_req_'))}
-
-        # Extract strategy-agnostic parameters that are lists
-        simple_keys = list(simple_params.keys())
-        simple_values = list(simple_params.values())
-        simple_combinations = list(product(*simple_values))
-
-        grid = []
-        for combo in simple_combinations:
-            grid.append(dict(zip(simple_keys, combo)))
-
-        # Add strategy types to the grid
-        strategy_types = ["Conservative", "Balanced", "Aggressive", "Swing Trading"]
-        final_grid = []
-        for params in grid:
-            for strategy in strategy_types:
-                new_params = params.copy()
-                new_params['strategy_type'] = strategy
-
-                # Dynamically add strategy-specific thresholds and confidence requirements
-                strategy_lower = strategy.lower().replace(' ', '_')
-
-                # Fetch ranges from advisor_params (which comes from get_default_config)
-                buy_threshold_range = advisor_params.get(f'buy_threshold_{strategy_lower}', [0.0])
-                sell_threshold_range = advisor_params.get(f'sell_threshold_{strategy_lower}', [0.0])
-                confidence_req_range = advisor_params.get(f'confidence_req_{strategy_lower}', [75])
-
-                # Since this is generating the *initial* grid for `run_full_calibration_pipeline`,
-                # and `generate_parameter_combinations` handles the detailed iteration,
-                # this function should just add placeholder values or generate combinations of the *ranges*.
-                # This current _generate_param_grid implementation is a bit confusing and might not align
-                # with the granular per-strategy optimization.
-
-                # I recommend relying solely on `generate_parameter_combinations` (called by `optimize_strategy`)
-                # to build the grid for each strategy, based on `get_parameter_space`.
-                # If `run_full_calibration_pipeline` still calls this `_generate_param_grid`, it needs revision.
-
-                # Let's assume for now that `_generate_param_grid` is primarily for generating the
-                # *advisor-level* parameters, not the strategy-specific ones, which are handled later.
-                # If so, the `buy_threshold` and `sell_threshold` in the params dict
-                # passed to `apply_parameters_to_advisor` needs to come from `generate_parameter_combinations`.
-
-                # For the current `_generate_param_grid` in your provided code,
-                # remove the buy/sell/confidence_req assignments from here.
-                # The assumption is that these will be handled when calling `generate_parameter_combinations`
-                # inside `optimize_strategy`.
-
-                # Current _generate_param_grid in your file is NOT updated to iterate over
-                # strategy-specific thresholds. It's just picking [0].
-                # This is the root of your '999' buy/sell threshold problem.
-
-                # Given the latest `algo_configurator.py` you sent,
-                # the `_generate_param_grid` function is still defined as:
-                #    `new_params['buy_threshold'] = advisor_params.get(f'buy_threshold_{strategy_lower}', [0.0])[0]`
-                # This is the line that needs to change.
-
-                # The `_generate_param_grid` function (the one you provided me) needs to be completely replaced.
-                # The correct approach is to have `generate_parameter_combinations` iterate over ALL the
-                # relevant parameters (including strategy-specific ones) *after* `get_parameter_space`
-                # has defined them.
-
-                # I will provide the *full* updated `algo_configurator.py` that fixes this.
-
-                # For the time being, to address the direct question, no, `_generate_param_grid` is NOT updated
-                # to iterate over strategy-specific buy/sell/confidence parameters.
-                # It currently picks the first value `[0]` from the range in `advisor_params`, which is wrong.
-                # This means it's not generating all the combinations for these specific thresholds.
-
-                # The `get_parameter_space` function *is* updated to return the correct combined space,
-                # but `_generate_param_grid` does not use it in that form.
-                # Instead, `optimize_strategy` calls `generate_parameter_combinations` with `get_parameter_space`.
-                # This means the `_generate_param_grid` method is essentially obsolete if `run_full_calibration_pipeline`
-                # is not calling it with the full parameter space.
-
-                # Let's simplify and make the flow consistent:
-                # 1. `get_default_config` defines the ranges.
-                # 2. `get_parameter_space` returns the *specific* ranges for a given strategy.
-                # 3. `generate_parameter_combinations` iterates over these specific ranges.
-                # 4. `optimize_strategy` calls `generate_parameter_combinations` with the result of `get_parameter_space`.
-
-                # So, the `_generate_param_grid` in your script as currently written
-                # needs to be REMOVED or its logic entirely replaced to work with the new flow.
-                # I'll include the full corrected file in the next section.
-                pass  # This needs to be replaced with the correct logic.
-        return final_grid  # This is just a placeholder for the incorrect existing function.
-
-        # keys = advisor_params.keys()
-        # values = advisor_params.values()
-        #
-        # # Generate all combinations of parameters
-        # param_combinations = list(product(*values))
-        #
-        # # Convert combinations into a list of dictionaries
-        # grid = []
-        # for combo in param_combinations:
-        #     grid.append(dict(zip(keys, combo)))
-        #
-        # # Add strategy types to the grid if they are not explicitly in advisor_params
-        # # This assumes 'strategy_type' is not passed as an optimizable parameter,
-        # # but rather that we want to test optimized parameters for each strategy type.
-        # # If you want to optimize strategy type itself, include it in advisor_params.
-        # strategy_types = ["Conservative", "Balanced", "Aggressive", "Swing Trading"]
-        # final_grid = []
-        # for params in grid:
-        #     for strategy in strategy_types:
-        #         new_params = params.copy()
-        #         new_params['strategy_type'] = strategy
-        #         final_grid.append(new_params)
-        #
-        # logging.info(f"Generated {len(final_grid)} total parameter combinations including strategies.")
-        # return final_grid
+        # Now, use the generic generator to create the full grid for this specific strategy
+        return self.generate_parameter_combinations(param_space)
 
     def evaluate_performance(self, backtest_results, optimization_metric='net_profit'):
         """
@@ -470,190 +400,171 @@ class StockWiseAutoCalibrator:
 
     def run_calibration(self, test_size='medium', strategies=['balanced']):
         """
-        Main calibration execution
-
-        Args:
-            test_size: 'small', 'medium', 'full', or 'sanity'
-            strategies: List of strategy types to optimize
+        Main function to run the auto-calibration process.
         """
-        # --- LOGGING SETUP moved here for controlled execution ---
-        log_directory = 'configuration_files/'
-        os.makedirs(log_directory, exist_ok=True)
-        timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
-        log_file_name = f'calibration_progress_{timestamp_str}.log'
-        log_file_path = os.path.join(log_directory, log_file_name)
-
-        root_logger = logging.getLogger()
-        # Remove existing handlers to prevent duplicate output if this function is called multiple times
-        for handler in list(root_logger.handlers):
-            root_logger.removeHandler(handler)
-            if isinstance(handler, logging.FileHandler):
-                try:
-                    handler.close() # Ensure file handles are closed
-                except Exception as e:
-                    pass # Ignore errors if handler is already closed or invalid
-
-        root_logger.setLevel(logging.INFO) # Set overall logging level to INFO
-
-        formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s')
-
-        file_handler = logging.FileHandler(log_file_path, mode='w', encoding='utf-8')
-        file_handler.setFormatter(formatter)
-        root_logger.addHandler(file_handler)
-
-        stream_handler = logging.StreamHandler(sys.stdout)
-        stream_handler.setFormatter(formatter)
-        root_logger.addHandler(stream_handler)
-
-        # Suppress specific noisy library logs
-        logging.getLogger('yfinance').setLevel(logging.WARNING)
-        logging.getLogger('urllib3').setLevel(logging.WARNING)
-        logging.getLogger('numexpr').setLevel(logging.WARNING)
-        # --- END LOGGING SETUP ---
-
-        logging.info(f"🚀 Starting StockWise Auto-Calibration ({test_size} test)")
-        logging.info("=" * 60)
+        logging.info("🚀 Starting StockWise Auto-Calibration ({test_size} test)")
+        logging.info("============================================================")
         logging.info(f"Strategies to optimize: {', '.join(strategies)}")
 
-        size_config = self.get_test_size_config(test_size)
+        # Adjust configuration based on test size
+        test_config = self.config['test_config'].get(test_size, self.config['test_config']['medium'])
+        num_stocks = test_config['stocks']
+        num_test_points = test_config['test_points']
+        param_samples = test_config['param_samples']
 
-        original_walk_forward_config = self.config['walk_forward'].copy()
+        # Store original walk_forward config to restore later
+        original_wf_config = self.config['walk_forward'].copy()
 
+        # Temporarily adjust walk-forward config for smaller tests if specified
         if test_size == 'sanity':
-            self.config['walk_forward']['train_months'] = 2
-            self.config['walk_forward']['test_months'] = 1
-            self.config['walk_forward']['step_months'] = 12
-            logging.info("❗ Running SANITY test: Walk-forward window parameters adjusted for minimal run.")
-            logging.info(
-                f"Sanity Walk-Forward Config: Train={self.config['walk_forward']['train_months']}m, Test={self.config['walk_forward']['test_months']}m, Step={self.config['walk_forward']['step_months']}m")
+            self.config['walk_forward']['train_months'] = 2  # 2 months train
+            self.config['walk_forward']['test_months'] = 1  # 1 month test
+            self.config['walk_forward']['step_months'] = 1  # 1 month step
+            self.config['num_walk_forward_windows'] = 2  # Fewer windows for sanity
+        elif test_size == 'small':
+            self.config['walk_forward']['train_months'] = 6  # 6 months train
+            self.config['walk_forward']['test_months'] = 2  # 2 months test
+            self.config['walk_forward']['step_months'] = 2  # 2 month step
+            self.config['num_walk_forward_windows'] = 3  # More windows for small
+
+        logging.info(f"⚙️ Configuring test parameters for size: '{test_size}'")
+        logging.info(
+            f"Selected config: Stocks={num_stocks}, Test Points={num_test_points}, Param Samples={param_samples}")
 
         logging.info("📊 Step 1: Preparing data...")
-        stocks = self.get_stock_universe(size_config['stocks'])
-        logging.info(f"Loaded stock universe: {len(stocks)} symbols.")
-        timestamps = self.generate_test_timestamps(size_config['test_points'])
-        logging.info(
-            f"Generated {len(timestamps)} test timestamps between {self.config['start_date']} and {self.config['end_date']}.")
-        self.validation_windows = self.create_walk_forward_windows()
-        logging.info(f"Created {len(self.validation_windows)} walk-forward validation windows.")
+        stock_universe = self.get_stock_universe(num_stocks=num_stocks)
+        test_timestamps = self.generate_test_timestamps(num_test_points=num_test_points)
+        validation_windows = self.create_walk_forward_windows()
 
-        logging.info(
-            f"✅ Data Preparation Complete: Loaded {len(stocks)} stocks, {len(timestamps)} timestamps, {len(self.validation_windows)} validation windows")
+        # Ensure that validation_windows actually contains windows
+        if not validation_windows:
+            logging.error("❌ No walk-forward validation windows could be created. Aborting calibration.")
+            return self.get_empty_metrics()  # Return empty if no windows to process
 
+        logging.info("✅ Data Preparation Complete: Loaded {} stocks, {} timestamps, {} validation windows".format(
+            len(stock_universe), len(test_timestamps), len(validation_windows)
+        ))
+
+        # Perform optimization for each selected strategy
         for strategy in strategies:
-            logging.info(f"\n🎯 Step 2: Optimizing {strategy.upper()} strategy...")
-            best_params = self.optimize_strategy(strategy, stocks, timestamps, self.validation_windows, size_config)
-            self.best_parameters[strategy] = best_params
-            logging.info(
-                f"🏆 Optimization for {strategy.upper()} completed. Best Fitness Score: {best_params['fitness_score']:.2f}")
+            self.optimize_strategy(strategy, stock_universe, test_timestamps, validation_windows, param_samples)
 
-        self.config['walk_forward'] = original_walk_forward_config
-        logging.info("🔄 Restored original walk-forward configuration.")
-
-        # Explicitly close file handler after run_stockwise_calibration completes
-        # This ensures the file is released before the function returns.
-        for handler in list(root_logger.handlers):
-            if isinstance(handler, logging.FileHandler):
-                try:
-                    handler.close()
-                    root_logger.removeHandler(handler)
-                except Exception as e:
-                    logging.warning(f"Error closing log handler at end of run_calibration: {e}")
+        # Restore original walk_forward config
+        self.config['walk_forward'] = original_wf_config
+        self.config['num_walk_forward_windows'] = original_wf_config.get('num_walk_forward_windows',
+                                                                         4)  # Restore default if not explicitly set
 
         return self.best_parameters
 
     def get_parameter_space(self, strategy_type):
-        """Define parameter space for optimization"""
-        logging.info(f"Defining parameter space for {strategy_type} strategy.")
-        base_spaces = {
-            'signal_weights': [
-                {'trend': 0.45, 'momentum': 0.30, 'volume': 0.10, 'sr': 0.05, 'model': 0.10},
-                {'trend': 0.40, 'momentum': 0.35, 'volume': 0.10, 'sr': 0.05, 'model': 0.10},
-                {'trend': 0.50, 'momentum': 0.25, 'volume': 0.10, 'sr': 0.05, 'model': 0.10},
-                {'trend': 0.35, 'momentum': 0.35, 'volume': 0.15, 'sr': 0.05, 'model': 0.10},
-                {'trend': 0.40, 'momentum': 0.30, 'volume': 0.15, 'sr': 0.10, 'model': 0.05},
-                {'trend': 0.30, 'momentum': 0.40, 'volume': 0.15, 'sr': 0.10, 'model': 0.05}
-            ],
-            'confidence_params': {
-                'base_multiplier': [0.85, 0.90, 0.95, 1.0, 1.05],
-                'confluence_weight': [0.8, 0.9, 1.0, 1.1, 1.2],
-                'penalty_strength': [0.8, 0.9, 1.0, 1.1, 1.2]
-            },
-            # Add other general parameters here that are optimized across strategies, e.g. investment_days
-            'investment_days': [7, 14, 21, 30, 60],
-            'profit_threshold': [0.03, 0.04, 0.05, 0.06],
-            'stop_loss_threshold': [0.04, 0.06, 0.08, 0.10],
-        }
+        """
+        Dynamically generates the parameter space for a given strategy type.
+        This ensures only relevant parameters are combined for each strategy.
+        """
+        param_space = {}
+        advisor_params = self.config['advisor_params']
 
-        strategy_specific_params = {
-            'conservative': {
-                'buy_threshold': [2.0, 2.2, 2.5, 2.8, 3.0],
-                'sell_threshold': [-1.5, -1.8, -2.0, -2.2],
-                'min_confidence': [75, 78, 80, 82, 85]
-            },
-            'balanced': {
-                'buy_threshold': [1.2, 1.4, 1.6, 1.8, 2.0],
-                'sell_threshold': [-1.0, -1.2, -1.5, -1.8],
-                'min_confidence': [68, 70, 72, 75, 78]
-            },
-            'aggressive': {
-                'buy_threshold': [0.8, 1.0, 1.2, 1.4, 1.6],
-                'sell_threshold': [-0.8, -1.0, -1.2, -1.4],
-                'min_confidence': [60, 63, 65, 68, 70]
-            },
-            'swing': {
-                'buy_threshold': [1.4, 1.6, 1.8, 2.0, 2.2],
-                'sell_threshold': [-1.2, -1.4, -1.6, -1.8],
-                'min_confidence': [68, 70, 72, 75, 78]
-            }
-        }
+        # Global parameters applicable to all strategies
+        param_space['investment_days'] = advisor_params['investment_days']
+        param_space['profit_threshold'] = advisor_params['profit_threshold']
+        param_space['stop_loss_threshold'] = advisor_params['stop_loss_threshold']
 
-        # Combine base spaces with strategy-specific parameters for the given strategy_type
-        full_space = {**base_spaces, **strategy_specific_params[strategy_type.lower().replace(' ', '_')]}
-        return full_space
+        # Signal weights (assuming these are global for now, but can be strategy-specific)
+        param_space['weight_trend'] = advisor_params['weight_trend']
+        param_space['weight_momentum'] = advisor_params['weight_momentum']
+        param_space['weight_volume'] = advisor_params['weight_volume']
+        param_space['weight_support_resistance'] = advisor_params['weight_support_resistance']
+        param_space['weight_ai_model'] = advisor_params['weight_ai_model']
 
-    def get_stock_universe(self, stock_count):
-        """Get NASDAQ 100 stocks with filtering"""
-        logging.info(f"Retrieving stock universe. Desired count: {stock_count}")
+        # Confidence parameters (assuming global for now, but can be strategy-specific)
+        param_space['confidence_base_multiplier'] = advisor_params['confidence_base_multiplier']
+        param_space['confidence_confluence_weight'] = advisor_params['confidence_confluence_weight']
+        param_space['confidence_penalty_strength'] = advisor_params['confidence_penalty_strength']
 
+        # Strategy-specific thresholds
+        strategy_lower = strategy_type.lower().replace(' ', '_')
+
+        # Ensure the correct key exists before adding to param_space
+        if f'confidence_req_{strategy_lower}' in advisor_params:
+            param_space[f'confidence_req_{strategy_lower}'] = advisor_params[f'confidence_req_{strategy_lower}']
+
+        if f'buy_threshold_{strategy_lower}' in advisor_params:
+            param_space[f'buy_threshold_{strategy_lower}'] = advisor_params[f'buy_threshold_{strategy_lower}']
+
+        if f'sell_threshold_{strategy_lower}' in advisor_params:
+            param_space[f'sell_threshold_{strategy_lower}'] = advisor_params[f'sell_threshold_{strategy_lower}']
+
+        param_space['strategy_type'] = [strategy_type]  # Add the strategy type itself to the parameters
+
+        return param_space
+
+    def get_stock_universe(self, num_stocks=None):
+        """
+        Retrieves a list of NASDAQ-100 symbols, filtering by market cap, price, and volume.
+        """
+        logging.info(f"Retrieving stock universe. Desired count: {num_stocks if num_stocks else 'All'}")
+
+        # This list is a static approximation for testing. In a real scenario,
+        # you'd fetch this from a reliable source like a financial API.
+        # Ensure these symbols generally have enough historical data for the test period.
         nasdaq_100_symbols = [
-            'AAPL', 'ABNB', 'ADBE', 'ADI', 'ADP', 'ADSK', 'AEP', 'ALGN', 'AMAT', 'AMD', 'AMGN',
-            'AMZN', 'ANSS', 'ARM', 'ASML', 'ATVI', 'AVGO', 'BGNE', 'BIIB', 'BKNG', 'CCEP', 'CDNS',
-            'CHTR', 'CMCSA', 'COST', 'CPRT', 'CRWD', 'CSCO', 'CSGP', 'CSX', 'CTSH', 'DASH', 'DDOG',
-            'DLTR', 'DXCM', 'EA', 'ENPH', 'EXC', 'FANG', 'FAST', 'FTNT', 'GEHC', 'GILD', 'GOOG',
-            'GOOGL', 'HON', 'ILMN', 'INTC', 'INTU', 'ISRG', 'JD', 'KDP', 'KHC', 'KLAC', 'LRCX',
-            'LULU', 'LYFT', 'MCHP', 'MDLZ', 'MELI', 'META', 'MNST', 'MRNA', 'MRVL', 'MSFT', 'MU',
-            'NFLX', 'NVDA', 'NXPI', 'ODFL', 'ON', 'ORLY', 'PAYX', 'PCAR', 'PDD', 'PEP', 'PYPL',
-            'QCOM', 'REGN', 'RIVN', 'ROKU', 'ROST', 'SBUX', 'SIRI', 'SMCI', 'SNPS', 'TEAM', 'TMUS',
-            'TSLA', 'TTD', 'TXN', 'UBER', 'VRSK', 'VRTX', 'WBA', 'WBD', 'XEL', 'ZM', 'ZS'
+            "AAPL", "MSFT", "AMZN", "GOOGL", "GOOG", "NVDA", "TSLA", "META", "ADBE", "NFLX",
+            "CMCSA", "PEP", "COST", "AMD", "INTC", "CSCO", "QCOM", "AMGN", "SBUX", "MDLZ",
+            "PYPL", "INTU", "TXN", "AMAT", "CHTR", "GILD", "VRTX", "BKNG", "FISV", "ADP",
+            "ISRG", "REGN", "ATVI", "TMUS", "CERN", "KHC", "ADSK", "ILMN", "LRCX", "WBA",
+            "MNST", "JD", "BIDU", "NTES", "MELI", "SNPS", "CRWD", "MAR", "LULU", "ROST",
+            "EXC", "XEL", "AEP", "PCAR", "DLTR", "SWKS", "ASML", "ORLY", "CDNS", "CTAS",
+            "MCHP", "IDXX", "FAST", "CPRT", "MRNA", "SPLK", "VRSK", "SGEN", "DXCM", "ANSS",
+            "WDAY", "TCOM", "BIIB", "ODFL", "PDD", "TEAM", "KLAC", "PAYX", "PTON", "MRVL",
+            "AZN", "ZM", "OKTA", "PENN", "DDOG", "ZS", "DOCU", "NFLX", "SPLG", "SQ",
+            "ZI", "CRSP", "VEEV", "OKTA", "DDOG", "ZS", "FSLR", "ENPH", "PLUG", "ALGN"
         ]
 
-        if stock_count == 'all':
-            logging.info("Selected all NASDAQ 100 symbols.")
-            return nasdaq_100_symbols
+        # Filter symbols based on a very simplified criteria for a demo
+        # In a real scenario, you'd fetch current market data for these filters.
+        # For testing purposes, we'll just simulate a selection.
+        selected_symbols = nasdaq_100_symbols  # Start with all
+
+        if num_stocks and len(selected_symbols) > num_stocks:
+            # For consistent testing, use a fixed random seed or just take the first N
+            selected_symbols = sorted(selected_symbols)[:num_stocks]  # Deterministic subset
+            logging.info(f"Selected a subset of {num_stocks} stocks for testing.")
         else:
-            selected_stocks = nasdaq_100_symbols[:min(stock_count, len(nasdaq_100_symbols))]
-            logging.info(f"Selected a subset of {len(selected_stocks)} stocks for testing.")
-            return selected_stocks
+            logging.info(f"Using all {len(selected_symbols)} available stocks.")
 
-    def generate_test_timestamps(self, test_points):
-        """Generate evenly spaced test timestamps"""
-        logging.info(f"Generating {test_points} evenly spaced test timestamps.")
-        start_date = pd.Timestamp(self.config['start_date'])
-        end_date = pd.Timestamp(self.config['end_date'])
+        logging.info(f"Loaded stock universe: {len(selected_symbols)} symbols.")
+        return selected_symbols
 
-        business_days = pd.bdate_range(start=start_date, end=end_date)
-        logging.info(f"Found {len(business_days)} business days between {start_date.date()} and {end_date.date()}.")
+    def generate_test_timestamps(self, num_test_points):
+        """
+        Generates a list of evenly spaced test timestamps within the calibration range.
+        """
+        start = datetime.strptime(self.config['start_date'], '%Y-%m-%d').date()
+        end = datetime.strptime(self.config['end_date'], '%Y-%m-%d').date()
+        logging.info(f"Generating {num_test_points} evenly spaced test timestamps.")
 
-        if test_points >= len(business_days):
-            logging.info(
-                "Number of test points is greater than or equal to total business days. Using all business days.")
-            return business_days.tolist()
+        business_days = pd.bdate_range(start=start, end=end)
+        logging.info(f"Found {len(business_days)} business days between {start} and {end}.")
 
-        step = max(1, len(business_days) // test_points)
-        selected_dates = business_days[::step][:test_points]
+        if len(business_days) < num_test_points:
+            logging.warning(f"Not enough business days ({len(business_days)}) to generate {num_test_points} test points. Using all available business days.")
+            selected_dates = business_days.tolist()
+        else:
+            step = max(1, len(business_days) // num_test_points)
+            selected_dates = business_days[::step].tolist()
+            # Ensure we have exactly num_test_points and it ends near the desired end
+            if len(selected_dates) > num_test_points:
+                selected_dates = selected_dates[:num_test_points]
+            elif len(selected_dates) < num_test_points:
+                # Add more dates if needed, taking from the end
+                missing = num_test_points - len(selected_dates)
+                if len(business_days) > len(selected_dates) + missing:
+                    selected_dates.extend(business_days[-missing:].tolist())
+                selected_dates = sorted(list(set(selected_dates))) # Remove duplicates and sort
+
         logging.info(f"Selected {len(selected_dates)} timestamps with a step of {step} days.")
-
-        return [date.date() for date in selected_dates]
+        logging.info(f"Generated {len(selected_dates)} test timestamps between {selected_dates[0]} and {selected_dates[-1]}.")
+        return selected_dates
 
     def get_timestamps_in_window(self, start_date, end_date):
         """Get timestamps within a specific window"""
@@ -664,207 +575,236 @@ class StockWiseAutoCalibrator:
         return [date.date() for date in selected_dates]
 
     def apply_parameters_to_advisor(self, parameters):
-        """Apply parameter set to the advisor instance"""
+        """Apply a parameter set to the advisor; normalize strategy-scoped keys."""
         logging.debug(f"Applying parameters to advisor: {parameters}")
 
-        # Update the current strategy in the advisor
-        if 'strategy_type' in parameters:
-            self.advisor.current_strategy = parameters['strategy_type']
-            logging.debug(f"Advisor current strategy set to: {self.advisor.current_strategy}")
+        # Determine current strategy
+        strategy_type = parameters.get('strategy_type')
+        if isinstance(strategy_type, list):  # when coming from param_space
+            strategy_type = strategy_type[0]
+        if not strategy_type:
+            raise ValueError("Parameter set missing 'strategy_type'.")
 
-        # Update signal weights
-        if hasattr(self.advisor, 'signal_weights') and 'signal_weights' in parameters:
-            # Directly use the signal_weights dictionary from parameters if it exists
-            self.advisor.signal_weights = parameters['signal_weights']
-            logging.debug(f"Advisor signal weights set to: {self.advisor.signal_weights}")
-        elif hasattr(self.advisor, 'signal_weights'):
-            # Fallback for individual weights if 'signal_weights' dict isn't provided directly
-            self.advisor.signal_weights = {
-                'trend': parameters.get('weight_trend', self.advisor.signal_weights.get('trend', 1.0)),
-                'momentum': parameters.get('weight_momentum', self.advisor.signal_weights.get('momentum', 1.0)),
-                'volume': parameters.get('weight_volume', self.advisor.signal_weights.get('volume', 1.0)),
-                'support_resistance': parameters.get('weight_support_resistance',
-                                                     self.advisor.signal_weights.get('support_resistance', 1.0)),
-                'ai_model': parameters.get('weight_ai_model', self.advisor.signal_weights.get('ai_model', 1.0))
-            }
-            logging.debug(f"Advisor signal weights (individual) set to: {self.advisor.signal_weights}")
+        self.advisor.current_strategy = strategy_type
 
-        # Update the specific settings for the CURRENT strategy within advisor.strategy_settings
-        current_strategy_key = self.advisor.current_strategy
-        if current_strategy_key in self.advisor.strategy_settings:
-            strategy_dict_to_update = self.advisor.strategy_settings[current_strategy_key]
+        strategy_lower = strategy_type.lower().replace(' ', '_')
 
-            # Update profit, risk, and confidence_req if they are in the parameters dict
-            strategy_dict_to_update['profit'] = parameters.get('profit_threshold',
-                                                               strategy_dict_to_update.get('profit', 1.0))
-            strategy_dict_to_update['risk'] = parameters.get('stop_loss_threshold',
-                                                             strategy_dict_to_update.get('risk', 1.0))
+        # Normalize thresholds (accept both generic and strategy-specific keys)
+        buy = parameters.get(f"buy_threshold_{strategy_lower}",
+                             parameters.get("buy_threshold"))
+        sell = parameters.get(f"sell_threshold_{strategy_lower}",
+                              parameters.get("sell_threshold"))
+        min_conf = parameters.get(f"confidence_req_{strategy_lower}",
+                                  parameters.get("min_confidence"))
 
-            # Use the specific confidence requirement for the current strategy (from 'min_confidence' in params)
-            strategy_dict_to_update['confidence_req'] = parameters.get('min_confidence',
-                                                                       strategy_dict_to_update.get('confidence_req',
-                                                                                                   75))
+        # Push thresholds into advisor (if present)
+        if buy is not None:
+            setattr(self.advisor, "current_buy_threshold", float(buy))
+        if sell is not None:
+            setattr(self.advisor, "current_sell_threshold", float(sell))
 
-            # Update buy_threshold and sell_threshold for the current strategy (from 'buy_threshold' and 'sell_threshold' in params)
-            strategy_dict_to_update['buy_threshold'] = parameters.get('buy_threshold',
-                                                                      strategy_dict_to_update.get('buy_threshold', 0.0))
-            strategy_dict_to_update['sell_threshold'] = parameters.get('sell_threshold',
-                                                                       strategy_dict_to_update.get('sell_threshold',
-                                                                                                   0.0))
+        # Update strategy multipliers/confidence in advisor.strategy_settings
+        if hasattr(self.advisor, "strategy_settings") and strategy_type in self.advisor.strategy_settings:
+            s = self.advisor.strategy_settings[strategy_type]
+            if "profit_threshold" in parameters:
+                s["profit"] = float(parameters["profit_threshold"])
+            if "stop_loss_threshold" in parameters:
+                s["risk"] = float(parameters["stop_loss_threshold"])
+            if min_conf is not None:
+                s["confidence_req"] = float(min_conf)
 
-            logging.debug(f"Advisor strategy settings for {current_strategy_key} updated to: {strategy_dict_to_update}")
-        else:
-            logging.error(
-                f"❌ Strategy '{current_strategy_key}' not found in advisor's strategy_settings during parameter application. This indicates an issue in default settings or strategy naming.")
+        # Update signal weights if provided
+        if hasattr(self.advisor, "signal_weights"):
+            sw = dict(self.advisor.signal_weights)
+            sw["trend"] = parameters.get("weight_trend", sw.get("trend"))
+            sw["momentum"] = parameters.get("weight_momentum", sw.get("momentum"))
+            sw["volume"] = parameters.get("weight_volume", sw.get("volume"))
+            sw["support_resistance"] = parameters.get("weight_support_resistance", sw.get("support_resistance"))
+            sw["ai_model"] = parameters.get("weight_ai_model", sw.get("ai_model"))
+            # strip Nones
+            self.advisor.signal_weights = {k: v for k, v in sw.items() if v is not None}
 
-        # Apply investment days
-        self.advisor.investment_days = parameters.get('investment_days', self.advisor.investment_days)
-        logging.debug(f"Advisor investment days set to: {self.advisor.investment_days}")
+        # Confidence shaping parameters (global)
+        for k_cfg, k_param in [
+            ("confidence_base_multiplier", "confidence_base_multiplier"),
+            ("confidence_confluence_weight", "confidence_confluence_weight"),
+            ("confidence_penalty_strength", "confidence_penalty_strength"),
+        ]:
+            if parameters.get(k_param) is not None:
+                setattr(self.advisor, k_cfg, float(parameters[k_param]))
 
-        # Apply confidence parameters if the advisor has them
-        if hasattr(self.advisor, 'confidence_params') and 'confidence_params' in parameters:
-            self.advisor.confidence_params = parameters['confidence_params']
-            logging.debug(f"Advisor confidence parameters set to: {self.advisor.confidence_params}")
-        elif hasattr(self.advisor, 'confidence_params'):
-            # Fallback if confidence_params dict isn't provided directly (e.g., individual multipliers)
-            self.advisor.confidence_params = {
-                'base_multiplier': parameters.get('base_multiplier',
-                                                  self.advisor.confidence_params.get('base_multiplier', 1.0)),
-                'confluence_weight': parameters.get('confluence_weight',
-                                                    self.advisor.confidence_params.get('confluence_weight', 1.0)),
-                'penalty_strength': parameters.get('penalty_strength',
-                                                   self.advisor.confidence_params.get('penalty_strength', 1.0))
-            }
-            logging.debug(f"Advisor confidence parameters (individual) set to: {self.advisor.confidence_params}")
+    def calculate_actual_return(self, symbol, start_date, holding_days):
+        """
+        Calculates the actual return for a stock over a given holding period.
+        """
+        end_date = start_date + timedelta(days=holding_days)
 
-        # The lines below for current_buy_threshold and current_sell_threshold should generally
-        # reflect the values set within the strategy_settings for the current strategy.
-        # Ensure they align with the values just set in strategy_settings.
-        if hasattr(self.advisor, 'current_buy_threshold') and current_strategy_key in self.advisor.strategy_settings:
-            self.advisor.current_buy_threshold = self.advisor.strategy_settings[current_strategy_key]['buy_threshold']
-            logging.debug(f"Advisor current_buy_threshold set to: {self.advisor.current_buy_threshold}")
-        if hasattr(self.advisor, 'current_sell_threshold') and current_strategy_key in self.advisor.strategy_settings:
-            self.advisor.current_sell_threshold = self.advisor.strategy_settings[current_strategy_key]['sell_threshold']
-            logging.debug(f"Advisor current_sell_threshold set to: {self.advisor.current_sell_threshold}")
-
-    def calculate_actual_return(self, stock, timestamp, prediction_days):
-        """Calculate actual return for prediction validation"""
-        logging.debug(f"[{stock}] Calculating actual return for {timestamp} over {prediction_days} days.")
         try:
-            if isinstance(timestamp, str):
-                timestamp = pd.Timestamp(timestamp).date()
-
-            start_date = timestamp - timedelta(days=5)
-            end_date = timestamp + timedelta(days=prediction_days + 5)
-
-            logging.debug(f"[{stock}] Fetching data from {start_date} to {end_date}")
-            df = yf.download(stock, start=start_date, end=end_date, progress=False)
-
+            # Download data starting slightly before to ensure start_date is included
+            df = yf.download(symbol, start=start_date - timedelta(days=5), end=end_date + timedelta(days=5),
+                             progress=False, show_errors=False)
             if df.empty:
+                logging.warning(f"No data from yfinance for {symbol} from {start_date} to {end_date}.")
+                return None
+
+            # Find the closest actual market date for start_date
+            start_dt = pd.to_datetime(start_date)
+            if start_dt in df.index:
+                start_price_date = start_dt
+            elif not df.index.empty:
+                start_price_date = df.index[np.argmin(np.abs(df.index - start_dt))]
+            else:
+                logging.warning(f"No data points for {symbol} around {start_date}.")
+                return None
+
+            start_price = df['Close'].loc[start_price_date]
+
+            # Find the closest actual market date for end_date within the holding period
+            end_price_candidate_dates = df.loc[
+                df.index >= pd.to_datetime(start_date) + timedelta(days=holding_days)].index
+            if end_price_candidate_dates.empty:
                 logging.warning(
-                    f"[{stock}] ⚠️ No data found for {stock} between {start_date} and {end_date}. Cannot calculate actual return.")
+                    f"No future data for {symbol} after {start_date} for {holding_days} days holding period.")
                 return None
 
-            timestamp_pd = pd.Timestamp(timestamp)
-            start_price_raw = None
-            if timestamp_pd in df.index:
-                start_price_raw = df.loc[timestamp_pd, 'Close']
-            else:
-                closest_idx = df.index.get_indexer([timestamp_pd], method='nearest')[0]
-                if closest_idx < 0 or closest_idx >= len(df):
-                    logging.warning(
-                        f"[{stock}] ⚠️ No close date found for {stock} at {timestamp} in fetched data. df.index: {df.index.min().date()} to {df.index.max().date()}. Cannot calculate actual return.")
-                    return None
-                start_price_raw = df.iloc[closest_idx]['Close']
+            end_price_date = end_price_candidate_dates[0]
+            end_price = df['Close'].loc[end_price_date]
 
-            if pd.api.types.is_scalar(start_price_raw):
-                start_price = float(start_price_raw)
-            elif isinstance(start_price_raw, (pd.Series, np.ndarray)) and len(start_price_raw) > 0:
-                start_price = float(start_price_raw.iloc[0])
-            else:
-                start_price = None
-
-            if start_price is None:
-                logging.warning(f"[{stock}] Start price could not be determined for {timestamp}. Returning None.")
-                return None
-            logging.debug(f"[{stock}] Start price for {timestamp} found directly: {start_price:.2f}")
-
-            future_date = timestamp + timedelta(days=prediction_days)
-            future_pd = pd.Timestamp(future_date)
-
-            future_data = df[df.index >= future_pd]
-            if future_data.empty:
-                logging.warning(
-                    f"[{stock}] ⚠️ No future data found for {stock} after {future_date} in fetched data. df.index: {df.index.min().date()} to {df.index.max().date()}. Cannot calculate actual return.")
-                return None
-
-            end_price_raw = future_data.iloc[0]['Close']
-            if pd.api.types.is_scalar(end_price_raw):
-                end_price = float(end_price_raw)
-            elif isinstance(end_price_raw, (pd.Series, np.ndarray)) and len(end_price_raw) > 0:
-                end_price = float(end_price_raw.iloc[0])
-            else:
-                end_price = None
-
-            if end_price is None:
-                logging.warning(f"[{stock}] End price could not be determined for {future_date}. Returning None.")
-                return None
-            logging.debug(f"[{stock}] End price for {future_data.iloc[0].name.date()}: {end_price:.2f}")
-
-            actual_return = (end_price - start_price) / start_price * 100
-            logging.debug(f"[{stock}] Actual return for {timestamp}: {actual_return:.2f}%")
+            actual_return = ((end_price - start_price) / start_price) * 100
+            logging.debug(
+                f"Calculated actual return for {symbol} from {start_price_date.date()} to {end_price_date.date()}: {actual_return:.2f}%")
             return actual_return
-
         except Exception as e:
-            logging.error(f"[{stock}] ❌ Error calculating return for {timestamp}: {e}")
-            logging.error(f"[{stock}] Full traceback for return calculation error: {traceback.format_exc()}")
+            logging.error(f"Error calculating actual return for {symbol} from {start_date}: {e}")
             return None
 
+    def calculate_performance_metrics(self, results):
+        """
+        Calculates key performance metrics from a list of evaluation results.
+        """
+        if not results:
+            return self.get_empty_metrics()
+
+        total_correct = 0
+        total_direction_correct = 0
+        total_profitable_trades = 0
+        total_buy_signals = 0
+        total_sell_signals = 0
+        total_wait_signals = 0
+        total_trades = len(results)
+
+        returns = []
+        confidences = []
+
+        buy_success_trades = 0
+
+        for res in results:
+            # Ensure 'net_actual_return' is present and is not None before appending
+            if res['performance'].get('net_actual_return') is not None:
+                returns.append(res['performance']['net_actual_return'])  # Use net actual return for performance
+
+            if 'confidence' in res['recommendation']:
+                confidences.append(res['recommendation']['confidence'])
+
+            # Access performance flags directly from the nested 'performance' dictionary
+            if res['performance'].get('correct', False):
+                total_correct += 1
+            if res['performance'].get('direction_correct', False):
+                total_direction_correct += 1
+            if res['performance'].get('profitable', False):
+                total_profitable_trades += 1
+
+            action = res['recommendation']['action']
+            if action == "BUY":
+                total_buy_signals += 1
+                if res['performance'].get('profitable', False):
+                    buy_success_trades += 1
+            elif action == "SELL/AVOID":
+                total_sell_signals += 1
+            elif action == "WAIT":
+                total_wait_signals += 1
+
+        overall_accuracy = (total_correct / total_trades) * 100 if total_trades > 0 else 0
+        direction_accuracy = (total_direction_correct / total_trades) * 100 if total_trades > 0 else 0
+        buy_success_rate = (buy_success_trades / total_buy_signals) * 100 if total_buy_signals > 0 else 0
+
+        avg_return = np.mean(returns) if returns else 0
+        volatility = np.std(returns) if len(returns) > 1 else 0
+
+        sharpe_ratio = avg_return / volatility if volatility != 0 else 0
+
+        if returns:
+            returns_decimal = np.array(returns) / 100.0
+            cumulative_returns_product = np.cumprod(1 + returns_decimal)
+            cumulative_returns_product = np.insert(cumulative_returns_product, 0, 1)
+
+            peak = np.maximum.accumulate(cumulative_returns_product)
+            drawdown_ratio = np.where(peak != 0, (cumulative_returns_product - peak) / peak, 0)
+            max_drawdown = np.min(drawdown_ratio) * 100
+        else:
+            max_drawdown = 0
+
+        confidence_avg = np.mean(confidences) if confidences else 0
+
+        signal_distribution = {
+            "BUY": (total_buy_signals / total_trades) * 100 if total_trades > 0 else 0,
+            "SELL/AVOID": (total_sell_signals / total_trades) * 100 if total_trades > 0 else 0,
+            "WAIT": (total_wait_signals / total_trades) * 100 if total_trades > 0 else 0,
+        }
+
+        return {
+            "overall_accuracy": overall_accuracy,
+            "direction_accuracy": direction_accuracy,
+            "buy_success_rate": buy_success_rate,
+            "avg_return": avg_return,
+            "volatility": volatility,
+            "sharpe_ratio": sharpe_ratio,
+            "max_drawdown": max_drawdown,
+            "total_trades": total_trades,
+            "confidence_avg": confidence_avg,
+            "signal_distribution": signal_distribution
+        }
+
     def evaluate_prediction(self, recommendation, actual_return):
-        """Evaluate prediction accuracy"""
-        if actual_return is None:
-            logging.debug(
-                f"Recommendation evaluation: Actual return is None for recommendation {recommendation['action']}. Returning default evaluation.")
-            return {'correct': False, 'direction_correct': False, 'profitable': False,
-                    'actual_return': None, 'predicted_profit': 0}
+        """
+        Evaluates the accuracy and profitability of a recommendation.
+        """
+        eval_thresholds = self.config['evaluation_thresholds']
+        buy_profit_min = eval_thresholds['buy_profit_min']
+        sell_loss_min = eval_thresholds['sell_loss_min']
+        wait_max_change = eval_thresholds['wait_max_change']
 
         action = recommendation['action']
-        predicted_profit = recommendation.get('expected_profit_pct', 0)
-        logging.debug(
-            f"Recommendation evaluation: Action={action}, Predicted Profit={predicted_profit:.2f}%, Actual Return={actual_return:.2f}%")
-
-        direction_correct = False
-        if action == 'BUY':
-            direction_correct = actual_return > 0
-        elif action == 'SELL/AVOID':
-            direction_correct = actual_return < 0
-        else: # WAIT
-            direction_correct = abs(actual_return) < 3.0
-
-        profitable = False
-        if action == 'BUY':
-            profitable = actual_return > 2.0
-        elif action == 'SELL/AVOID':
-            profitable = actual_return < -1.0
-        else:
-            profitable = abs(actual_return) < 2.0
 
         correct = False
-        if action == 'BUY':
-            correct = actual_return > 3.0
-        elif action == 'SELL/AVOID':
-            correct = actual_return < -2.0
-        else:
-            correct = abs(actual_return) < 2.0
+        direction_correct = False
+        profitable = False
 
-        logging.debug(
-            f"Evaluation results: Correct={correct}, Direction Correct={direction_correct}, Profitable={profitable}")
+        if actual_return is None:
+            return {'correct': False, 'direction_correct': False, 'profitable': False, 'actual_return': None}
+
+        # Apply Israeli fees and tax to the actual return for evaluation
+        net_actual_return = self.advisor.apply_israeli_fees_and_tax(actual_return)
+
+        if action == "BUY":
+            direction_correct = net_actual_return > 0
+            profitable = net_actual_return >= buy_profit_min
+            correct = profitable
+        elif action == "SELL/AVOID":
+            direction_correct = net_actual_return < 0  # Price went down
+            profitable = net_actual_return <= sell_loss_min  # Avoided loss (or made profit by shorting/inverse)
+            correct = profitable
+        elif action == "WAIT":
+            direction_correct = abs(net_actual_return) <= wait_max_change
+            profitable = True  # Waiting is considered 'profitable' if it avoids significant loss/gain, or is flat
+            correct = direction_correct
+
         return {
             'correct': correct,
             'direction_correct': direction_correct,
             'profitable': profitable,
             'actual_return': actual_return,
-            'predicted_profit': predicted_profit
+            'net_actual_return': net_actual_return  # Store net return for more accurate performance metrics
         }
 
     def aggregate_walk_forward_results(self, window_results):
@@ -923,19 +863,18 @@ class StockWiseAutoCalibrator:
         return aggregated
 
     def get_empty_metrics(self):
-        """Return empty metrics structure"""
-        logging.debug("Returning empty metrics structure.")
+        """Returns a dictionary with empty/zero metrics."""
         return {
-            'overall_accuracy': 0,
-            'direction_accuracy': 0,
-            'buy_success_rate': 0,
-            'avg_return': 0,
-            'volatility': 0,
-            'sharpe_ratio': 0,
-            'max_drawdown': 0,
-            'total_trades': 0,
-            'signal_distribution': {'BUY': 0, 'SELL/AVOID': 0, 'WAIT': 100},
-            'confidence_avg': 50
+            "overall_accuracy": 0.0,
+            "direction_accuracy": 0.0,
+            "buy_success_rate": 0.0,
+            "avg_return": 0.0,
+            "volatility": 0.0,
+            "sharpe_ratio": 0.0,
+            "max_drawdown": 0.0,
+            "total_trades": 0,
+            "confidence_avg": 0.0,
+            "signal_distribution": {"BUY": 0.0, "SELL/AVOID": 0.0, "WAIT": 0.0}
         }
 
     def calculate_max_drawdown(self, returns):
@@ -956,132 +895,113 @@ class StockWiseAutoCalibrator:
         logging.debug(f"Calculated max drawdown: {np.min(drawdown):.2f}%")
         return np.min(drawdown)
 
-    def generate_parameter_combinations(self, parameter_space, max_combinations):
+    def generate_parameter_combinations(self, param_space):
         """
-        Generate parameter combinations for testing based on the provided parameter_space.
-        The parameter_space is expected to already contain strategy-specific overrides.
+        Generates all possible combinations of parameters from a given parameter space.
+        This is a generic utility function.
+
+        Args:
+            param_space (dict): A dictionary where keys are parameter names and values
+                                are lists of possible values for that parameter.
+
+        Returns:
+            list: A list of dictionaries, each representing a unique combination of parameters.
         """
-        logging.info(f"Generating parameter combinations, limiting to {max_combinations} samples.")
-        combinations = []
+        keys = param_space.keys()
+        values = param_space.values()
 
-        # Extract parameter ranges
-        signal_weights_list = parameter_space['signal_weights']
-        buy_thresholds = parameter_space['buy_threshold']
-        sell_thresholds = parameter_space['sell_threshold']
-        min_confidences = parameter_space['min_confidence']
+        # Use itertools.product to get all combinations
+        combinations = list(product(*values))
 
-        # General parameters that are not strategy-specific but are optimized
-        investment_days = parameter_space.get('investment_days', [7])  # Default if not in space
-        profit_thresholds = parameter_space.get('profit_threshold', [0.03])
-        stop_loss_thresholds = parameter_space.get('stop_loss_threshold', [0.04])
-
-        # Nested confidence parameters
-        base_multipliers = parameter_space['confidence_params']['base_multiplier']
-        confluence_weights = parameter_space['confidence_params']['confluence_weight']
-        penalty_strengths = parameter_space['confidence_params']['penalty_strength']
-
-        # Generate all combinations
-        all_possible_combinations = product(
-            signal_weights_list,
-            buy_thresholds,
-            sell_thresholds,
-            min_confidences,
-            base_multipliers,
-            confluence_weights,
-            penalty_strengths,
-            investment_days,  # Include general parameters in product
-            profit_thresholds,
-            stop_loss_thresholds
-        )
-
-        for combo_tuple in all_possible_combinations:
-            (signal_weights, buy_thresh, sell_thresh, min_conf,
-             base_mult, conf_weight, penalty_str,
-             invest_days, profit_thresh, stop_loss_thresh) = combo_tuple
-
-            combination = {
-                'signal_weights': signal_weights,
-                'buy_threshold': buy_thresh,
-                'sell_threshold': sell_thresh,
-                'min_confidence': min_conf,
-                'confidence_params': {
-                    'base_multiplier': base_mult,
-                    'confluence_weight': conf_weight,
-                    'penalty_strength': penalty_str
-                },
-                'investment_days': invest_days,
-                'profit_threshold': profit_thresh,
-                'stop_loss_threshold': stop_loss_thresh
-            }
-            combinations.append(combination)
-            if len(combinations) >= max_combinations:
-                logging.info(f"Generated {len(combinations)} parameter combinations (reached max_combinations limit).")
-                return combinations
-
-        logging.info(f"Generated {len(combinations)} parameter combinations (all possible combinations).")
-        return combinations
+        # Convert combinations back into a list of dictionaries
+        param_grid = []
+        for combo in combinations:
+            param_grid.append(dict(zip(keys, combo)))
+        return param_grid
 
     def create_performance_summary(self):
-        """Create performance summary for report"""
+        """Create performance summary for report."""
         logging.info("Creating overall performance summary.")
         summary = {}
 
         for strategy, results in self.best_parameters.items():
             params = results.get('parameters', {})
+            s_lower = strategy.lower().replace(' ', '_')
+
+            buy = params.get(f"buy_threshold_{s_lower}", params.get("buy_threshold"))
+            sell = params.get(f"sell_threshold_{s_lower}", params.get("sell_threshold"))
+            min_conf = params.get(f"confidence_req_{s_lower}", params.get("min_confidence"))
 
             summary[strategy] = {
                 'fitness_score': results['fitness_score'],
                 'performance_metrics': results['performance'],
                 'optimal_parameters': {
-                    'buy_threshold': params.get('buy_threshold', None),
-                    'sell_threshold': params.get('sell_threshold', None),
-                    'min_confidence': params.get('min_confidence', None),
-                    'investment_days': params.get('investment_days', None),
-                    'profit_threshold': params.get('profit_threshold', None),
-                    'stop_loss_threshold': params.get('stop_loss_threshold', None),
-                    'signal_weights': params.get('signal_weights', {}),
-                    'confidence_params': params.get('confidence_params', {})
+                    'buy_threshold': buy,
+                    'sell_threshold': sell,
+                    'min_confidence': min_conf,
+                    'profit_threshold': params.get('profit_threshold'),
+                    'stop_loss_threshold': params.get('stop_loss_threshold'),
+                    'signal_weights': {
+                        'trend': params.get('weight_trend'),
+                        'momentum': params.get('weight_momentum'),
+                        'volume': params.get('weight_volume'),
+                        'support_resistance': params.get('weight_support_resistance'),
+                        'ai_model': params.get('weight_ai_model'),
+                    },
+                    'confidence_params': {
+                        'confidence_base_multiplier': params.get('confidence_base_multiplier'),
+                        'confidence_confluence_weight': params.get('confidence_confluence_weight'),
+                        'confidence_penalty_strength': params.get('confidence_penalty_strength'),
+                    }
                 }
             }
-            # Changed from logging.debug to logging.info to ensure visibility regardless of debug level
-            logging.info(
-                f"Summary for {strategy}: Fitness Score {results['fitness_score']:.2f}, Optimal Params: {params}")
-
         return summary
 
     def create_walk_forward_windows(self):
-        """Create chronological walk-forward validation windows"""
+        """
+        Creates walk-forward validation windows based on the configuration.
+        """
         logging.info("Generating walk-forward validation windows.")
-        start_date = pd.Timestamp(self.config['start_date'])
-        end_date = pd.Timestamp(self.config['end_date'])
-
         train_months = self.config['walk_forward']['train_months']
         test_months = self.config['walk_forward']['test_months']
         step_months = self.config['walk_forward']['step_months']
-
-        logging.info(
-            f"Walk-forward config: Train={train_months} months, Test={test_months} months, Step={step_months} months.")
+        num_windows = self.config['num_walk_forward_windows']
 
         windows = []
-        current_start = start_date
+        current_train_end = datetime.strptime(self.config['start_date'], '%Y-%m-%d') + timedelta(
+            days=train_months * 30)  # Approximate
 
-        while current_start + pd.DateOffset(months=train_months + test_months) <= end_date:
-            train_end = current_start + pd.DateOffset(months=train_months)
+        for i in range(num_windows):
+            if current_train_end.date() >= datetime.strptime(self.config['end_date'], '%Y-%m-%d').date():
+                logging.warning(f"Reached end date. Stopping walk-forward window generation at {len(windows)} windows.")
+                break
+
+            train_start = datetime.strptime(self.config['start_date'], '%Y-%m-%d') + timedelta(
+                days=i * step_months * 30)
+            train_end = train_start + timedelta(days=train_months * 30)
             test_start = train_end
-            test_end = test_start + pd.DateOffset(months=test_months)
+            test_end = test_start + timedelta(days=test_months * 30)
 
-            window_info = {
-                'train_start': current_start,
-                'train_end': train_end,
-                'test_start': test_start,
-                'test_end': test_end,
-                'window_id': len(windows) + 1
+            # Adjust to actual business days if needed (simple approximation for now)
+            # Find the closest business day for each boundary if exact dates are required
+
+            # Ensure the test_end does not exceed the overall end_date
+            overall_end_date = datetime.strptime(self.config['end_date'], '%Y-%m-%d')
+            if test_end > overall_end_date:
+                test_end = overall_end_date
+
+            window = {
+                'train_start': train_start.date(),
+                'train_end': train_end.date(),
+                'test_start': test_start.date(),
+                'test_end': test_end.date(),
+                'window_id': i + 1
             }
-            windows.append(window_info)
+            windows.append(window)
             logging.info(
-                f"Generated window {len(windows)}: Train ({current_start.date()} - {train_end.date()}), Test ({test_start.date()} - {test_end.date()})")
+                f"Generated window {i + 1}: Train ({window['train_start']} - {window['train_end']}), Test ({window['test_start']} - {window['test_end']})")
 
-            current_start += pd.DateOffset(months=step_months)
+            current_train_end = train_end + timedelta(days=step_months * 30)  # Move to the next step
 
         logging.info(f"Finished generating {len(windows)} walk-forward windows.")
         return windows
@@ -1128,6 +1048,8 @@ class StockWiseAutoCalibrator:
         for stock in stocks:
             for timestamp in timestamps:
                 try:
+                    # Run analysis with current parameters
+                    # This call will now use the parameters just applied by apply_parameters_to_advisor
                     recommendation = self.advisor.analyze_stock_enhanced(stock, timestamp)
 
                     if recommendation:
@@ -1173,154 +1095,191 @@ class StockWiseAutoCalibrator:
         logging.debug(f"Performance metrics calculated for this parameter set in window {window['window_id']}.")
         return calculated_metrics
 
-    def calculate_performance_metrics(self, results):
-        """Calculate comprehensive performance metrics"""
-        logging.debug(f"Calculating performance metrics for {len(results)} individual test results.")
-
-        if not results:
-            logging.warning("No individual test results to calculate performance metrics. Returning empty metrics.")
+    def aggregate_window_metrics(self, window_performances):
+        """
+        Aggregates performance metrics from multiple walk-forward windows.
+        This provides an overall picture for a given parameter set.
+        """
+        if not window_performances:
             return self.get_empty_metrics()
 
-        df = pd.DataFrame(results)
-        logging.debug(f"DataFrame created with {len(df)} rows.")
+        # Sum up total trades and average others
+        total_trades_sum = sum(wp.get('total_trades', 0) for wp in window_performances)
 
-        valid_results = [r for r in results if
-                         r['actual_return'] is not None and r['recommendation']['confidence'] is not None]
+        # For metrics that are percentages or ratios, we can average them.
+        # However, for avg_return and Sharpe, a more rigorous aggregation might be needed
+        # (e.g., compounding returns or considering standard deviation of all trades).
+        # For simplicity, we'll average here.
 
-        if not valid_results:
-            logging.warning("No valid individual results after filtering. Returning empty metrics.")
-            return self.get_empty_metrics()
+        agg_metrics = {k: [] for k in self.get_empty_metrics().keys() if
+                       k not in ['total_trades', 'signal_distribution']}
+        agg_metrics['signal_distribution'] = {k: [] for k in self.get_empty_metrics()['signal_distribution'].keys()}
 
-        logging.debug(f"Using {len(valid_results)} valid results for metric calculation.")
+        for wp in window_performances:
+            for k, v in wp.items():
+                if k == 'total_trades':
+                    continue  # Handled separately
+                elif k == 'signal_distribution':
+                    for signal_type, percentage in v.items():
+                        agg_metrics['signal_distribution'][signal_type].append(percentage)
+                else:
+                    agg_metrics[k].append(v)
 
-        correct_predictions = sum(r['performance']['correct'] for r in valid_results)
-        total_predictions = len(valid_results)
-        overall_accuracy = (correct_predictions / total_predictions) * 100 if total_predictions > 0 else 0
-        logging.debug(f"Overall Accuracy: {overall_accuracy:.2f}% ({correct_predictions}/{total_predictions})")
+        final_agg_metrics = {}
+        for k, v_list in agg_metrics.items():
+            if k == 'signal_distribution':
+                final_agg_metrics[k] = {signal_type: np.mean(percentages) for signal_type, percentages in
+                                        v_list.items()}
+            else:
+                final_agg_metrics[k] = np.mean(v_list) if v_list else 0.0
 
-        direction_correct = sum(r['performance']['direction_correct'] for r in valid_results)
-        direction_accuracy = (direction_correct / total_predictions) * 100 if total_predictions > 0 else 0
-        logging.debug(f"Direction Accuracy: {direction_accuracy:.2f}%")
+        final_agg_metrics['total_trades'] = total_trades_sum
 
-        buy_signals = [r for r in valid_results if r['recommendation']['action'] == 'BUY']
-        sell_signals = [r for r in valid_results if r['recommendation']['action'] == 'SELL/AVOID']
-        wait_signals = [r for r in valid_results if r['recommendation']['action'] == 'WAIT']
+        # Recalculate sharpe ratio based on aggregated returns and volatility (if needed)
+        # For now, relying on averaged sharpe from windows
 
-        buy_success = sum(r['performance']['profitable'] for r in buy_signals) if buy_signals else 0
-        buy_success_rate = (buy_success / len(buy_signals) * 100) if buy_signals else 0
-        logging.debug(f"BUY Signals: {len(buy_signals)}, BUY Success: {buy_success_rate:.2f}%")
+        return final_agg_metrics
 
-        returns = [r['actual_return'] for r in valid_results if r['actual_return'] is not None]
-        avg_return = np.mean(returns) if returns else 0
-        volatility = np.std(returns) if returns else 0
-        sharpe_ratio = (avg_return / volatility) if volatility > 0 else 0
-        max_drawdown = self.calculate_max_drawdown(returns)
-        logging.debug(
-            f"Avg Return: {avg_return:.2f}%, Volatility: {volatility:.2f}, Sharpe Ratio: {sharpe_ratio:.2f}, Max Drawdown: {max_drawdown:.2f}%")
-
-        signal_distribution = {
-            'BUY': len(buy_signals) / total_predictions * 100 if total_predictions > 0 else 0,
-            'SELL/AVOID': len(sell_signals) / total_predictions * 100 if total_predictions > 0 else 0,
-            'WAIT': len(wait_signals) / total_predictions * 100 if total_predictions > 0 else 0
-        }
-        logging.debug(f"Signal Distribution: {signal_distribution}")
-
-        confidence_values = [r['recommendation']['confidence'] for r in valid_results if
-                             r['recommendation']['confidence'] is not None]
-        confidence_avg = np.mean(confidence_values) if confidence_values else 50
-        logging.debug(f"Average Confidence: {confidence_avg:.2f}%")
-
-        return {
-            'overall_accuracy': overall_accuracy,
-            'direction_accuracy': direction_accuracy,
-            'buy_success_rate': buy_success_rate,
-            'avg_return': avg_return,
-            'volatility': volatility,
-            'sharpe_ratio': sharpe_ratio,
-            'max_drawdown': max_drawdown,
-            'total_trades': total_predictions,
-            'signal_distribution': signal_distribution,
-            'confidence_avg': confidence_avg
-        }
-
-    def optimize_strategy(self, strategy_type, stocks, timestamps, windows, size_config):
-        """Optimize parameters for specific strategy using binary search + grid search"""
-
+    def optimize_strategy(self, strategy_type, test_stocks, test_timestamps, validation_windows, param_samples):
+        """
+        Optimizes parameters for a single strategy type using walk-forward validation.
+        """
+        logging.info(f"\n🎯 Step 2: Optimizing {strategy_type.upper()} strategy...")
         logging.info(f"🔍 Optimizing {strategy_type} strategy...")
 
-        # Get the full parameter space for this specific strategy type
-        parameter_space_for_grid = self.get_parameter_space(strategy_type)
 
-        best_score = -np.inf
-        best_params = None
-        performance = self.get_empty_metrics()
-        current_strategy_results = []
+        # Generate parameter combinations for this specific strategy
+        # parameter_combinations = self.generate_parameter_combinations(strategy_type, max_combinations=param_samples)
+        # ✅ Build parameter combinations properly for this strategy
+        parameter_space = self.get_parameter_space(strategy_type)
+        parameter_combinations = self.generate_parameter_combinations(parameter_space, max_combinations=param_samples)
 
-        # Generate parameter combinations using the dedicated function and specific parameter space
-        param_combinations = self.generate_parameter_combinations(
-            parameter_space_for_grid,
-            max_combinations=size_config['param_samples']
-        )
+        logging.info(f"Testing {len(parameter_combinations)} parameter combinations for {strategy_type} strategy...")
 
-        logging.info(f"Testing {len(param_combinations)} parameter combinations for {strategy_type} strategy...")
+        best_fitness_score = -np.inf
+        best_params_for_strategy = None
+        best_performance_for_strategy = None
 
-        for i, params in enumerate(tqdm(param_combinations, desc=f"Testing {strategy_type}")):
-            logging.info(f"--- Testing Parameter Set {i + 1}/{len(param_combinations)} for {strategy_type} ---")
-            logging.info(f"  Parameters: {params}")
-
+        for i, params in enumerate(tqdm(parameter_combinations, desc=f"Optimizing {strategy_type}")):
             try:
-                # Apply current strategy type for the advisor for this parameter set
-                params['strategy_type'] = strategy_type  # Add strategy type to params for advisor to pick up
-                current_performance = self.validate_parameters_walk_forward(params, stocks, windows)
-                fitness_score = self.calculate_fitness_score(current_performance)
+                logging.info(f"--- Testing Parameter Set {i + 1}/{len(parameter_combinations)} for {strategy_type} ---")
+                logging.info(f"  Parameters: {params}")
 
-                current_strategy_results.append({
-                    'parameter_set_id': i,
-                    'parameters': params,
-                    'performance': current_performance,
-                    'fitness_score': fitness_score
-                })
+                # Apply current parameter set to the advisor
+                self.apply_parameters_to_advisor(params)
 
-                if fitness_score > best_score:
-                    old_best_score = best_score
-                    best_score = fitness_score
-                    best_params = params.copy()
-                    performance = current_performance
+                window_performances = []
+                all_window_results = []
 
-                    if old_best_score == -np.inf:
-                        logging.info(f"🎯 First successful parameter set for {strategy_type}: Score {fitness_score:.2f}")
-                    else:
+                # Perform walk-forward validation for this parameter set
+                for window in validation_windows:
+                    logging.info(
+                        f"Processing window {window['window_id']}: Test period {window['test_start']} to {window['test_end']}")
+
+                    # Temporarily update advisor's data fetching range for this window
+                    original_advisor_start_date = self.advisor.config_file['start_date'] if hasattr(self.advisor,
+                                                                                                    'config_file') and self.advisor.config_file else None
+                    original_advisor_end_date = self.advisor.config_file['end_date'] if hasattr(self.advisor,
+                                                                                                'config_file') and self.advisor.config_file else None
+
+                    # If the advisor loads config, update it or pass dates directly
+                    # For current setup, advisor fetches data based on 'end_date' and 'days_back' for analyze_stock_enhanced
+                    # So, we pass 'end_date' directly to analyze_stock_enhanced
+
+                    window_results = []
+                    # Filter test timestamps to be within the current window's test period
+                    current_window_timestamps = [
+                        ts for ts in test_timestamps
+                        if window['test_start'] <= ts.date() <= window['test_end']  # FIX IS HERE: ts.date()
+                    ]
+
+                    # Shuffle stock symbols and timestamps for more robust testing per window
+                    current_test_symbols = list(test_stocks)  # Copy to shuffle
+                    np.random.shuffle(current_test_symbols)
+                    np.random.shuffle(current_window_timestamps)
+
+                    for symbol in current_test_symbols:
+                        for timestamp in current_window_timestamps:
+                            rec = self.advisor.analyze_stock_enhanced(symbol, timestamp.strftime('%Y-%m-%d'))
+
+                            if rec:
+                                actual_return = self.calculate_actual_return(
+                                    symbol,
+                                    timestamp,  # Use the original timestamp for return calculation
+                                    self.config['prediction_window_days']  # Holding period
+                                )
+                                eval_result = self.evaluate_prediction(rec, actual_return)
+
+                                # Add recommendation and actual_return to eval_result for full context
+                                eval_result['recommendation'] = rec
+                                eval_result['actual_return_raw'] = actual_return  # Store original actual return
+                                window_results.append({
+                                    'symbol': symbol,
+                                    'timestamp': timestamp.strftime('%Y-%m-%d'),
+                                    'recommendation': rec,
+                                    'actual_return': actual_return,  # This will be raw return
+                                    'evaluation': eval_result
+                                })
+                            else:
+                                logging.warning(f"Skipping {symbol} on {timestamp}: No recommendation generated.")
+
+                    if window_results:
+                        window_performance = self.calculate_performance_metrics(
+                            [r['evaluation'] for r in window_results])
+                        window_performances.append(window_performance)
+                        all_window_results.extend(window_results)  # Collect all detailed results
                         logging.info(
-                            f"🎯 New best {strategy_type}: Score improved from {old_best_score:.2f} to {fitness_score:.2f}")
-                    logging.info(f"   Accuracy: {performance['overall_accuracy']:.1f}%")
-                    logging.info(f"   BUY Success: {performance['buy_success_rate']:.1f}%")
-                    logging.info(f"   Sharpe: {performance['sharpe_ratio']:.2f}")
+                            f"Window {window['window_id']} performance: Overall Accuracy={window_performance['overall_accuracy']:.2f}%, Sharpe={window_performance['sharpe_ratio']:.2f}")
+                    else:
+                        logging.warning(
+                            f"No results for window {window['window_id']}. Skipping performance calculation for this window.")
 
             except Exception as e:
-                logging.error(f"❌ Error testing parameter set {i} for {strategy_type}: {e}")
-                logging.error(f"  Full traceback: {traceback.format_exc()}")
-                self._save_intermediate_strategy_results(strategy_type, current_strategy_results, i, str(e))
-                continue
+                logging.error(f"❌ Error during optimization of parameter set {i + 1} for {strategy_type}: {e}")
+                logging.error(f"Traceback for parameter set error:\n{traceback.format_exc()}")
+                continue  # Skip to next parameter set
 
-        if best_params is None and current_strategy_results:
-            best_run = max(current_strategy_results, key=lambda x: x['fitness_score'])
-            best_params = best_run['parameters']
-            performance = best_run['performance']
-            best_score = best_run['fitness_score']
+        if window_performances:
+            logging.info(f"Aggregating {len(window_performances)} walk-forward window results.")
+            # Aggregate performance across all windows for this parameter set
+            aggregated_metrics = self.aggregate_window_metrics(window_performances)
+            current_fitness_score = self.calculate_fitness_score(aggregated_metrics)
             logging.info(
-                f"ℹ️ No new best found, falling back to best observed so far for {strategy_type}: Score {best_score:.2f}")
-        elif best_params is None:
-            best_params = {}
-            performance = self.get_empty_metrics()
-            best_score = 0
-            logging.warning(f"⚠️ No successful parameter sets found for {strategy_type}. Returning empty results.")
+                f"Aggregated metrics calculated: Overall Accuracy={aggregated_metrics['overall_accuracy']:.2f}%")
+            logging.info(f"Aggregated signal distribution: {aggregated_metrics['signal_distribution']}")
+            logging.info(
+                f"Aggregated performance for this parameter set across all windows: Fitness Score={current_fitness_score:.2f}")
 
-        logging.info(f"✅ Optimization for {strategy_type} complete. Final Best Fitness Score: {best_score:.2f}")
-        return {
-            'parameters': best_params,
-            'performance': performance,
-            'fitness_score': best_score
-        }
+            if current_fitness_score > best_fitness_score:
+                best_fitness_score = current_fitness_score
+                best_params_for_strategy = params  # This parameter set is the best so far
+                best_performance_for_strategy = aggregated_metrics
+                logging.info(f"🎯 New best parameter set for {strategy_type}: Score {best_fitness_score:.2f}")
+                logging.info(f"   Accuracy: {best_performance_for_strategy['overall_accuracy']:.1f}%")
+                logging.info(f"   BUY Success: {best_performance_for_strategy['buy_success_rate']:.1f}%")
+                logging.info(f"   Sharpe: {best_performance_for_strategy['sharpe_ratio']:.2f}")
+        else:
+            logging.warning(f"No valid performance data generated for any parameter set for {strategy_type}.")
+
+        if best_params_for_strategy:
+            self.best_parameters[strategy_type] = {
+                "optimal_parameters": best_params_for_strategy,
+                "performance": best_performance_for_strategy,
+                "fitness_score": best_fitness_score
+            }
+            logging.info(
+                f"✅ Optimization for {strategy_type} complete. Final Best Fitness Score: {best_fitness_score:.2f}")
+        else:
+            self.best_parameters[strategy_type] = {
+                "optimal_parameters": {},
+                "performance": self.get_empty_metrics(),
+                "fitness_score": -np.inf
+            }
+            logging.warning(f"❌ Optimization for {strategy_type} completed but no optimal parameters were found.")
+
+        logging.info(
+            f"🏆 Optimization for {strategy_type.upper()} completed. Best Fitness Score: {best_fitness_score:.2f}")
+        return self.best_parameters[strategy_type]
 
     def _save_intermediate_strategy_results(self, strategy_type, results_data, failed_index, error_message):
         """
@@ -1348,75 +1307,97 @@ class StockWiseAutoCalibrator:
         except Exception as e:
             logging.error(f"❌ Failed to save partial results: {e}. Error: {e}")
 
-    def calculate_fitness_score(self, performance):
-        """Calculate weighted fitness score from performance metrics"""
-        logging.debug(f"Calculating fitness score for performance: {performance}")
-        weights = {
-            'overall_accuracy': 0.25,
-            'direction_accuracy': 0.20,
-            'buy_success_rate': 0.25,
-            'sharpe_ratio': 0.15,
-            'signal_distribution_penalty': 0.15
-        }
+        # In algo_configurator.py, within the StockWiseAutoCalibrator class:
 
-        overall_accuracy = performance.get('overall_accuracy', 0)
-        direction_accuracy = performance.get('direction_accuracy', 0)
-        buy_success_rate = performance.get('buy_success_rate', 0)
-        sharpe_ratio = performance.get('sharpe_ratio', 0)
-        signal_distribution = performance.get('signal_distribution', {'BUY': 0, 'SELL/AVOID': 0, 'WAIT': 100})
+    def calculate_fitness_score(self, performance_metrics):
+        """
+        Calculates a single fitness score to evaluate parameter sets.
+        Higher score = better performance. This is where you define 'optimal'.
+        Adjust weights based on what you prioritize (e.g., accuracy, Sharpe).
+        """
+        # Ensure that required keys exist to prevent KeyError
+        overall_accuracy = performance_metrics.get('overall_accuracy', 0)
+        sharpe_ratio = performance_metrics.get('sharpe_ratio', 0)
+        buy_success_rate = performance_metrics.get('buy_success_rate', 0)
+        avg_return = performance_metrics.get('avg_return', 0)
+        max_drawdown = performance_metrics.get('max_drawdown', 0)
+        total_trades = performance_metrics.get('total_trades', 0)
 
-        accuracy_score = min(overall_accuracy, 100)
-        direction_score = min(direction_accuracy, 100)
-        buy_success_score = min(buy_success_rate, 100)
-        sharpe_score = min(max(sharpe_ratio * 50, 0), 100)
+        # Penalize for very few trades as it might lead to unstable metrics
+        trade_penalty = 0
+        if total_trades < 50:  # Example threshold for minimum trades
+            trade_penalty = (50 - total_trades) * 0.1  # Small penalty per missing trade
 
-        buy_pct = signal_distribution.get('BUY', 0)
-        if buy_pct < 15 or buy_pct > 50:
-            distribution_penalty = abs(32.5 - buy_pct) * 2
-        else:
-            distribution_penalty = 0
+        # Normalize metrics to a similar scale if they vary widely (e.g., accuracy 0-100, Sharpe typically < 5)
+        # Here, we assume a base target for each, and reward exceeding it.
 
-        distribution_score = max(100 - distribution_penalty, 0)
+        # Prioritize Sharpe Ratio and Overall Accuracy
+        score = (overall_accuracy * 0.4) + \
+                (max(0, sharpe_ratio) * 10) + \
+                (buy_success_rate * 0.2) + \
+                (max(0, avg_return) * 0.5)
 
-        fitness_score = (
-                accuracy_score * weights['overall_accuracy'] +
-                direction_score * weights['direction_accuracy'] +
-                buy_success_score * weights['buy_success_rate'] +
-                sharpe_score * weights['sharpe_ratio'] +
-                distribution_score * weights['signal_distribution_penalty']
-        )
-        logging.debug(f"Calculated fitness score: {fitness_score:.2f}")
+        # Penalize for high drawdown, but ensure it's not double-penalized if Sharpe is already low
+        # Only apply drawdown penalty if it's significantly negative
+        if max_drawdown < -15:  # Example: penalize drawdowns worse than -15%
+            score += max_drawdown * 0.5  # max_drawdown is negative, so adding it reduces score
 
-        return fitness_score
+        # Add a bonus for a healthy number of trades if it's not excessively penalized by accuracy
+        if total_trades > 100:
+            score += min(5, total_trades / 1000)  # Max 5 point bonus for high trade count
 
-    def generate_final_report(self, execution_time_hours=0.0):
-        """Generate comprehensive calibration report"""
-        logging.info("📝 Generating final calibration report.")
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        score -= trade_penalty
 
-        report = {
-            'metadata': {
-                'calibration_date': timestamp,
-                'config': self._normalize_numeric_values(self.config),
-                'total_strategies_tested': len(self.best_parameters),
-                'validation_method': 'walk_forward_analysis',
-                'execution_time_hours': execution_time_hours
-            },
-            'best_parameters': self._normalize_numeric_values(self.best_parameters),
-            'summary': self._normalize_numeric_values(self.create_performance_summary())
-        }
+        logging.debug(f"Fitness score calculated: {score:.2f}")
+        return score
 
-        filename = f"stockwise_calibration_{timestamp}.json"
-        file_location = os.path.join(self.configuration_files, filename)
-        try:
-            with open(file_location, 'w') as f:
-                json.dump(report, f, indent=2, default=str)
-            logging.info(f"\n✅ Calibration complete! Results saved to: {file_location}")
-            self.print_results_summary()
-        except Exception as e:
-            logging.error(f"❌ Failed to save final report: {e}. Error: {e}")
+    def generate_final_report(self, execution_time_hours):
+        """
+        Generates a concise final report of the calibration results.
+        """
+        logging.info("\n" + "=" * 80)
+        logging.info("📊 StockWise Auto-Calibration Final Report 📊")
+        logging.info("=" * 80)
+        logging.info(f"Calibration Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        logging.info(f"Total Execution Time: {execution_time_hours:.2f} hours")
+        logging.info("-" * 80)
 
-        return filename
+        if not self.best_parameters:
+            logging.warning("No optimal parameters found or saved during this calibration run.")
+            return
+
+        for strategy, data in self.best_parameters.items():
+            logging.info(f"\n✨ Optimal Parameters for Strategy: {strategy} ✨")
+
+            # Unpack optimal parameters and performance metrics
+            optimal_params = data.get('optimal_parameters', {})
+            performance_metrics = data.get('performance', self.get_empty_metrics())
+            fitness_score = data.get('fitness_score', 0.0)
+
+            logging.info(f"  Best Fitness Score: {fitness_score:.2f}")
+            logging.info("  Optimal Parameters:")
+            for k, v in optimal_params.items():
+                logging.info(f"    - {k}: {v}")
+
+            logging.info("  Aggregated Performance Metrics:")
+            logging.info(f"    - Overall Accuracy: {performance_metrics.get('overall_accuracy', 0.0):.2f}%")
+            logging.info(f"    - Direction Accuracy: {performance_metrics.get('direction_accuracy', 0.0):.2f}%")
+            logging.info(f"    - BUY Success Rate: {performance_metrics.get('buy_success_rate', 0.0):.2f}%")
+            logging.info(f"    - Average Return: {performance_metrics.get('avg_return', 0.0):.2f}%")
+            logging.info(f"    - Sharpe Ratio: {performance_metrics.get('sharpe_ratio', 0.0):.2f}")
+            logging.info(f"    - Max Drawdown: {performance_metrics.get('max_drawdown', 0.0):.2f}%")
+            logging.info(f"    - Total Trades: {performance_metrics.get('total_trades', 0)}")
+            logging.info(f"    - Average Confidence: {performance_metrics.get('confidence_avg', 0.0):.2f}%")
+            logging.info(
+                f"    - Signal Distribution: BUY={performance_metrics.get('signal_distribution', {}).get('BUY', 0.0):.1f}%, SELL/AVOID={performance_metrics.get('signal_distribution', {}).get('SELL/AVOID', 0.0):.1f}%, WAIT={performance_metrics.get('signal_distribution', {}).get('WAIT', 0.0):.1f}%")
+            logging.info("-" * 40)
+
+        logging.info("=" * 80)
+        logging.info("Calibration report and production parameters saved to 'configuration/' directory.")
+        logging.info("Detailed logs available in 'logs/' directory.")
+        logging.info(
+            "Run `python your_script.py --compare` to compare historical runs.")  # Placeholder for future feature
+        logging.info("=" * 80)
 
     def print_results_summary(self):
         """Print human-readable results summary"""
@@ -1476,44 +1457,410 @@ class StockWiseAutoCalibrator:
         logging.info("\n" + "=" * 80)
 
     def export_parameters_for_production(self, strategy_type):
-        """Export optimized parameters for production use"""
+        """Export optimized parameters for production use."""
         logging.info(f"📦 Attempting to export production parameters for {strategy_type}.")
 
-        if strategy_type not in self.best_parameters or not self.best_parameters[strategy_type]['parameters']:
+        if strategy_type not in self.best_parameters or not self.best_parameters[strategy_type].get('parameters'):
             logging.warning(f"⚠️ No optimized parameters found for {strategy_type}. Skipping export.")
             return None
 
-        params = self.best_parameters[strategy_type]['parameters']
+        params = dict(self.best_parameters[strategy_type]['parameters'])
+        s_lower = strategy_type.lower().replace(' ', '_')
 
-        # Ensure these keys exist in 'params' as a result of generate_parameter_combinations
-        production_config = {
-            'strategy_multipliers': { # This name might need to match what ProfessionalStockAdvisor expects
+        # Normalize
+        buy = params.get(f"buy_threshold_{s_lower}", params.get("buy_threshold"))
+        sell = params.get(f"sell_threshold_{s_lower}", params.get("sell_threshold"))
+        min_conf = params.get(f"confidence_req_{s_lower}", params.get("min_confidence"))
+
+        production_config = self._normalize_numeric_values({
+            'strategy_multipliers': {
                 strategy_type: {
-                    'profit': params.get('profit_threshold', 1.0), # Use profit_threshold as profit
-                    'risk': params.get('stop_loss_threshold', 1.0), # Use stop_loss_threshold as risk
-                    'confidence_req': params.get('min_confidence', 75)
+                    'profit': params.get('profit_threshold', 1.0),
+                    'risk': params.get('stop_loss_threshold', 1.0),
+                    'confidence_req': min_conf if min_conf is not None else 75
                 }
             },
-            'signal_weights': params.get('signal_weights', {}),
-            'thresholds': {
-                'buy_threshold': params.get('buy_threshold', 0.0),
-                'sell_threshold': params.get('sell_threshold', 0.0)
+            'signal_weights': {
+                'trend': params.get('weight_trend', 0.45),
+                'momentum': params.get('weight_momentum', 0.30),
+                'volume': params.get('weight_volume', 0.10),
+                'support_resistance': params.get('weight_support_resistance', 0.05),
+                'ai_model': params.get('weight_ai_model', 0.10)
             },
-            'confidence_params': params.get('confidence_params', {})
-        }
-
-        production_config = self._normalize_numeric_values(production_config)
+            'thresholds': {
+                'buy_threshold': buy if buy is not None else 0.0,
+                'sell_threshold': sell if sell is not None else 0.0
+            },
+            'confidence_params': {
+                'confidence_base_multiplier': params.get('confidence_base_multiplier', 1.0),
+                'confidence_confluence_weight': params.get('confidence_confluence_weight', 1.0),
+                'confidence_penalty_strength': params.get('confidence_penalty_strength', 1.0),
+            }
+        })
 
         filename = f"stockwise_production_params_{strategy_type}_{datetime.now().strftime('%Y%m%d')}.json"
         file_location = os.path.join(self.configuration_files, filename)
-        try:
-            with open(file_location, 'w') as f:
-                json.dump(production_config, f, indent=2, default=str)
-            logging.info(f"✅ Production parameters exported to: {file_location}")
-        except Exception as e:
-            logging.error(f"❌ Failed to export production parameters for {strategy_type}: {e}. Error: {e}")
-
+        with open(file_location, 'w') as f:
+            json.dump(production_config, f, indent=2)
+        logging.info(f"✅ Exported production parameters to: {file_location}")
         return file_location
+
+    def load_latest_production_config(self, strategy_type, directory=None):
+        """
+        Returns the parsed JSON of the most recently saved production config for the given strategy_type.
+        """
+        import glob, os, json
+        directory = directory or self.configuration_files
+        pattern = f"stockwise_production_params_{strategy_type.lower().replace(' ', '_')}_*.json"
+        files = sorted(glob.glob(os.path.join(directory, pattern)))
+        if not files:
+            logging.warning(f"No production config files found for {strategy_type} in {directory}.")
+            return None
+        latest = files[-1]
+        try:
+            with open(latest, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logging.error(f"Failed to load production config {latest}: {e}")
+            return None
+
+    def apply_production_config_to_advisor(self, production_config: dict):
+        """
+        Calls the advisor-side method if available; otherwise maps fields directly.
+        """
+        if not production_config:
+            return
+        if hasattr(self.advisor, "apply_production_config"):
+            self.advisor.apply_production_config(production_config)
+            return
+
+        # Fallback direct mapping (mirrors advisor.apply_production_config)
+        strategy = production_config.get("strategy")
+        if strategy:
+            self.advisor.current_strategy = strategy
+
+        adv = production_config.get("advisor_settings", {})
+        if "investment_days" in adv:
+            self.advisor.investment_days = int(adv["investment_days"])
+
+        if "global_signal_weights" in adv and hasattr(self.advisor, "signal_weights"):
+            gw = adv["global_signal_weights"]
+            self.advisor.signal_weights.update({
+                "trend": gw.get("trend", self.advisor.signal_weights.get("trend")),
+                "momentum": gw.get("momentum", self.advisor.signal_weights.get("momentum")),
+                "volume": gw.get("volume", self.advisor.signal_weights.get("volume")),
+                "support_resistance": gw.get("support_resistance",
+                                             self.advisor.signal_weights.get("support_resistance")),
+                "ai_model": gw.get("ai_model", self.advisor.signal_weights.get("ai_model")),
+            })
+
+        stg_all = production_config.get("strategy_multipliers", {})
+        stg_cfg = stg_all.get(self.advisor.current_strategy, {})
+        if self.advisor.current_strategy in self.advisor.strategy_settings:
+            self.advisor.strategy_settings[self.advisor.current_strategy].update({
+                "profit": stg_cfg.get("profit",
+                                      self.advisor.strategy_settings[self.advisor.current_strategy].get("profit")),
+                "risk": stg_cfg.get("risk", self.advisor.strategy_settings[self.advisor.current_strategy].get("risk")),
+                "confidence_req": stg_cfg.get("confidence_req",
+                                              self.advisor.strategy_settings[self.advisor.current_strategy].get(
+                                                  "confidence_req")),
+                "buy_threshold": stg_cfg.get("buy_threshold",
+                                             self.advisor.strategy_settings[self.advisor.current_strategy].get(
+                                                 "buy_threshold")),
+                "sell_threshold": stg_cfg.get("sell_threshold",
+                                              self.advisor.strategy_settings[self.advisor.current_strategy].get(
+                                                  "sell_threshold")),
+            })
+
+        conf = production_config.get("confidence_params", {})
+        if hasattr(self.advisor, "confidence_params") and conf:
+            self.advisor.confidence_params.update({
+                "base_multiplier": conf.get("base_multiplier", self.advisor.confidence_params.get("base_multiplier")),
+                "confluence_weight": conf.get("confluence_weight",
+                                              self.advisor.confidence_params.get("confluence_weight")),
+                "penalty_strength": conf.get("penalty_strength",
+                                             self.advisor.confidence_params.get("penalty_strength")),
+            })
+
+
+def create_and_visualize_performance_summary(best_parameters_dict, display_type='table'):
+    """
+    Creates a summary table or chart of the best performance metrics for each strategy.
+
+    Args:
+        best_parameters_dict (dict): The dictionary containing best parameters and performance
+                                     for each strategy, as returned by StockWiseAutoCalibrator.
+        display_type (str): 'table' to print a formatted table, 'chart' to show a bar chart.
+    """
+    print("\n" + "=" * 80)
+    print("📈 VISUALIZING CALIBRATION PERFORMANCE")
+    print("=" * 80)
+
+    if not best_parameters_dict:
+        print("No best parameters available to visualize.")
+        return
+
+    summary_data = []
+    for strategy_type, results in best_parameters_dict.items():
+        if not results or not results.get('performance'):
+            print(f"Skipping visualization for {strategy_type}: No performance data.")
+            continue
+
+        perf = results['performance']
+
+        # Collect relevant metrics
+        summary_data.append({
+            'Strategy': strategy_type,
+            'Overall Accuracy (%)': round(perf.get('overall_accuracy', 0.0), 2),
+            'Direction Accuracy (%)': round(perf.get('direction_accuracy', 0.0), 2),
+            'BUY Success Rate (%)': round(perf.get('buy_success_rate', 0.0), 2),
+            'Avg Return (%)': round(perf.get('avg_return', 0.0), 2),
+            'Sharpe Ratio': round(perf.get('sharpe_ratio', 0.0), 2),
+            'Max Drawdown (%)': round(perf.get('max_drawdown', 0.0), 2),
+            'Total Trades': int(perf.get('total_trades', 0)),
+            'Avg Confidence (%)': round(perf.get('confidence_avg', 0.0), 2),
+            'Fitness Score': round(results.get('fitness_score', 0.0), 2)
+        })
+
+    if not summary_data:
+        print("No valid summary data generated for visualization.")
+        return
+
+    df_summary = pd.DataFrame(summary_data)
+    df_summary = df_summary.set_index('Strategy')  # Set strategy as index for better display
+
+    if display_type == 'table':
+        print("\n📊 Performance Metrics Summary Table:\n")
+        print(df_summary.to_string())  # Use to_string() for better console formatting
+        print("\n" + "=" * 80)
+    elif display_type == 'chart':
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:
+            print("❌ Matplotlib not found. Cannot generate charts. Please install it (`pip install matplotlib`).")
+            return
+
+        print("\n📊 Generating Performance Charts...\n")
+
+        # Define metrics to plot
+        metrics_to_plot = [
+            'Overall Accuracy (%)',
+            'Direction Accuracy (%)',
+            'BUY Success Rate (%)',
+            'Avg Return (%)',
+            'Sharpe Ratio',
+            'Fitness Score'
+        ]
+
+        # Filter out metrics that are all zero or NaN to avoid empty charts
+        metrics_to_plot_filtered = [
+            metric for metric in metrics_to_plot
+            if not df_summary[metric].apply(lambda x: np.isclose(x, 0) or np.isnan(x)).all()
+        ]
+
+        if not metrics_to_plot_filtered:
+            print("No non-zero/non-NaN metrics to plot. Skipping chart generation.")
+            return
+
+        fig, axes = plt.subplots(nrows=len(metrics_to_plot_filtered), ncols=1,
+                                 figsize=(10, 4 * len(metrics_to_plot_filtered)))
+
+        if len(metrics_to_plot_filtered) == 1:  # Handle single subplot case
+            axes = [axes]
+
+        for i, metric in enumerate(metrics_to_plot_filtered):
+            ax = axes[i]
+            colors = ['skyblue' if val >= 0 else 'salmon' for val in df_summary[metric]]
+            bars = ax.bar(df_summary.index, df_summary[metric], color=colors)
+            ax.set_title(metric)
+            ax.set_ylabel('Value')
+            ax.tick_params(axis='x', rotation=45)  # Rotate labels if needed
+
+            # Add value labels on top of bars
+            for bar in bars:
+                yval = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width() / 2,
+                        yval + (0.01 * np.max(df_summary[metric]) if np.max(
+                            df_summary[metric]) > 0 else 0.01) if yval >= 0 else yval - (
+                            0.05 * np.min(df_summary[metric]) if np.min(df_summary[metric]) < 0 else 0.05),
+                        # Offset label for negative bars
+                        round(yval, 2), ha='center', va='bottom' if yval >= 0 else 'top', color='black', fontsize=9)
+
+        plt.tight_layout()
+        plt.show()
+        print("\n" + "=" * 80)
+    else:
+        print("Invalid display_type. Please choose 'table' or 'chart'.")
+
+
+def calculate_fitness_score(metrics, strategy_name):
+    """
+    Calculates a comprehensive fitness score based on various performance metrics.
+    🎯 Optimized for risk-adjusted returns and consistent performance,
+    penalizing high drawdown and negative Sharpe Ratios.
+    """
+    overall_accuracy = metrics.get('overall_accuracy', 0)
+    buy_success_rate = metrics.get('buy_success_rate', 0)
+    avg_return = metrics.get('avg_return', 0) # Average return of trades for the period
+    sharpe_ratio = metrics.get('sharpe_ratio', -100) # Default to a very low Sharpe if unavailable
+    max_drawdown = metrics.get('max_drawdown', 0) # Max drawdown (expected to be negative or zero)
+    total_trades = metrics.get('total_trades', 0)
+    # direction_accuracy = metrics.get('direction_accuracy', 0) # Can be used, but focusing on core performance
+
+    # Convert drawdown to a positive value for easier penalty calculation
+    abs_max_drawdown = abs(max_drawdown)
+
+    # Define weights for each component of the fitness score
+    # These weights determine the importance of each metric in the overall fitness
+    w_overall_accuracy = 0.20  # Reduced slightly to give more weight to risk-adjusted return
+    w_buy_success_rate = 0.20  # Reduced slightly
+    w_avg_return = 0.30        # Main driver of profitability
+    w_sharpe_ratio = 0.20      # Increased significantly for risk-adjusted performance
+    w_drawdown_penalty = 0.10  # Explicit penalty for large drawdowns
+    w_trade_volume_bonus = 0.05 # Small bonus for sufficient trade volume
+
+    # --- Component Scoring & Penalties ---
+
+    # Base scores for accuracy and return
+    score_overall_accuracy = overall_accuracy # Already a percentage (e.g., 29.6)
+    score_buy_success_rate = buy_success_rate # Already a percentage (e.g., 21.3)
+    score_avg_return = avg_return * 100 # Convert avg_return (decimal) to percentage (e.g., 0.05 -> 5.0)
+
+    # Sharpe Ratio contribution: Penalize negative Sharpe heavily, reward positive Sharpe
+    # Scale Sharpe to make it contribute meaningfully to the score (e.g., Sharpe of 1.0 -> 10 points)
+    score_sharpe_ratio = sharpe_ratio * 10 if sharpe_ratio > 0 else sharpe_ratio * 20 # Stronger penalty for negative Sharpe
+
+    # Drawdown penalty: Larger absolute drawdown results in a higher penalty
+    # Normalize drawdown penalty if needed, but direct subtraction is fine for now
+    penalty_drawdown = abs_max_drawdown * 0.5 # Example: 50% of absolute drawdown value as penalty
+
+    # Bonus for sufficient number of trades (ensures strategies are active enough)
+    trade_bonus = 0
+    if total_trades > 50: # If a reasonable number of trades occurred
+        trade_bonus = min(total_trades / 100, 10) # Max 10 bonus points, scales with trades
+
+    # Penalty for very poor overall accuracy (if it falls below a minimum acceptable level)
+    penalty_low_accuracy = 0
+    if overall_accuracy < 20: # If overall accuracy is below 20%
+        penalty_low_accuracy = (20 - overall_accuracy) * 1.0 # Significant penalty
+
+    # --- Combined Fitness Score Calculation ---
+    # Sum weighted scores and subtract penalties
+    fitness = (
+        score_overall_accuracy * w_overall_accuracy +
+        score_buy_success_rate * w_buy_success_rate +
+        score_avg_return * w_avg_return +
+        score_sharpe_ratio * w_sharpe_ratio +
+        trade_bonus * w_trade_volume_bonus -
+        penalty_drawdown * w_drawdown_penalty -
+        penalty_low_accuracy
+    )
+
+    # Ensure the fitness score doesn't become overly negative due to extreme penalties,
+    # though negative scores are expected for poor-performing strategies.
+    return round(fitness, 2) # Round for cleaner output
+
+
+# --- MAIN EXECUTION BLOCK ---
+def main_calibration_run():
+    log_directory = 'logs/'
+    config_directory = 'configuration/'
+
+    os.makedirs(log_directory, exist_ok=True)
+    os.makedirs(config_directory, exist_ok=True)
+
+    timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+    log_file_name = f'calibration_progress_{timestamp_str}.log'
+    log_file_path = os.path.join(log_directory, log_file_name)
+
+    root_logger = logging.getLogger()
+    for handler in list(root_logger.handlers):
+        root_logger.removeHandler(handler)
+        if isinstance(handler, logging.FileHandler):
+            handler.close()
+
+    root_logger.setLevel(logging.INFO)
+
+    formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s')
+
+    file_handler = logging.FileHandler(log_file_path, mode='w', encoding='utf-8')
+    file_handler.setFormatter(formatter)
+    root_logger.addHandler(file_handler)
+
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setFormatter(formatter)
+    root_logger.addHandler(stream_handler)
+
+    logging.getLogger('yfinance').setLevel(logging.WARNING)
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
+    logging.getLogger('numexpr').setLevel(logging.WARNING)
+
+    logging.info("✨ Initializing Stock Advisor for calibration.")
+    # Ensure debug=True is passed to see detailed logs from advisor
+    advisor = ProfessionalStockAdvisor(debug=True, use_ibkr=False, download_log=True)
+    logging.info("✅ Stock Advisor initialized.")
+
+    calibrator = StockWiseAutoCalibrator(advisor)
+    logging.info("✅ Auto-Calibrator instance created.")
+
+    prod_cfg = calibrator.load_latest_production_config(strategy_type="balanced")
+    calibrator.apply_production_config_to_advisor(prod_cfg)
+
+    logging.info(f"✅ load latest production config. {prod_cfg}")
+
+    # User input for test size
+    print("\n--- Select Calibration Test Size ---")
+    print("1 = Sanity (Quick test, ~12 minutes)")
+    print("2 = Small (Limited stocks/timestamps/params, ~5 hours)")
+    print("3 = Medium (Balanced test, ~12 hours)")
+    print("4 = Full (Comprehensive, ~24 hours)")
+    test_type_input = input("Test Size (1 = sanity, 2 = small, 3 = medium, 4 = full): ")
+
+    selected_test_size = 'medium'  # Default
+    selected_strategies = ['balanced']  # Default
+
+    if test_type_input == '1':
+        selected_test_size = 'sanity'
+        selected_strategies = ['balanced', 'aggressive']
+        logging.info(f"User selected SANITY test (1) with strategies: {', '.join(selected_strategies)}")
+    elif test_type_input == '2':
+        selected_test_size = 'small'
+        selected_strategies = ['balanced', 'aggressive']
+        logging.info(f"User selected SMALL test (2) with strategies: {', '.join(selected_strategies)}")
+    elif test_type_input == '3':
+        selected_test_size = 'medium'
+        selected_strategies = ['balanced', 'conservative', 'aggressive']
+        logging.info(f"User selected MEDIUM test (3) with strategies: {', '.join(selected_strategies)}")
+    elif test_type_input == '4':
+        selected_test_size = 'full'
+        selected_strategies = ['balanced', 'aggressive', 'conservative', 'swing trading']
+        logging.info(f"User selected FULL test (4) with strategies: {', '.join(selected_strategies)}")
+    else:
+        logging.error("Invalid input. Please enter a number between 1 and 4. Exiting.")
+        sys.exit(1)  # Use sys.exit() for cleaner exit
+
+    starting_time = time.time()
+
+    best_params = run_stockwise_calibration(
+        test_size=selected_test_size,
+        strategies=selected_strategies
+    )
+
+    end_time = time.time()
+    total_execution_seconds = end_time - starting_time
+    execution_time_hours = total_execution_seconds / 3600
+
+    calibrator.save_config_for_all_strategies(best_params)
+    calibrator.generate_final_report(execution_time_hours=execution_time_hours)
+
+    logging.info(f"Total Execution Time: {total_execution_seconds:.2f} seconds")
+    logging.info(f"\n✅ StockWise Auto-Calibration completed in {execution_time_hours:.2f} hours.")
+
+    # Ensure all handlers are properly closed at the end of the main run
+    for handler in list(root_logger.handlers):
+        if isinstance(handler, logging.FileHandler):
+            handler.close()
+            root_logger.removeHandler(handler)
 
 
 def run_stockwise_calibration(test_size='medium', strategies=['balanced']):
@@ -1524,11 +1871,14 @@ def run_stockwise_calibration(test_size='medium', strategies=['balanced']):
         test_size (str): The size of the test ('small', 'medium', 'full', 'sanity').
         strategies (list): A list of strategy types to optimize (e.g., ['balanced', 'aggressive']).
     """
-    starting_time = time.time()
 
     # --- LOGGING SETUP moved here for controlled execution ---
-    log_directory = 'configuration_files/'
+    log_directory = 'logs/'  # New dedicated directory for log files
+    config_directory = 'configuration/'  # New dedicated directory for JSON config files
+
     os.makedirs(log_directory, exist_ok=True)
+    os.makedirs(config_directory, exist_ok=True) # Ensure config directory is also created
+
     timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
     log_file_name = f'calibration_progress_{timestamp_str}.log'
     log_file_path = os.path.join(log_directory, log_file_name)
@@ -1539,7 +1889,8 @@ def run_stockwise_calibration(test_size='medium', strategies=['balanced']):
         root_logger.removeHandler(handler)
         if isinstance(handler, logging.FileHandler):
             try:
-                handler.close()  # Ensure file handles are closed
+                if isinstance(handler, logging.FileHandler):
+                    handler.close()
             except Exception as e:
                 pass  # Ignore errors if handler is already closed or invalid
 
@@ -1561,10 +1912,8 @@ def run_stockwise_calibration(test_size='medium', strategies=['balanced']):
     logging.getLogger('numexpr').setLevel(logging.WARNING)
     # --- END LOGGING SETUP ---
 
+    starting_time = time.time()
     logging.info("✨ Initializing Stock Advisor for calibration.")
-    # Import ProfessionalStockAdvisor here to ensure the latest version is used
-    # This assumes stockwise_simulation.py is correctly updated and available
-    from stockwise_simulation import ProfessionalStockAdvisor
 
     advisor = ProfessionalStockAdvisor(debug=True,
                                        download_log=False)
@@ -1604,44 +1953,63 @@ def run_stockwise_calibration(test_size='medium', strategies=['balanced']):
     return best_params
 
 
-if __name__ == "__main__":
-    # The logging setup is now inside run_stockwise_calibration, so this only
-    # affects any messages *before* run_stockwise_calibration is called.
-    # It's good practice to keep it consistent.
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)  # Ensure initial messages are visible
+def run_stockwise_calibration(test_size='medium', strategies=['balanced']):
+    # This function is now simplified as setup is done in main_calibration_run
+    # Re-initialize advisor and calibrator as they might be new instances per run
+    advisor = ProfessionalStockAdvisor(debug=True, use_ibkr=False, download_log=True)
+    calibrator = StockWiseAutoCalibrator(advisor)
 
-    logging.info("--- Starting StockWise Auto-Calibration Script ---")
-    print("Select a test size and strategies to optimize:")
-    print("Estimate run time based on selected test size and strategies:")
-    print("Sanity Test = ~12 minutes ; Small Test = ~5 hours ; Medium Test = ~12 hours ; Full Test = ~24 hours")
-    test_type_input = input("Test Size (1 = sanity, 2 = small, 3 = medium, 4 = full): ")
-
-    selected_test_size = 'medium'
-    selected_strategies = ['balanced']
-
-    if test_type_input == '1':
-        selected_test_size = 'sanity'
-        selected_strategies = ['balanced', 'aggressive']
-        logging.info(f"User selected SANITY test (1) with strategies: {', '.join(selected_strategies)}")
-    elif test_type_input == '2':
-        selected_test_size = 'small'
-        selected_strategies = ['balanced', 'aggressive']
-        logging.info(f"User selected SMALL test (2) with strategies: {', '.join(selected_strategies)}")
-    elif test_type_input == '3':
-        selected_test_size = 'medium'
-        selected_strategies = ['balanced', 'conservative', 'aggressive']
-        logging.info(f"User selected MEDIUM test (3) with strategies: {', '.join(selected_strategies)}")
-    elif test_type_input == '4':
-        selected_test_size = 'full'
-        selected_strategies = ['balanced', 'aggressive', 'conservative', 'swing']
-        logging.info(f"User selected FULL test (4) with strategies: {', '.join(selected_strategies)}")
-    else:
-        logging.error("Invalid input. Please enter a number between 1 and 4. Exiting.")
-        sys.exit(1)
-
-    run_stockwise_calibration(
-        test_size=selected_test_size,
-        strategies=selected_strategies
+    # Adjust calibration config based on test_size and run optimization
+    best_params = calibrator.run_calibration(
+        test_size=test_size,
+        strategies=strategies
     )
-    logging.info("--- Script execution completed ---")
+
+    # Call to display performance summary AFTER calibration completes
+    create_and_visualize_performance_summary(best_params, display_type='table')
+    create_and_visualize_performance_summary(best_params, display_type='chart')
+
+    return best_params
+
+if __name__ == "__main__":
+    main_calibration_run()
+    # # The logging setup is now inside run_stockwise_calibration, so this only
+    # # affects any messages *before* run_stockwise_calibration is called.
+    # # It's good practice to keep it consistent.
+    # root_logger = logging.getLogger()
+    # root_logger.setLevel(logging.INFO)  # Ensure initial messages are visible
+    #
+    # logging.info("--- Starting StockWise Auto-Calibration Script ---")
+    # print("Select a test size and strategies to optimize:")
+    # print("Estimate run time based on selected test size and strategies:")
+    # print("Sanity Test = ~12 minutes ; Small Test = ~5 hours ; Medium Test = ~12 hours ; Full Test = ~24 hours")
+    # test_type_input = input("Test Size (1 = sanity, 2 = small, 3 = medium, 4 = full): ")
+    #
+    # selected_test_size = 'medium'
+    # selected_strategies = ['Balanced']
+    #
+    # if test_type_input == '1':
+    #     selected_test_size = 'sanity'
+    #     selected_strategies = ['Balanced', 'Aggressive']
+    #     logging.info(f"User selected SANITY test (1) with strategies: {', '.join(selected_strategies)}")
+    # elif test_type_input == '2':
+    #     selected_test_size = 'small'
+    #     selected_strategies = ['Balanced', 'Aggressive']
+    #     logging.info(f"User selected SMALL test (2) with strategies: {', '.join(selected_strategies)}")
+    # elif test_type_input == '3':
+    #     selected_test_size = 'medium'
+    #     selected_strategies = ['Balanced', 'Conservative', 'Aggressive']
+    #     logging.info(f"User selected MEDIUM test (3) with strategies: {', '.join(selected_strategies)}")
+    # elif test_type_input == '4':
+    #     selected_test_size = 'full'
+    #     selected_strategies = ['Balanced', 'Aggressive', 'Conservative', 'Swing Trading']
+    #     logging.info(f"User selected FULL test (4) with strategies: {', '.join(selected_strategies)}")
+    # else:
+    #     logging.error("Invalid input. Please enter a number between 1 and 4. Exiting.")
+    #     sys.exit(1)
+    #
+    # run_stockwise_calibration(
+    #     test_size=selected_test_size,
+    #     strategies=selected_strategies
+    # )
+    # logging.info("--- Script execution completed ---")
