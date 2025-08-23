@@ -7,6 +7,7 @@ Target: 95% confidence recommendations with clear buy/sell signals.
 """
 
 import streamlit as st
+import logging
 import pandas as pd
 import numpy as np
 import time
@@ -19,6 +20,10 @@ import json # Import json for loading config files
 from datetime import datetime, timedelta, date
 import ta
 import warnings
+import traceback
+import random # For jitter in backoff
+import sys # Import sys for sys.stdout/stderr encoding
+
 
 # ENHANCED IMPORTS WITH ERROR HANDLING
 # IBKR Integration imports
@@ -40,7 +45,8 @@ class ProfessionalStockAdvisor:
 
     def __init__(self, model_dir="models/NASDAQ-training set", debug=False, use_ibkr=True,
                  ibkr_host="127.0.0.1", ibkr_port=7497, download_log=True,
-                 config_file=None, strategy_type="Balanced"):
+                 config_file="configuration/stockwise_config.json",
+                 performance_log_dir="logs/performance", trade_log_dir="logs/trades"):
         """
         Initializes the ProfessionalStockAdvisor.
 
@@ -53,7 +59,8 @@ class ProfessionalStockAdvisor:
             download_log (bool): If True, logs are written to a file.
             config_file (str, optional): Path to a JSON configuration file to load
                                          optimized parameters. If None, default parameters are used.
-            strategy_type (str): The name of the strategy to load from the config file (e.g., "Balanced", "Aggressive").
+            performance_log_dir (str): Directory for performance logs.
+            trade_log_dir (str): Directory for trade logs.
         """
         self.model_dir = model_dir
         self.models = {}
@@ -62,68 +69,147 @@ class ProfessionalStockAdvisor:
         self.ibkr_host = ibkr_host
         self.ibkr_port = ibkr_port
         self.download_log = download_log
-        self.log_file = None  # Will be set by log() method on first call
-        self.debug_log = []  # Initialize debug_log here
+        self.log_file = None
+        self.debug_log = []  # In-memory log for debug purposes
+        self.config_file = config_file
 
-        # Initialize IBKR manager or set to None if not available/used
+        # Initialize log directory paths FIRST
+        self.performance_log_dir = performance_log_dir
+        self.trade_log_dir = trade_log_dir
+        self.log_directory = 'logs/'  # Base log directory
+
+        self.start_time = time.time()  # For measuring execution time of advisor instance
+
+        # Initialize IBKR manager and connection status
         self.ibkr_manager = None
-        if self.use_ibkr and IBKR_AVAILABLE:
-            try:
-                self.ibkr_manager = ProfessionalIBKRManager(host=self.ibkr_host, port=self.ibkr_port,
-                                                            debug=self.debug)
-                self.log("✅ IBKR Manager initialized.", "INFO")
-            except Exception as e:
-                self.log(f"❌ Failed to initialize IBKR Manager: {e}", "ERROR")
-                self.use_ibkr = False  # Fallback to yfinance
-                self.log("⚠️ Falling back to yfinance", "WARNING")
-        elif self.use_ibkr and not IBKR_AVAILABLE:
-            self.log("⚠️ IBKR not available (module not imported). Falling back to yfinance.", "WARNING")
-            self.use_ibkr = False
+        self.ibkr_connected = False  # Track connection status
+        self.data_source = None  # Will be set to 'IBKR Professional' or 'yfinance'
 
-        self.load_models()
+        # Set up logging early, after log directories are defined
+        self.setup_logging()
 
-        # Initialize default strategy settings, signal weights, and confidence parameters
+        # ✅ CRITICAL FIX: Initialize strategy settings and current_strategy BEFORE calling _load_configuration
         self.strategy_settings = self.get_default_strategy_settings()
+        self.current_strategy = "balanced"  # Default strategy name
+
+        # Initialize current thresholds from the default settings for the default strategy.
+        if self.current_strategy in self.strategy_settings:
+            self.current_buy_threshold = self.strategy_settings[self.current_strategy]["buy_threshold"]
+            self.current_sell_threshold = self.strategy_settings[self.current_strategy]["sell_threshold"]
+        else:
+            self.current_buy_threshold = 1.0  # Default fallback
+            self.current_sell_threshold = -1.0  # Default fallback
+            self.log(f"Strategy '{self.current_strategy}' not found in default settings. Using fallback thresholds.",
+                     "WARNING")
+
+        # Initialize signal_weights
         self.signal_weights = {
-            'trend': 0.45,
-            'momentum': 0.30,
-            'volume': 0.10,
-            'support_resistance': 0.05,
-            'ai_model': 0.10
+            'volume_score': 0.2,
+            'momentum_score': 0.3,
+            'sr_score': 0.25,
+            'trend_score': 0.15,
+            'volatility_score': 0.1,
+            'ml_score': 1.0
         }
+
+        # Initialize confidence_params
         self.confidence_params = {
             'base_multiplier': 1.0,
             'confluence_weight': 1.0,
             'penalty_strength': 1.0
         }
 
-        self.current_strategy = strategy_type # Set initial strategy
+        # Initialize investment_days
+        self.investment_days = 7
 
-        # Load configuration from file if provided
-        if config_file:
-            self._load_configuration(config_file, self.current_strategy)
-        else:
-            self.log("No configuration file provided. Using default parameters.", "INFO")
+        # Initialize tax and broker fee
+        self.tax = 0.25
+        self.broker_fee = 0.004
 
-        # Set current thresholds based on the selected strategy (default or loaded)
-        if self.current_strategy in self.strategy_settings:
-            self.current_buy_threshold = self.strategy_settings[self.current_strategy].get("buy_threshold", 1.0)
-            self.current_sell_threshold = self.strategy_settings[self.current_strategy].get("sell_threshold", -1.0)
-        else:
-            self.current_buy_threshold = 1.0  # Default fallback
-            self.current_sell_threshold = -1.0  # Default fallback
-            self.log(
-                f"Strategy '{self.current_strategy}' not found in settings. Using fallback thresholds.",
-                "WARNING")
+        # ✅ NOW it's safe to call _load_configuration since current_strategy exists
+        self._initialize_data_source()
+        self._load_configuration(self.config_file, self.current_strategy)  # Load configuration (if any)
+        self.load_models()  # Load ML models
 
-        self.investment_days = 7  # Default investment days
-        self.tax = 0.0  # Initialize tax attribute
-        self.broker_fee = 0.0  # Initialize broker_fee attribute
+        self.market_open = True  # Assume market is open for initial checks
+        self.active_symbol = None  # To track current symbol being processed for logging
 
-        self.log(f"ProfessionalStockAdvisor initialized in {'debug' if debug else 'standard'} mode.", "INFO")
-        if self.use_ibkr:
-            self.log(f"Using IBKR connection: {self.ibkr_host}:{self.ibkr_port}", "INFO")
-        else:
+        self.log(f"ProfessionalStockAdvisor initialized in debug mode: {self.debug}.", "INFO")
+        self.log(f"Model directory: {self.model_dir}", "DEBUG")
+
+    def setup_logging(self):
+        """Sets up logging for the advisor, including a file handler."""
+        # Ensure log directories exist
+        os.makedirs(self.performance_log_dir, exist_ok=True)
+        os.makedirs(self.trade_log_dir, exist_ok=True)
+
+        log_filename = datetime.now().strftime("%Y%m%d_%H%M%S.log")
+        self.log_file = os.path.join("logs", log_filename)  # Main log for the advisor
+
+        # Configure the root logger
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s | %(levelname)s | %(message)s',
+            handlers=[
+                logging.FileHandler(self.log_file, encoding='utf-8'),
+                logging.StreamHandler(sys.stdout)  # Keep console output standard
+            ]
+        )
+
+    def _initialize_data_source(self):
+        """
+        Initializes the data source (IBKR or yfinance) for the advisor.
+        This method includes robust connection attempts for IBKR.
+        """
+        # Ensure IBKR_AVAILABLE is accessible, it's set globally in the script.
+        global IBKR_AVAILABLE  # This makes the global variable accessible
+
+        if self.use_ibkr and IBKR_AVAILABLE:
+            try:
+                self.log(f"🔌 Attempting to connect to IBKR at {self.ibkr_host}:{self.ibkr_port}", "INFO")
+                # Initialize ProfessionalIBKRManager with the logger
+                self.ibkr_manager = ProfessionalIBKRManager(host=self.ibkr_host, port=self.ibkr_port,
+                                                            logger=self.logger, debug=self.debug)
+
+                # Define fallback connection configurations
+                connection_configs = [
+                    {"host": self.ibkr_host, "port": self.ibkr_port, "name": f"Primary ({self.ibkr_port})"},
+                    {"host": "127.0.0.1", "port": 7497, "name": "TWS Paper (7497)"},  # Default TWS Paper
+                    {"host": "127.0.0.1", "port": 4002, "name": "Gateway Paper (4002)"},  # Default Gateway Paper
+                    {"host": "127.0.0.1", "port": 7496, "name": "TWS Live (7496)"},  # Default TWS Live
+                    {"host": "127.0.0.1", "port": 4001, "name": "Gateway Live (4001)"}  # Default Gateway Live
+                ]
+
+                # Use connect_with_fallback if available in ProfessionalIBKRManager
+                if hasattr(self.ibkr_manager, 'connect_with_fallback'):
+                    if self.ibkr_manager.connect_with_fallback(connection_configs):
+                        self.ibkr_connected = True
+                        self.data_source = self.ibkr_manager  # Set the manager instance as data source
+                        conn_info = self.ibkr_manager.get_connection_info()
+                        conn_name = conn_info.get('connection_config', {}).get('name', 'Unknown')
+                        conn_port = conn_info.get('connection_config', {}).get('port', 'Unknown')
+                        self.log(f"✅ IBKR Manager connected via {conn_name} on port {conn_port}", "SUCCESS")
+                    else:
+                        raise ConnectionError("IBKR connection failed after all fallback attempts.")
+                else:
+                    # Fallback to simple connect if connect_with_fallback isn't in manager
+                    self.ibkr_manager.connect()
+                    if self.ibkr_manager.is_connected():
+                        self.ibkr_connected = True
+                        self.data_source = self.ibkr_manager
+                        self.log("✅ IBKR Manager connected (simple connect).", "SUCCESS")
+                    else:
+                        raise ConnectionError("IBKR connection failed (simple connect).")
+
+            except Exception as e:
+                self.log(f"❌ Failed to connect to IBKR: {e}. Falling back to yfinance.", "ERROR")
+                self.log(traceback.format_exc(), "DEBUG")  # Log full traceback for connection issues
+                self.use_ibkr = False  # Disable IBKR usage if connection fails
+                self.ibkr_connected = False  # Ensure connection status is false
+
+        # If IBKR is not used, not available, or connection failed
+        if not self.use_ibkr or not self.ibkr_connected:
+            self.data_source = yf  # Set yfinance module as data_source
             self.log("Using yfinance for data retrieval.", "INFO")
 
     def _load_configuration(self, config_file_path, strategy_name):
@@ -164,7 +250,6 @@ class ProfessionalStockAdvisor:
             else:
                 self.log("⚠️ Thresholds not found in config. Using defaults.", "WARNING")
 
-
             # Update confidence parameters
             if 'confidence_params' in config:
                 self.confidence_params.update(config['confidence_params'])
@@ -204,57 +289,145 @@ class ProfessionalStockAdvisor:
             advisor.strategy_settings = {"profit": 1.0, "risk": 1.0, "confidence_req": 75}
 
         if not hasattr(advisor, 'current_strategy'):
-            advisor.current_strategy = "Balanced"
+            advisor.current_strategy = "balanced"
 
         return advisor
 
+    def _get_log_level_prefix(self, level):
+        """
+        Returns a formatted prefix (emoji + level string) for logging.
+        """
+        color_map = {
+            "INFO": "\033[94m",  # Blue
+            "SUCCESS": "\033[92m",  # Green
+            "ERROR": "\033[91m",  # Red
+            "WARNING": "\033[93m",  # Yellow
+        }
+        reset = "\033[0m"
+
+        emoji_prefix = {
+            "INFO": "ℹ️",
+            "SUCCESS": "✅",
+            "ERROR": "❌",
+            "WARNING": "⚠️"
+        }.get(level, "ℹ️")
+
+        return f"{color_map.get(level, '')}{emoji_prefix} [{level}]{reset}"
+
+    # def log(self, message, level="INFO"):
+    #     """Enhanced logging for professional system"""
+    #     # Calculate elapsed time ---
+    #     elapsed_seconds = time.time() - self.start_time
+    #     minutes, seconds = divmod(int(elapsed_seconds), 60)
+    #     hours, minutes = divmod(minutes, 60)
+    #
+    #     # Format elapsed time as HH:MM:SS or MM:SS if less than an hour
+    #     if hours > 0:
+    #         elapsed_time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    #     else:
+    #         elapsed_time_str = f"{minutes:02d}:{seconds:02d}"
+    #
+    #     timestamp_hms = datetime.now().strftime('%H:%M:%S')  # Current time HH:MM:SS
+    #     level_prefix = self._get_log_level_prefix(level)
+    #
+    #     # Determine active symbol for log prefix if available
+    #     symbol_prefix = ""
+    #     # Check if 'active_symbol' attribute exists and is not None/empty
+    #     if hasattr(self, 'active_symbol') and self.active_symbol:
+    #         symbol_prefix = f" {self.active_symbol} |"  # Add space for formatting consistently
+    #         # Construct the log entry for console (with color codes)
+    #         console_log_entry = f"{elapsed_time_str} | {timestamp_hms} | {level_prefix_console}{symbol_prefix} {message}"
+    #
+    #         # Construct the log entry for file (without color codes)
+    #         # Reconstruct file_level_prefix without ANSI escape codes
+    #         # Assuming _get_log_level_prefix internally provides the raw emoji and level name
+    #         # For file, we want something like "✅ [SUCCESS]"
+    #         raw_emoji = {
+    #             "INFO": "ℹ️", "SUCCESS": "✅", "ERROR": "❌", "WARNING": "⚠️",
+    #             "CRITICAL": "🔥", "DEBUG": "🐛"
+    #         }.get(level, "💬")
+    #         file_level_prefix = f"{raw_emoji} [{level.upper()}]"
+    #
+    #         # --- FIX START ---
+    #         # Ensure correct spacing for file log entry as well
+    #         file_log_entry = f"{elapsed_time_str} | {timestamp_hms} | {file_level_prefix}{symbol_prefix} {message}"
+    #         # --- FIX END ---
+    #
+    #         # Store in-memory for Streamlit debug display (always store clean version)
+    #         if self.debug:
+    #             self.debug_log.append(file_log_entry)  # Store the clean version for debug log
+    #
+    #         # Log to console
+    #         print(console_log_entry)
+    #
+    #         # Log to file if enabled
+    #         if self.download_log:
+    #             if not self.log_file:
+    #                 log_directory = 'logs/'
+    #                 os.makedirs(log_directory, exist_ok=True)
+    #                 timestamp_file = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    #                 self.log_file = os.path.join(log_directory, f"professional_stockwise_log_{timestamp_file}.log")
+    #                 with open(self.log_file, 'w', encoding='utf-8') as f:
+    #                     f.write(f"--- Professional StockWise Log Started: {datetime.now()} ---\n\n")
+    #
+    #             try:
+    #                 with open(self.log_file, 'a', encoding='utf-8') as f:
+    #                     f.write(file_log_entry + '\n')
+    #             except IOError as e:
+    #                 print(f"Error writing to log file {self.log_file}: {e}")  # Fallback to print if file logging fails
     def log(self, message, level="INFO"):
         """Enhanced logging for professional system"""
+        # --- NEW CODE: Calculate elapsed time ---
+        elapsed_seconds = time.time() - self.start_time
+        minutes, seconds = divmod(int(elapsed_seconds), 60)
+        hours, minutes = divmod(minutes, 60)
+
+        # Format elapsed time as HH:MM:SS or MM:SS if less than an hour
+        if hours > 0:
+            elapsed_time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        else:
+            elapsed_time_str = f"{minutes:02d}:{seconds:02d}"
+
+        timestamp_hms = datetime.now().strftime('%H:%M:%S')  # Current time HH:MM:SS
+        level_prefix = self._get_log_level_prefix(level)
+        symbol_prefix = getattr(self, "active_symbol", "")  # Get active symbol if available, otherwise empty
+
+        # Construct the log entry based on the new format:
+        # Running Time | Current Time | Level Prefix | Symbol (if available) | Message
+        if symbol_prefix:
+            log_entry = f"{elapsed_time_str} | {timestamp_hms} | {level_prefix} {symbol_prefix} | {message}"
+        else:
+            log_entry = f"{elapsed_time_str} | {timestamp_hms} | {level_prefix} {message}"
+
+        # Store in-memory for Streamlit debug display (consider if you want elapsed time here too)
         if self.debug:
-            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            color_map = {
-                "INFO": "\033[94m",  # Blue
-                "SUCCESS": "\033[92m",  # Green
-                "ERROR": "\033[91m",  # Red
-                "WARNING": "\033[93m",  # Yellow
-            }
-            reset = "\033[0m"
-            level_prefix = {"INFO": "[INFO]", "SUCCESS": "[SUCCESS]", "ERROR": "[ERROR]", "WARNING": "[WARNING]"}.get(
-                level, "[INFO]")
-            symbol = getattr(self, "active_symbol", "")
+            self.debug_log.append(log_entry)
 
-            # Console output with colors
-            emoji_prefix = {"INFO": "ℹ️", "SUCCESS": "✅", "ERROR": "❌", "WARNING": "⚠️"}.get(level, "ℹ️")
-            console_formatted = (f"{datetime.now().strftime('%H:%M:%S')} | {color_map.get(level, '')}{emoji_prefix} "
-                                 f"[{level}] {symbol} | {message}{reset}")
-            self.debug_log.append(console_formatted)
-            print(console_formatted)
+        # Log to console
+        print(log_entry)  # Print the fully formatted string
 
-            # File logging
-            if self.download_log and hasattr(self, 'log_file') and self.log_file:
-                try:
-                    # 🔧 ENSURE: Directory exists before writing
-                    log_dir = os.path.dirname(self.log_file)
-                    if log_dir:
-                        os.makedirs(log_dir, exist_ok=True)
+        # Log to file if enabled
+        if self.download_log:
+            if not self.log_file:
+                os.makedirs(self.log_directory, exist_ok=True)
+                timestamp_file = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+                self.log_file = os.path.join(self.log_directory, f"professional_stockwise_log_{timestamp_file}.log")
+                with open(self.log_file, 'w', encoding='utf-8') as f:
+                    f.write(f"--- Professional StockWise Log Started: {datetime.now()} ---\n\n")
 
-                    if symbol:
-                        clean_formatted = f"{timestamp} | {level_prefix} | {symbol} | {message}"
-                    else:
-                        clean_formatted = f"{timestamp} | {level_prefix} | {message}"
-
-                    with open(self.log_file, "a", encoding='utf-8', errors='replace') as f:
-                        f.write(clean_formatted + "\n")
-                        f.flush()
-
-                except Exception as e:
-                    print(f"Logging error: {e}")
+            try:
+                # File log entry without ANSI escape codes if colors are used for console
+                clean_log_entry = f"{elapsed_time_str} | {timestamp_hms} | {level_prefix.strip()} | {symbol_prefix + ' | ' if symbol_prefix else ''}{message}"
+                with open(self.log_file, 'a', encoding='utf-8') as f:
+                    f.write(clean_log_entry + '\n')
+            except IOError as e:
+                print(f"Error writing to log file {self.log_file}: {e}")
 
     def ensure_log_file(self):
         """Ensure log file is properly initialized"""
         if not hasattr(self, 'log_file') or not self.log_file:
             timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-            self.log_file = os.path.join(self.log_path,f"professional_stockwise_log_{timestamp}.log")
+            self.log_file = os.path.join(self.log_directory,f"professional_stockwise_log_{timestamp}.log")
 
             if self.download_log:
                 try:
@@ -277,13 +450,13 @@ class ProfessionalStockAdvisor:
         This method is called during __init__ to set up initial values.
         """
         return {
-            "Conservative": {"profit": 0.8, "risk": 0.8, "confidence_req": 85, "buy_threshold": 1.0,
+            "conservative": {"profit": 0.8, "risk": 0.8, "confidence_req": 85, "buy_threshold": 1.0,
                              "sell_threshold": -1.0},
-            "Balanced": {"profit": 1.0, "risk": 1.0, "confidence_req": 75, "buy_threshold": 0.9,
+            "balanced": {"profit": 1.0, "risk": 1.0, "confidence_req": 75, "buy_threshold": 0.9,
                          "sell_threshold": -0.9},
-            "Aggressive": {"profit": 1.4, "risk": 1.3, "confidence_req": 65, "buy_threshold": 0.6,
+            "aggressive": {"profit": 1.4, "risk": 1.3, "confidence_req": 65, "buy_threshold": 0.6,
                            "sell_threshold": -0.6},
-            "Swing Trading": {"profit": 1.8, "risk": 1.5, "confidence_req": 70, "buy_threshold": 0.8,
+            "swing trading": {"profit": 1.8, "risk": 1.5, "confidence_req": 70, "buy_threshold": 0.8,
                               "sell_threshold": -0.8}
         }
 
@@ -457,7 +630,7 @@ class ProfessionalStockAdvisor:
             # Test with Balanced strategy
             original_strategy = self.current_strategy
             original_settings = self.strategy_settings.copy()
-            self.current_strategy = "Balanced"
+            self.current_strategy = "balanced"
             self.strategy_settings = {"profit": 1.0, "risk": 1.0, "confidence_req": 75}
 
             recommendation = self.generate_enhanced_recommendation(mock_indicators, symbol_to_test)
@@ -595,8 +768,11 @@ class ProfessionalStockAdvisor:
                 # Enhanced yfinance retry logic
                 for attempt in range(3):
                     try:
+                        # --- FIX START ---
+                        # Removed 'show_errors' argument as it's not supported by yfinance.
                         df = yf.download(symbol, start=start_date, end=end_date,
                                          progress=False, auto_adjust=True, threads=False)
+                        # --- FIX END ---
 
                         if df is not None and not df.empty:
                             # Handle MultiIndex columns
@@ -692,21 +868,93 @@ class ProfessionalStockAdvisor:
 
         return score, signals
 
+    # def calculate_realistic_confidence(self, final_score, individual_scores, signal_agreement):
+    #     """
+    #     Calculate more realistic confidence based on actual signal strength and agreement
+    #
+    #     Args:
+    #         final_score: The weighted final score
+    #         individual_scores: Dict of individual signal scores
+    #         signal_agreement: How well signals agree with each other
+    #
+    #     Returns:
+    #         float: Confidence percentage (30-85 range)
+    #     """
+    #
+    #     # Base confidence starts lower and more realistic
+    #     if final_score >= 2.5:
+    #         base_confidence = 70
+    #     elif final_score >= 2.0:
+    #         base_confidence = 65
+    #     elif final_score >= 1.5:
+    #         base_confidence = 60
+    #     elif final_score >= 1.0:
+    #         base_confidence = 55
+    #     elif final_score >= 0.5:
+    #         base_confidence = 50
+    #     elif final_score >= 0:
+    #         base_confidence = 45
+    #     else:
+    #         base_confidence = 40
+    #
+    #     # Signal agreement bonus (how many signals agree on direction)
+    #     positive_signals = sum(1 for score in individual_scores.values() if score > 0)
+    #     total_signals = len([s for s in individual_scores.values() if s != 0])
+    #
+    #     if total_signals > 0:
+    #         agreement_ratio = positive_signals / total_signals
+    #         if agreement_ratio >= 0.8:  # 80%+ agreement
+    #             agreement_bonus = 10
+    #         elif agreement_ratio >= 0.6:  # 60%+ agreement
+    #             agreement_bonus = 5
+    #         elif agreement_ratio >= 0.4:  # 40%+ agreement
+    #             agreement_bonus = 0
+    #         else:  # Less than 40% agreement
+    #             agreement_bonus = -10
+    #     else:
+    #         agreement_bonus = -15  # No clear signals
+    #
+    #     # Volume validation (critical for confidence)
+    #     volume_score = individual_scores.get('volume', 0)
+    #     if volume_score < -0.5:
+    #         volume_penalty = -15  # Heavy penalty for weak volume
+    #     elif volume_score < 0:
+    #         volume_penalty = -8
+    #     elif volume_score > 1:
+    #         volume_penalty = 5  # Bonus for strong volume
+    #     else:
+    #         volume_penalty = 0
+    #
+    #     # Trend strength validation
+    #     trend_score = individual_scores.get('trend', 0)
+    #     momentum_score = individual_scores.get('momentum', 0)
+    #
+    #     if trend_score > 2 and momentum_score > 1:
+    #         trend_momentum_bonus = 8
+    #     elif trend_score > 1 and momentum_score > 0.5:
+    #         trend_momentum_bonus = 3
+    #     elif trend_score < 0 or momentum_score < 0:
+    #         trend_momentum_bonus = -8
+    #     else:
+    #         trend_momentum_bonus = 0
+    #
+    #     # Calculate final confidence
+    #     final_confidence = base_confidence + agreement_bonus + volume_penalty + trend_momentum_bonus
+    #
+    #     # Cap confidence in realistic range
+    #     final_confidence = max(30, min(85, final_confidence))
+    #
+    #     return final_confidence
+
     def calculate_realistic_confidence(self, final_score, individual_scores, signal_agreement):
         """
-        Calculate more realistic confidence based on actual signal strength and agreement
-
-        Args:
-            final_score: The weighted final score
-            individual_scores: Dict of individual signal scores
-            signal_agreement: How well signals agree with each other
-
-        Returns:
-            float: Confidence percentage (30-85 range)
+        Calculate realistic confidence (supports up to 95%)
         """
 
-        # Base confidence starts lower and more realistic
-        if final_score >= 2.5:
+        # --- Base confidence starts lower but allows scaling higher ---
+        if final_score >= 3.0:
+            base_confidence = 75
+        elif final_score >= 2.5:
             base_confidence = 70
         elif final_score >= 2.0:
             base_confidence = 65
@@ -721,54 +969,41 @@ class ProfessionalStockAdvisor:
         else:
             base_confidence = 40
 
-        # Signal agreement bonus (how many signals agree on direction)
+        # Agreement bonus
         positive_signals = sum(1 for score in individual_scores.values() if score > 0)
         total_signals = len([s for s in individual_scores.values() if s != 0])
-
+        agreement_bonus = 0
         if total_signals > 0:
-            agreement_ratio = positive_signals / total_signals
-            if agreement_ratio >= 0.8:  # 80%+ agreement
+            ratio = positive_signals / total_signals
+            if ratio >= 0.9:
+                agreement_bonus = 15
+            elif ratio >= 0.75:
                 agreement_bonus = 10
-            elif agreement_ratio >= 0.6:  # 60%+ agreement
+            elif ratio >= 0.6:
                 agreement_bonus = 5
-            elif agreement_ratio >= 0.4:  # 40%+ agreement
-                agreement_bonus = 0
-            else:  # Less than 40% agreement
+            elif ratio < 0.4:
                 agreement_bonus = -10
-        else:
-            agreement_bonus = -15  # No clear signals
 
-        # Volume validation (critical for confidence)
+        # Volume and trend validation (same logic as before)
         volume_score = individual_scores.get('volume', 0)
-        if volume_score < -0.5:
-            volume_penalty = -15  # Heavy penalty for weak volume
-        elif volume_score < 0:
-            volume_penalty = -8
-        elif volume_score > 1:
-            volume_penalty = 5  # Bonus for strong volume
-        else:
-            volume_penalty = 0
+        volume_penalty = -8 if volume_score < 0 else (5 if volume_score > 1 else 0)
 
-        # Trend strength validation
         trend_score = individual_scores.get('trend', 0)
         momentum_score = individual_scores.get('momentum', 0)
-
         if trend_score > 2 and momentum_score > 1:
-            trend_momentum_bonus = 8
+            trend_bonus = 8
         elif trend_score > 1 and momentum_score > 0.5:
-            trend_momentum_bonus = 3
+            trend_bonus = 3
         elif trend_score < 0 or momentum_score < 0:
-            trend_momentum_bonus = -8
+            trend_bonus = -8
         else:
-            trend_momentum_bonus = 0
+            trend_bonus = 0
 
-        # Calculate final confidence
-        final_confidence = base_confidence + agreement_bonus + volume_penalty + trend_momentum_bonus
+        # --- Final confidence ---
+        final_confidence = base_confidence + agreement_bonus + volume_penalty + trend_bonus
 
-        # Cap confidence in realistic range
-        final_confidence = max(30, min(85, final_confidence))
-
-        return final_confidence
+        # Allow range up to 95%
+        return max(30, min(95, final_confidence))
 
     def calculate_signal_agreement(self, individual_scores):
         """Calculate how well signals agree with each other"""
@@ -821,74 +1056,90 @@ class ProfessionalStockAdvisor:
         self.log(f"Enhanced Volume Score: {score:.2f}", "SUCCESS")
         return score, signals
 
-    def apply_israeli_fees_and_tax(self, profit_pct, apply_tax=True, apply_fees=True):
+    def apply_israeli_fees_and_tax(self, gross_profit_pct):
         """
-        Adjust profit percentage for Israeli broker fees and tax.
-        - Broker fee: 0.2% on buy + 0.2% on sell = 0.4%
-        - Tax: 25% on net profit
+        Applies typical Israeli broker fees and capital gains tax to a gross profit percentage.
+        :param gross_profit_pct: Gross profit percentage (e.g., 10 for 10%).
+        :return: Net profit percentage after fees and tax.
+        """
+        # Ensure self.broker_fee and self.tax are initialized in __init__ if not already
+        # Example values for reference (they should be set in __init__):
+        # self.broker_fee = 0.004 # 0.4% as a decimal (of initial capital, simplified)
+        # self.tax = 0.25 # 25% capital gains tax as a decimal
+
+        # Broker fee is applied to the gross profit percentage
+        # It's simplified here as a flat deduction from the percentage profit
+        profit_after_fees = gross_profit_pct - (self.broker_fee * 100) # Convert broker_fee to percentage points
+
+        # Only apply tax if there's a profit after fees
+        if profit_after_fees > 0:
+            tax_amount = profit_after_fees * self.tax
+            net_profit_pct = profit_after_fees - tax_amount
+            self.log(f"Applied capital gains tax: -{tax_amount:.2f}%", "INFO")
+        else:
+            net_profit_pct = profit_after_fees # No tax on losses or break-even
+
+        self.log(f"Profit calculation: {gross_profit_pct:.2f}% (gross) → {net_profit_pct:.2f}% (net)", "INFO")
+        return net_profit_pct
+
+        # In stockwise_simulation.py, within the ProfessionalStockAdvisor class:
+
+    def build_enhanced_trading_plan(self, current_price, target_profit_decimal, stop_loss_ratio):
+        """
+        Builds an enhanced trading plan based on current market data and strategy parameters.
+        This method is designed to be called when a BUY signal is generated to provide
+        concrete entry/exit points and risk management.
 
         Args:
-        profit_pct: Gross profit percentage (e.g., 5.0 for 5%)
-        apply_tax: Whether to apply capital gains tax
-        apply_fees: Whether to apply broker fees
+            current_price (float): The current price of the stock.
+            target_profit_decimal (float): The target profit as a decimal (e.g., 0.05 for 5%).
+            stop_loss_ratio (float): The stop-loss as a ratio (e.g., 0.04 for 4%).
+                                     This should be a positive value representing the % loss.
 
         Returns:
-        Net profit percentage after fees and taxes
+            dict: A dictionary containing the trading plan details, or None if inputs are invalid.
         """
-        adjusted = profit_pct
+        if not all(isinstance(arg, (int, float)) for arg in [current_price, target_profit_decimal, stop_loss_ratio]) \
+                or current_price <= 0:
+            self.log(
+                f"❌ Invalid inputs for trading plan: current_price={current_price}, target_profit_decimal={target_profit_decimal}, stop_loss_ratio={stop_loss_ratio}",
+                "ERROR")
+            return None
 
-        # Reset class variables
-        self.broker_fee = 0
-        self.tax = 0
-
-        if apply_fees:
-            # Subtract broker fees (0.4% total)
-            fee_amount = 0.4
-            adjusted -= fee_amount
-            self.broker_fee = fee_amount
-            self.log(f"Applied broker fees: -{fee_amount:.2f}%", "INFO")
-
-        if apply_tax and adjusted > 0:
-            # Apply 25% tax on net profit (after fees)
-            tax_amount = adjusted * 0.25
-            adjusted -= tax_amount
-            self.tax = tax_amount
-            self.log(f"Applied capital gains tax: -{tax_amount:.2f}%", "INFO")
-
-        self.log(f"Profit calculation: {profit_pct:.2f}% → {adjusted:.2f}% (net)", "INFO")
-        return round(adjusted, 2)
-
-    def build_enhanced_trading_plan(self, current_price, target_gain=0.037, max_loss=0.06, days=7):
-        """🎯 Enhanced trading plan with strategy integration"""
         self.log(
-            f"Building enhanced trading plan for price={current_price}, gain={target_gain:.1%}, loss={max_loss:.1%}, days={days}",
+            f"Building trading plan: price=${current_price:.2f}, target={target_profit_decimal:.2%}, stop_loss_ratio={stop_loss_ratio:.2%}",
             "INFO")
 
-        strategy_settings = getattr(self, 'strategy_settings', {"profit": 1.0, "risk": 1.0})
+        # Calculate target price based on expected profit percentage
+        target_price = current_price * (1 + target_profit_decimal)
 
-        buy_price = current_price
-        sell_price = round(buy_price * (1 + target_gain), 2)
-        stop_loss = round(buy_price * (1 - max_loss), 2)
-        profit_pct = round(target_gain * 100, 1)
+        # Calculate stop-loss price. The stop_loss_ratio is expected to be positive,
+        # so we subtract it from 1 to get the stop-loss price.
+        stop_loss_price = current_price * (1 - stop_loss_ratio)
 
-        # Calculate net profit after fees and taxes
-        net_profit_pct = self.apply_israeli_fees_and_tax(profit_pct)
+        # Ensure stop-loss is below current price for BUY signals, and target is above.
+        # This prevents illogical targets if inputs are skewed.
+        stop_loss_price = min(current_price * 0.99, stop_loss_price)  # Ensure it's below current price
+        target_price = max(current_price * 1.01, target_price)  # Ensure it's above current price
 
-        plan = {
-            "buy_price": buy_price,
-            "sell_price": sell_price,
-            "stop_loss": stop_loss,
-            "profit_pct": profit_pct,
-            "net_profit_pct": net_profit_pct,
-            "max_loss_pct": round(max_loss * 100, 1),
-            "holding_days": days,
-            "strategy_multiplier": strategy_settings.get("profit", 1.0),
-            "risk_multiplier": strategy_settings.get("risk", 1.0),
-            "confidence_requirement": strategy_settings.get("confidence_req", 75)
+        # Estimate exit date based on the investment_days parameter
+        # Ensure self.investment_days is properly initialized in __init__
+        investment_days_val = getattr(self, 'investment_days', 7)
+        estimated_exit_date = (datetime.now() + timedelta(days=investment_days_val)).strftime("%Y-%m-%d")
+
+        trading_plan = {
+            "entry_price": round(current_price, 2),
+            "target_price": round(target_price, 2),
+            "stop_loss_price": round(stop_loss_price, 2),
+            "target_profit_pct": round(target_profit_decimal * 100, 2),
+            "stop_loss_pct": round(stop_loss_ratio * 100, 2),
+            "estimated_holding_days": investment_days_val,
+            "estimated_exit_date": estimated_exit_date,
+            "notes": "Dynamic trading plan based on StockWise strategy."
         }
 
-        self.log(f"Enhanced trading plan created: {plan}", "INFO")
-        return plan
+        self.log(f"Generated Trading Plan: {trading_plan}", "INFO")
+        return trading_plan
 
     def generate_95_percent_recommendation(self, indicators, symbol):
         """🎯 Generate recommendation using 95% confidence system"""
@@ -1094,15 +1345,15 @@ class ProfessionalStockAdvisor:
         if profit_multiplier >= 1.8:  # Swing Trading
             buy_threshold = 0.8
             sell_threshold = -0.8
-            strategy_type = "Swing Trading"
+            strategy_type = "swing Trading"
         elif profit_multiplier >= 1.4:  # Aggressive
             buy_threshold = 0.9
             sell_threshold = -0.9
-            strategy_type = "Aggressive"
+            strategy_type = "aggressive"
         else:  # Conservative/Balanced
             buy_threshold = 1.0
             sell_threshold = -1.0
-            strategy_type = "Conservative/Balanced"
+            strategy_type = "conservative/balanced"
 
         self.log(f"Detected Strategy Type: {strategy_type}", "INFO")
         self.log(f"BUY Threshold: {buy_threshold}", "INFO")
@@ -1262,21 +1513,21 @@ class ProfessionalStockAdvisor:
         print("=" * 70)
 
         test_cases = [
-            {'score': 5.0, 'strategy': 'Swing Trading', 'expected': 'BUY'},
-            {'score': 0.9, 'strategy': 'Swing Trading', 'expected': 'BUY'},
-            {'score': 0.7, 'strategy': 'Swing Trading', 'expected': 'WAIT'},
-            {'score': 1.5, 'strategy': 'Balanced', 'expected': 'BUY'},
-            {'score': 0.5, 'strategy': 'Balanced', 'expected': 'WAIT'},
-            {'score': -1.5, 'strategy': 'Aggressive', 'expected': 'SELL/AVOID'},
+            {'score': 5.0, 'strategy': 'swing trading', 'expected': 'BUY'},
+            {'score': 0.9, 'strategy': 'swing trading', 'expected': 'BUY'},
+            {'score': 0.7, 'strategy': 'swing trading', 'expected': 'WAIT'},
+            {'score': 1.5, 'strategy': 'balanced', 'expected': 'BUY'},
+            {'score': 0.5, 'strategy': 'balanced', 'expected': 'WAIT'},
+            {'score': -1.5, 'strategy': 'aggressive', 'expected': 'SELL/AVOID'},
         ]
 
         for test in test_cases:
             # Set strategy settings
             strategy_multipliers = {
-                "Conservative": {"profit": 0.8, "risk": 0.8},
-                "Balanced": {"profit": 1.0, "risk": 1.0},
-                "Aggressive": {"profit": 1.4, "risk": 1.3},
-                "Swing Trading": {"profit": 1.8, "risk": 1.5}
+                "conservative": {"profit": 0.8, "risk": 0.8},
+                "balanced": {"profit": 1.0, "risk": 1.0},
+                "aggressive": {"profit": 1.4, "risk": 1.3},
+                "swing trading": {"profit": 1.8, "risk": 1.5}
             }
 
             strategy_settings = strategy_multipliers[test['strategy']]
@@ -1344,14 +1595,14 @@ class ProfessionalStockAdvisor:
         """
         self.log("=== ENHANCED CONFIDENCE CALCULATION (FIXED) ===", "INFO")
 
-        strategy_type = getattr(self, 'current_strategy', 'Balanced')
+        strategy_type = getattr(self, 'current_strategy', 'balanced')
 
         # FIXED: Strategy-specific base confidence requirements
         strategy_base_confidence = {
-            "Conservative": 80.0,  # Conservative needs higher base confidence
-            "Balanced": 70.0,  # Balanced is moderate
-            "Aggressive": 60.0,  # Aggressive accepts lower confidence
-            "Swing Trading": 65.0  # Swing trading moderate-low
+            "conservative": 80.0,  # Conservative needs higher base confidence
+            "balanced": 70.0,  # Balanced is moderate
+            "aggressive": 60.0,  # Aggressive accepts lower confidence
+            "swing trading": 65.0  # Swing trading moderate-low
         }
 
         base_confidence = strategy_base_confidence.get(strategy_type, 70.0)
@@ -1372,7 +1623,7 @@ class ProfessionalStockAdvisor:
             signal_boost = 3.0
 
         # FIXED: Strategy-specific confidence bounds and requirements
-        if strategy_type == "Conservative":
+        if strategy_type == "conservative":
             # Conservative: Requires very strong signals for high confidence
             if abs(final_score) < 1.5:
                 signal_boost *= 0.6  # Penalize weak signals heavily
@@ -1382,7 +1633,7 @@ class ProfessionalStockAdvisor:
             min_confidence = 85  # Conservative requires minimum 85% confidence
             max_confidence = 98  # Can achieve very high confidence
 
-        elif strategy_type == "Aggressive":
+        elif strategy_type == "aggressive":
             # Aggressive: More tolerant of weak signals
             if abs(final_score) >= 1.0:
                 signal_boost *= 1.2  # Boost even moderate signals
@@ -1390,7 +1641,7 @@ class ProfessionalStockAdvisor:
             min_confidence = 60  # Accepts lower confidence
             max_confidence = 90  # Lower maximum confidence
 
-        elif strategy_type == "Swing Trading":
+        elif strategy_type == "swing trading":
             # Swing Trading: Balanced but prefers medium-term confirmation
             if investment_days >= 14:
                 signal_boost *= 1.15  # Bonus for longer timeframes
@@ -1406,12 +1657,12 @@ class ProfessionalStockAdvisor:
         technical_boost = self.calculate_technical_confirmation_boost(indicators)
 
         # FIXED: Strategy-specific technical requirements
-        if strategy_type == "Conservative":
+        if strategy_type == "conservative":
             # Conservative requires stronger technical confirmation
             if technical_boost < 8.0:
                 technical_boost *= 0.7  # Penalize weak technical setup
             technical_boost = min(technical_boost, 15.0)  # Lower cap for conservative
-        elif strategy_type == "Aggressive":
+        elif strategy_type == "aggressive":
             # Aggressive is more lenient with technical setup
             technical_boost *= 1.2
             technical_boost = min(technical_boost, 25.0)  # Higher cap for aggressive
@@ -1421,11 +1672,11 @@ class ProfessionalStockAdvisor:
 
         # FIXED: Strategy-specific volume requirements
         volume_relative = indicators.get('volume_relative', 1.0)
-        if strategy_type == "Conservative":
+        if strategy_type == "conservative":
             # Conservative requires above-average volume for confirmation
             if volume_relative < 1.3:
                 volume_momentum_boost *= 0.8
-        elif strategy_type == "Aggressive":
+        elif strategy_type == "aggressive":
             # Aggressive trades on any volume
             if volume_relative >= 1.0:
                 volume_momentum_boost *= 1.1
@@ -1437,7 +1688,7 @@ class ProfessionalStockAdvisor:
                                   volume_momentum_boost)
 
         # FIXED: Strategy-specific final adjustments
-        if strategy_type == "Conservative":
+        if strategy_type == "conservative":
             # Conservative: Additional requirements for high confidence
             rsi_14 = indicators.get('rsi_14', 50)
             macd_hist = indicators.get('macd_histogram', 0)
@@ -1448,7 +1699,7 @@ class ProfessionalStockAdvisor:
             elif rsi_14 > 45 or macd_hist < 0:
                 preliminary_confidence -= 8.0  # Conservative penalty for uncertain setup
 
-        elif strategy_type == "Aggressive":
+        elif strategy_type == "aggressive":
             # Aggressive: More willing to act on any positive signal
             momentum_5 = indicators.get('momentum_5', 0)
             if momentum_5 > 0:  # Any positive momentum is good for aggressive
@@ -1494,7 +1745,7 @@ class ProfessionalStockAdvisor:
 
         self.log("=== OPTIMIZED CONFIDENCE CALCULATION ===", "INFO")
 
-        strategy_type = getattr(self, 'current_strategy', 'Balanced')
+        strategy_type = getattr(self, 'current_strategy', 'balanced')
 
         # 📊 More granular base confidence from signal strength
         if abs(final_score) >= 4.0:     # was 3.5
@@ -1590,21 +1841,21 @@ class ProfessionalStockAdvisor:
         # 🎪 STRATEGY-SPECIFIC ADJUSTMENTS
         strategy_multiplier = 1.0
 
-        if strategy_type == "Conservative":
+        if strategy_type == "conservative":
             # Conservative needs very strong confluence for high confidence
             if confluence_score < 15:
                 strategy_multiplier = 0.85  # Reduce confidence for weak setups
             elif confluence_score >= 20:
                 strategy_multiplier = 1.1  # Boost for perfect setups
 
-        elif strategy_type == "Aggressive":
+        elif strategy_type == "aggressive":
             # Aggressive gets confidence boost more easily
             if confluence_score >= 10:
                 strategy_multiplier = 1.15  # Boost confidence
             if abs(final_score) >= 1.5:  # Even moderate signals get boost
                 strategy_multiplier *= 1.05
 
-        elif strategy_type == "Swing Trading":
+        elif strategy_type == "swing trading":
             # Swing Trading gets time-based confidence boost
             if investment_days >= 14:
                 strategy_multiplier = 1.1  # Longer timeframe = more confidence
@@ -1629,10 +1880,10 @@ class ProfessionalStockAdvisor:
 
         # Strategy-specific bounds
         min_confidence, max_confidence = {
-        "Conservative": (60, 80),  # ↓ Was (75, 95)
-        "Balanced": (55, 78),      # ↓ Was (65, 93)
-        "Aggressive": (50, 75),    # ↓ Was (60, 90)
-        "Swing Trading": (55, 80)  # ↓ Was (70, 95)
+        "conservative": (60, 80),  # ↓ Was (75, 95)
+        "balanced": (55, 78),      # ↓ Was (65, 93)
+        "aggressive": (50, 75),    # ↓ Was (60, 90)
+        "swing trading": (55, 80)  # ↓ Was (70, 95)
         }.get(strategy_type, (55, 75))
 
         final_confidence = max(min_confidence, min(final_confidence, max_confidence))
@@ -1765,10 +2016,10 @@ class ProfessionalStockAdvisor:
     def calculate_strategy_confidence_boost(self, strategy_settings, investment_days):
         """Calculate strategy-specific confidence adjustments"""
         boost = 0.0
-        strategy_type = getattr(self, 'current_strategy', 'Balanced')
+        strategy_type = getattr(self, 'current_strategy', 'balanced')
 
         # Strategy-based confidence adjustments
-        if strategy_type == "Conservative":
+        if strategy_type == "conservative":
             # Conservative strategy gets bonus for longer timeframes
             if investment_days >= 30:
                 boost += 8.0
@@ -1778,7 +2029,7 @@ class ProfessionalStockAdvisor:
             elif investment_days <= 3:
                 boost -= 5.0
 
-        elif strategy_type == "Aggressive":
+        elif strategy_type == "aggressive":
             # Aggressive strategy gets bonus for medium timeframes
             if 7 <= investment_days <= 21:
                 boost += 6.0
@@ -1786,7 +2037,7 @@ class ProfessionalStockAdvisor:
             elif investment_days > 60:
                 boost -= 3.0
 
-        elif strategy_type == "Swing Trading":
+        elif strategy_type == "swing trading":
             # Swing trading gets bonus for optimal timeframes
             if 14 <= investment_days <= 45:
                 boost += 8.0
@@ -1839,13 +2090,13 @@ class ProfessionalStockAdvisor:
 
     def get_confidence_bounds(self, strategy_settings):
         """Get min/max confidence bounds based on strategy"""
-        strategy_type = getattr(self, 'current_strategy', 'Balanced')
+        strategy_type = getattr(self, 'current_strategy', 'balanced')
 
         bounds = {
-            "Conservative": (75, 95),  # High minimum, high maximum
-            "Balanced": (65, 93),  # Moderate bounds
-            "Aggressive": (60, 90),  # Lower minimum, good maximum
-            "Swing Trading": (70, 95)  # Good minimum, high maximum
+            "conservative": (75, 95),  # High minimum, high maximum
+            "balanced": (65, 93),  # Moderate bounds
+            "aggressive": (60, 90),  # Lower minimum, good maximum
+            "swing trading": (70, 95)  # Good minimum, high maximum
         }
 
         return bounds.get(strategy_type, (65, 90))
@@ -1974,7 +2225,7 @@ class ProfessionalStockAdvisor:
             'stoch_d': 30
         }
 
-        strategies = ["Conservative", "Balanced", "Aggressive", "Swing Trading"]
+        strategies = ["conservative", "balanced", "aggressive", "swing trading"]
         final_score = 1.2  # Moderate signal strength
 
         print(f"Test Setup: Final Score = {final_score:.1f} (moderate bullish)")
@@ -1993,12 +2244,12 @@ class ProfessionalStockAdvisor:
             # Ensure strategy_settings are updated for the test
             self.strategy_settings = self.get_default_strategy_settings()  # Reset to default
             self.strategy_settings[strategy].update({
-                                                        "Conservative": {"profit": 0.8, "risk": 0.8,
+                                                        "conservative": {"profit": 0.8, "risk": 0.8,
                                                                          "confidence_req": 85},
-                                                        "Balanced": {"profit": 1.0, "risk": 1.0, "confidence_req": 75},
-                                                        "Aggressive": {"profit": 1.4, "risk": 1.3,
+                                                        "balanced": {"profit": 1.0, "risk": 1.0, "confidence_req": 75},
+                                                        "aggressive": {"profit": 1.4, "risk": 1.3,
                                                                        "confidence_req": 60},
-                                                        "Swing Trading": {"profit": 1.8, "risk": 1.5,
+                                                        "swing trading": {"profit": 1.8, "risk": 1.5,
                                                                           "confidence_req": 70}
                                                     }[strategy])
 
@@ -2008,13 +2259,13 @@ class ProfessionalStockAdvisor:
             )
 
             # Test thresholds
-            if strategy == "Conservative":
+            if strategy == "conservative":
                 buy_threshold = 1.8
                 required_confidence = 85
-            elif strategy == "Aggressive":
+            elif strategy == "aggressive":
                 buy_threshold = 0.6
                 required_confidence = 60
-            elif strategy == "Swing Trading":
+            elif strategy == "swing trading":
                 buy_threshold = 0.9
                 required_confidence = 70
             else:  # Balanced
@@ -3267,64 +3518,85 @@ class ProfessionalStockAdvisor:
         return score, signals
 
     def analyze_ml_model(self, symbol, indicators, current_price):
-        self.log(f"Starting analyze_ml_model: symbol={symbol}, indicators={indicators}, "
-                 f"current_price={current_price}", "INFO")
+        """
+        Analyzes the stock using a pre-trained machine learning model.
 
+        This function extracts a specific set of features from the calculated indicators,
+        feeds them to the loaded ML model, and converts the model's prediction
+        into a score and signals for the overall recommendation system.
+
+        Args:
+            symbol (str): The stock ticker symbol.
+            indicators (dict): A dictionary of calculated technical indicators.
+            current_price (float): The current price of the stock.
+
+        Returns:
+            tuple: A tuple containing:
+                - float: The ML model's score.
+                - list: A list of signals generated by the ML model.
+        """
+        self.log(f"Starting analyze_ml_model: symbol={symbol}", "INFO")
         score = 0
         signals = []
 
+        # Check if a trained model is available for the given symbol
         if symbol not in self.models:
-            self.log(f"⚠️ No ML model for {symbol}", "WARNING")
+            self.log(f"⚠️ No ML model found for {symbol}", "WARNING")
             signals.append("🤖 No trained model available")
             return score, signals
 
         try:
             model = self.models[symbol]
-            # vr = indicators.get("volume_relative", 1.0)
-            # features = [
-            #     vr,
-            #     indicators.get("momentum_5", 0),
-            #     indicators.get("rsi_14", 50),
-            #     indicators.get("macd_histogram", 0),
-            #     indicators.get("bb_position", 0.5),
-            #     indicators.get("ema_10", current_price),
-            #     indicators.get("price_change_1d", 0.0),
-            #     1 if vr > 1.5 else 0,
-            #     1 if indicators.get("rsi_14", 50) < 30 else 0
-            # ]
+
+            # Define the 6 features expected by the ML model.
+            # These must match the features used during the model's training.
             features = [
                 float(indicators.get("volume_relative", 1.0)),
                 float(indicators.get("momentum_5", 0)),
                 float(indicators.get("rsi_14", 50)),
-                float(indicators.get("macd_histogram", 0))
+                float(indicators.get("macd_histogram", 0)),
+                float(indicators.get("bb_position", 0.5)),  # Added feature 5
+                float(indicators.get("volatility", 1.0))  # Added feature 6
             ]
-            # self.log(f"ML Features: {features}", "INFO")
-            self.log(f"ML Features (4): {features}", "INFO")
 
+            # Log the features being used for debugging purposes
+            self.log(f"ML Features (6): {features}", "INFO")
+
+            # Reshape the features array for single prediction (1 sample, N features)
             X = np.array(features).reshape(1, -1)
+
+            # Make a prediction using the loaded model
             prediction = model.predict(X)[0]
 
+            # Calculate prediction confidence if the model supports it
             if hasattr(model, "predict_proba"):
                 proba = model.predict_proba(X)[0]
+                # Confidence is the probability of the predicted class
                 confidence = proba[1] if prediction == 1 else proba[0]
-                self.log(f"ML Prediction: {prediction}, Prob: {proba}", "INFO")
+                self.log(f"ML Prediction: {prediction}, Probability: {proba}", "INFO")
             else:
+                # Fallback confidence if predict_proba is not available
                 confidence = 0.7
-                self.log("ML Prediction: Default confidence", "INFO")
+                self.log("ML Prediction: Default confidence (predict_proba not available)", "INFO")
 
+            # Translate prediction and confidence into a score and signals
+            # The 'delta' scales the score based on the model's confidence
             delta = 3 * confidence
-            if prediction == 1:
+            if prediction == 1:  # Assuming 1 for BUY, 0 for SELL/AVOID
                 score += delta
                 signals.append(f"🤖 ML predicts BUY ({confidence:.1%})")
-                self.log(f"✅ ML BUY: +{delta:.2f}", "SUCCESS")
+                self.log(f"✅ ML BUY signal: Score +{delta:.2f}", "SUCCESS")
             else:
                 score -= delta
-                signals.append(f"🤖 ML predicts SELL ({confidence:.1%})")
-                self.log(f"❌ ML SELL: -{delta:.2f}", "ERROR")
+                signals.append(f"🤖 ML predicts SELL/AVOID ({confidence:.1%})")
+                self.log(f"❌ ML SELL/AVOID signal: Score -{delta:.2f}", "ERROR")
 
         except Exception as e:
+            # Log any errors during ML model analysis
             signals.append("🤖 ML model analysis failed")
-            self.log(f"❌ ML Error: {str(e)}", "ERROR")
+            self.log(f"❌ ML Error during analysis: {e}", "ERROR")
+            import traceback
+            self.log(f"Full traceback for ML error: {traceback.format_exc()}", "ERROR")
 
         self.log(f"ML Score: {score:.2f}", "INFO")
         return score, signals
@@ -3817,34 +4089,34 @@ class ProfessionalStockAdvisor:
         all_signals = trend_signals + momentum_signals + volume_signals + sr_signals + model_signals
 
         # FIXED: Strategy-specific thresholds with proper risk differentiation
-        strategy_type = getattr(self, 'current_strategy', 'Balanced')
+        strategy_type = getattr(self, 'current_strategy', 'balanced')
 
-        if strategy_type == "Conservative":
+        if strategy_type == "conservative":
             # Conservative: Higher thresholds, requires stronger signals
             buy_threshold = 2.5  # Was 1.8 -> 1.5 -> 1.6 -> 1.2  # Much higher threshold
             sell_threshold = -1.5  # Was -1.2 -> -1.0 # More selective on sell signals
             required_confidence = 75  # Was 85 -> 80 -> 78 # Minimum 85% confidence for any action
-            strategy_name = "Conservative"
+            strategy_name = "conservative"
 
-        elif strategy_type == "Aggressive":
+        elif strategy_type == "aggressive":
             # Aggressive: Lower thresholds, acts on weaker signals
             buy_threshold = 1.5  # Was 0.6 -> 0.5 ->0.6 -> 0.4  # Much lower threshold
             sell_threshold = -1.0  # Was -0.6 -> -0.5 -> -0.4 # More willing to sell/avoid
             required_confidence = 65  # Was 65 -> 60 -> 58 # Accepts 60% confidence
-            strategy_name = "Aggressive"
+            strategy_name = "aggressive"
 
-        elif strategy_type == "Swing Trading":
+        elif strategy_type == "swing trading":
             # Swing Trading: Medium thresholds, optimized for trends
             buy_threshold = 2.0  # Was 0.9 -> 0.8 -> 0.6
             sell_threshold = -1.2  # Was -0.8 -> -0.7 -> -0.6
             required_confidence = 70  # Was 70 -> 65 -> 62
-            strategy_name = "Swing Trading"
+            strategy_name = "swing trading"
 
         else:  # Balanced
             buy_threshold = 1.8  # Was 1.2 -> 0.9 -> 1.0 -> 0.7 - KEY CHANGE
             sell_threshold = -1.0  # Was -1.0 -> -0.8 -> -0.7
             required_confidence = 70  # Was 75
-            strategy_name = "Balanced"
+            strategy_name = "balanced"
 
         self.log(
             f"Strategy thresholds ({strategy_type}): BUY≥{buy_threshold}, SELL≤{sell_threshold}, MinConf≥{required_confidence}%",
@@ -4009,7 +4281,7 @@ class ProfessionalStockAdvisor:
 
         # Get strategy settings based on the currently set strategy type
         strategy_settings = self.strategy_settings.get(self.current_strategy,
-                                                       self.get_default_strategy_settings()["Balanced"])
+                                                       self.get_default_strategy_settings()["balanced"])
 
         # Signal analysis with current signal weights
         trend_score, trend_signals = self.analyze_trend(indicators, current_price)
@@ -4253,7 +4525,7 @@ class ProfessionalStockAdvisor:
 
         fig.update_layout(
             title=f'{symbol} - Enhanced Technical Analysis',
-            xaxis_title='Date',
+            xaxis_title='Volume',
             yaxis_title='Price ($)',
             height=500,
             showlegend=True
@@ -4274,10 +4546,10 @@ class ProfessionalStockAdvisor:
         time_mult = result.get('time_multiplier', 1.0)
 
         expected_multipliers = {
-            "Conservative": 0.8,
-            "Balanced": 1.0,
-            "Aggressive": 1.4,
-            "Swing Trading": 1.8
+            "conservative": 0.8,
+            "balanced": 1.0,
+            "aggressive": 1.4,
+            "swing trading": 1.8
         }
 
         expected_mult = expected_multipliers.get(expected_strategy, 1.0)
@@ -4321,7 +4593,7 @@ class ProfessionalStockAdvisor:
         }
 
         # Test with Balanced strategy (most critical)
-        self.current_strategy = "Balanced"
+        self.current_strategy = "balanced"
         self.strategy_settings = {"profit": 1.0, "risk": 1.0, "confidence_req": 70}
 
         try:
@@ -4415,7 +4687,7 @@ class ProfessionalStockAdvisor:
         ]
 
         # Test with Balanced strategy (most important)
-        self.current_strategy = "Balanced"
+        self.current_strategy = "balanced"
         self.strategy_settings = {"profit": 1.0, "risk": 1.0, "confidence_req": 70}
 
         print(f"Testing with BALANCED strategy (optimized thresholds):")
@@ -4478,10 +4750,10 @@ class ProfessionalStockAdvisor:
         }
 
         strategies_to_test = {
-            "Conservative": {"profit": 0.8, "expected_range": (0.03, 0.08)},
-            "Balanced": {"profit": 1.0, "expected_range": (0.037, 0.12)},
-            "Aggressive": {"profit": 1.4, "expected_range": (0.05, 0.20)},
-            "Swing Trading": {"profit": 1.8, "expected_range": (0.06, 0.30)}
+            "conservative": {"profit": 0.8, "expected_range": (0.03, 0.08)},
+            "balanced": {"profit": 1.0, "expected_range": (0.037, 0.12)},
+            "aggressive": {"profit": 1.4, "expected_range": (0.05, 0.20)},
+            "swing trading": {"profit": 1.8, "expected_range": (0.06, 0.30)}
         }
 
         time_periods = [7, 30, 60, 90]
@@ -4523,7 +4795,7 @@ class ProfessionalStockAdvisor:
             self.log(f"🚨 ANOMALY: {symbol} - No time scaling for {self.investment_days} days", "ERROR")
 
         if strategy_mult == 1.0 and hasattr(self, 'current_strategy'):
-            if self.current_strategy in ["Aggressive", "Swing Trading"]:
+            if self.current_strategy in ["aggressive", "swing trading"]:
                 self.log(f"🚨 ANOMALY: {symbol} - {self.current_strategy} strategy not applied", "ERROR")
 
         # Log success cases
@@ -4568,7 +4840,6 @@ class ProfessionalStockAdvisor:
             self.log("✅ Advisor configuration validation passed", "SUCCESS")
             return True
 
-
     def run_comprehensive_profit_tests(self):
         """🧪 Comprehensive test suite for profit calculations"""
 
@@ -4595,7 +4866,7 @@ class ProfessionalStockAdvisor:
 
         # Test 3: Combined effects
         print("\n🎯 Test 3: Combined Strategy + Time Effects")
-        strategies = ["Conservative", "Balanced", "Aggressive", "Swing Trading"]
+        strategies = ["conservative", "balanced", "aggressive", "swing trading"]
         multipliers = [0.8, 1.0, 1.4, 1.8]
 
         for strategy, mult in zip(strategies, multipliers):
@@ -4615,6 +4886,224 @@ class ProfessionalStockAdvisor:
         print("\n" + "=" * 60)
         print("✅ Enhanced Profit System Tests Complete!")
 
+    def get_stock_data_professional(self, symbol, target_date, days_back=60):
+        """
+        Professional data retrieval with IBKR integration and yfinance exponential backoff.
+        This method prioritizes IBKR, then falls back to yfinance with robust retry logic.
+        """
+        self.log(f"📊 Fetching professional data for {symbol} using {self.data_source}", "INFO")
+
+        try:
+            # Validate symbol to prevent unnecessary requests
+            if not symbol or len(symbol.strip()) == 0:
+                self.log("ERROR: Empty symbol provided to get_stock_data_professional.", "ERROR")
+                return None
+
+            symbol = symbol.strip().upper()
+            target_pd = pd.Timestamp(target_date)
+
+            # Ensure enough historical data is fetched for indicator calculations (e.g., 200-day MA)
+            chart_days_back = max(200, days_back, self.investment_days + 60)
+
+            # Method 1: Try IBKR Professional Data
+            if self.use_ibkr and self.ibkr_connected:
+                try:
+                    self.log(f"🏢 Using IBKR professional data for {symbol}", "INFO")
+                    df = self.ibkr_manager.get_stock_data(symbol, chart_days_back)
+
+                    if df is not None and not df.empty:
+                        # Filter data up to the target analysis date
+                        df = df[df.index <= target_pd]
+                        # Ensure we have a minimum number of data points (e.g., for 20-day MA)
+                        if len(df) >= 20:
+                            self.log(f"✅ IBKR: Retrieved {len(df)} days for {symbol}.", "SUCCESS")
+                            self.log(f"   Data range: {df.index[0].date()} to {df.index[-1].date()}", "INFO")
+                            self.log(f"   Latest price: ${df['Close'].iloc[-1]:.2f}", "INFO")
+                            return df
+                        else:
+                            self.log(f"⚠️ IBKR: Insufficient data for {symbol} ({len(df)} days).", "WARNING")
+                    else:
+                        self.log(f"⚠️ IBKR: No data returned for {symbol}.", "WARNING")
+
+                except Exception as e:
+                    self.log(f"❌ IBKR data retrieval error for {symbol}: {e}", "ERROR")
+                    self.log(f"Full traceback for IBKR error: {traceback.format_exc()}", "ERROR")  # Log full traceback
+
+            # Method 2: Fallback to yfinance with exponential backoff and retries
+            self.log(f"📈 Using yfinance fallback for {symbol} with exponential backoff...", "INFO")
+            try:
+                import yfinance as yf  # Import yfinance here in case it wasn't already
+
+                # Define the date range for yfinance download
+                start_date = target_pd - pd.Timedelta(days=chart_days_back + 30)  # Add buffer for weekends/holidays
+                end_date = target_pd + pd.Timedelta(days=1)  # Include target date
+
+                max_retries = 5  # Maximum number of retry attempts
+                initial_delay = 1  # Initial delay in seconds before first retry
+
+                for attempt in range(max_retries):
+                    try:
+                        df = yf.download(symbol, start=start_date, end=end_date,
+                                         progress=False, auto_adjust=True, threads=False)
+
+                        if df is not None and not df.empty:
+                            # Handle MultiIndex columns, which can occur with yfinance
+                            if isinstance(df.columns, pd.MultiIndex):
+                                df.columns = [col[0] for col in df.columns]
+
+                            # Filter data to ensure it doesn't go past the target analysis date
+                            df = df[df.index <= target_pd]
+
+                            # Check if enough data is retrieved for meaningful analysis
+                            if len(df) >= 20:
+                                self.log(
+                                    f"✅ yfinance: Retrieved {len(df)} days for {symbol} (Attempt {attempt + 1}/{max_retries}).",
+                                    "SUCCESS")
+                                return df
+                            else:
+                                self.log(
+                                    f"⚠️ yfinance: Insufficient data for {symbol} ({len(df)} days) on Attempt {attempt + 1}/{max_retries}. Retrying...",
+                                    "WARNING")
+
+                        # If DataFrame is empty but no exception occurred (e.g., no data for period)
+                        elif df is None or df.empty:
+                            self.log(
+                                f"⚠️ yfinance: No data returned for {symbol} on Attempt {attempt + 1}/{max_retries}. Retrying...",
+                                "WARNING")
+
+                    except Exception as download_error:
+                        # Catch specific download errors (e.g., network issues, symbol not found)
+                        self.log(
+                            f"⚠️ yfinance download failed for {symbol} on Attempt {attempt + 1}/{max_retries}: {download_error}.",
+                            "WARNING")
+                        self.log(f"Full traceback for yfinance error: {traceback.format_exc()}", "WARNING")
+
+                    # Apply exponential backoff before retrying
+                    if attempt < max_retries - 1:
+                        # Calculate delay: initial_delay * 2^attempt + jitter
+                        delay = initial_delay * (2 ** attempt) + random.uniform(0, 1)
+                        self.log(f"Retrying {symbol} in {delay:.2f} seconds...", "INFO")
+                        time.sleep(delay)
+                    else:
+                        self.log(f"❌ Max retries reached for {symbol} via yfinance. Giving up.", "ERROR")
+
+            except ImportError:
+                self.log("❌ yfinance library not available. Please install it (`pip install yfinance`).", "ERROR")
+
+            self.log(f"❌ All data sources failed to retrieve sufficient data for {symbol}.", "ERROR")
+            return None
+
+        except Exception as e:
+            self.log(f"❌ CRITICAL ERROR in get_stock_data_professional for {symbol}: {e}", "ERROR")
+            self.log(f"Full traceback: {traceback.format_exc()}", "ERROR")
+            return None
+
+
+def apply_production_config(self, production_config: dict):
+    """
+    Apply a saved production config (as written by algo_configurator) to this advisor.
+    """
+    if not production_config:
+        return
+
+    # Strategy selection
+    strategy = production_config.get("strategy")
+    if strategy:
+        self.current_strategy = strategy
+
+    # Investment horizon
+    adv = production_config.get("advisor_settings", {})
+    if "investment_days" in adv:
+        self.investment_days = int(adv["investment_days"])
+
+    # Signal weights
+    if "global_signal_weights" in adv:
+        gw = adv["global_signal_weights"]
+        if hasattr(self, "signal_weights"):
+            self.signal_weights.update({
+                "trend": gw.get("trend", self.signal_weights.get("trend")),
+                "momentum": gw.get("momentum", self.signal_weights.get("momentum")),
+                "volume": gw.get("volume", self.signal_weights.get("volume")),
+                "support_resistance": gw.get("support_resistance", self.signal_weights.get("support_resistance")),
+                "ai_model": gw.get("ai_model", self.signal_weights.get("ai_model")),
+            })
+
+    # Strategy thresholds/multipliers
+    stg_all = production_config.get("strategy_multipliers", {})
+    stg_cfg = stg_all.get(self.current_strategy, {})
+    if self.current_strategy in self.strategy_settings:
+        self.strategy_settings[self.current_strategy].update({
+            "profit": stg_cfg.get("profit", self.strategy_settings[self.current_strategy].get("profit")),
+            "risk": stg_cfg.get("risk", self.strategy_settings[self.current_strategy].get("risk")),
+            "confidence_req": stg_cfg.get("confidence_req",
+                                          self.strategy_settings[self.current_strategy].get("confidence_req")),
+            "buy_threshold": stg_cfg.get("buy_threshold",
+                                         self.strategy_settings[self.current_strategy].get("buy_threshold")),
+            "sell_threshold": stg_cfg.get("sell_threshold",
+                                          self.strategy_settings[self.current_strategy].get("sell_threshold")),
+        })
+
+    # Confidence params
+    conf = production_config.get("confidence_params", {})
+    if hasattr(self, "confidence_params") and conf:
+        self.confidence_params.update({
+            "base_multiplier": conf.get("base_multiplier", self.confidence_params.get("base_multiplier")),
+            "confluence_weight": conf.get("confluence_weight", self.confidence_params.get("confluence_weight")),
+            "penalty_strength": conf.get("penalty_strength", self.confidence_params.get("penalty_strength")),
+        })
+
+
+def apply_parameters_to_advisor(advisor: ProfessionalStockAdvisor, params: dict):
+    """
+    Normalize strategy-specific keys and push into the advisor used by stockwise_simulation.
+    """
+    logging.info(f"Applying parameters to advisor: {params}")
+
+    strategy_type = params.get('strategy_type')
+    if isinstance(strategy_type, list):
+        strategy_type = strategy_type[0]
+    if not strategy_type:
+        logging.warning("No 'strategy_type' provided; keeping current advisor.current_strategy.")
+        strategy_type = getattr(advisor, "current_strategy", None)
+    else:
+        advisor.current_strategy = strategy_type
+
+    strategy_lower = strategy_type.lower().replace(' ', '_') if strategy_type else None
+
+    # Normalize thresholds
+    buy = params.get(f"buy_threshold_{strategy_lower}", params.get("buy_threshold"))
+    sell = params.get(f"sell_threshold_{strategy_lower}", params.get("sell_threshold"))
+    min_conf = params.get(f"confidence_req_{strategy_lower}", params.get("min_confidence"))
+
+    if buy is not None:
+        advisor.current_buy_threshold = float(buy)
+    if sell is not None:
+        advisor.current_sell_threshold = float(sell)
+
+    if strategy_type and hasattr(advisor, "strategy_settings") and strategy_type in advisor.strategy_settings:
+        s = advisor.strategy_settings[strategy_type]
+        if "profit_threshold" in params:
+            s["profit"] = float(params["profit_threshold"])
+        if "stop_loss_threshold" in params:
+            s["risk"] = float(params["stop_loss_threshold"])
+        if min_conf is not None:
+            s["confidence_req"] = float(min_conf)
+
+    # Signal weights
+    if hasattr(advisor, "signal_weights"):
+        sw = dict(advisor.signal_weights)
+        sw["trend"] = params.get("weight_trend", sw.get("trend"))
+        sw["momentum"] = params.get("weight_momentum", sw.get("momentum"))
+        sw["volume"] = params.get("weight_volume", sw.get("volume"))
+        sw["support_resistance"] = params.get("weight_support_resistance", sw.get("support_resistance"))
+        sw["ai_model"] = params.get("weight_ai_model", sw.get("ai_model"))
+        advisor.signal_weights = {k: v for k, v in sw.items() if v is not None}
+
+    # Confidence shaping knobs
+    for k_cfg in ("confidence_base_multiplier", "confidence_confluence_weight", "confidence_penalty_strength"):
+        if params.get(k_cfg) is not None:
+            setattr(advisor, k_cfg, float(params[k_cfg]))
+
 
 def show_strategy_risk_profile(strategy_type, confidence, final_score):
     """Show how strategy affects risk tolerance and confidence"""
@@ -4622,28 +5111,28 @@ def show_strategy_risk_profile(strategy_type, confidence, final_score):
     st.subheader("🎯 Strategy Risk Profile")
 
     strategy_profiles = {
-        "Conservative": {
+        "conservative": {
             "min_confidence": 85,
             "description": "Requires very high confidence (85%+) and strong signals (1.8+)",
             "risk_tolerance": "Very Low",
             "typical_actions": "Only acts on strongest signals with high certainty",
             "color": "green"
         },
-        "Balanced": {
+        "balanced": {
             "min_confidence": 75,
             "description": "Moderate confidence requirements (75%+) and signal strength (1.2+)",
             "risk_tolerance": "Medium",
             "typical_actions": "Balanced approach to risk and opportunity",
             "color": "blue"
         },
-        "Aggressive": {
+        "aggressive": {
             "min_confidence": 60,
             "description": "Lower confidence threshold (60%+) and acts on weaker signals (0.6+)",
             "risk_tolerance": "High",
             "typical_actions": "More willing to take risks for higher potential returns",
             "color": "orange"
         },
-        "Swing Trading": {
+        "swing trading": {
             "min_confidence": 70,
             "description": "Medium confidence (70%+) optimized for trend-following",
             "risk_tolerance": "Medium-High",
@@ -4675,9 +5164,9 @@ def show_strategy_risk_profile(strategy_type, confidence, final_score):
     with col3:
         st.markdown("**Signal Strength Analysis:**")
         strategy_thresholds = {
-            "Balanced": {"buy": 0.9, "sell": -0.9, "confidence": 70},  # More sensitive
-            "Aggressive": {"buy": 0.5, "sell": -0.5, "confidence": 60},  # Even more aggressive
-            "Conservative": {"buy": 1.5, "sell": -1.2, "confidence": 80}  # Slightly less strict
+            "balanced": {"buy": 0.9, "sell": -0.9, "confidence": 70},  # More sensitive
+            "aggressive": {"buy": 0.5, "sell": -0.5, "confidence": 60},  # Even more aggressive
+            "conservative": {"buy": 1.5, "sell": -1.2, "confidence": 80}  # Slightly less strict
         }
 
         thresholds = strategy_thresholds[strategy_type]
@@ -4761,10 +5250,10 @@ def show_enhanced_profit_breakdown(result, strategy_type, investment_days):
             st.markdown("**⚡ Strategy Comparison:**")
 
             strategies = {
-                "Conservative": {"mult": 0.8, "desc": "Lower risk, steady gains"},
-                "Balanced": {"mult": 1.0, "desc": "Moderate risk/reward"},
-                "Aggressive": {"mult": 1.4, "desc": "Higher risk, bigger gains"},
-                "Swing Trading": {"mult": 1.8, "desc": "Maximum profit potential"}
+                "conservative": {"mult": 0.8, "desc": "Lower risk, steady gains"},
+                "balanced": {"mult": 1.0, "desc": "Moderate risk/reward"},
+                "aggressive": {"mult": 1.4, "desc": "Higher risk, bigger gains"},
+                "swing trading": {"mult": 1.8, "desc": "Maximum profit potential"}
             }
 
             for strat_name, strat_info in strategies.items():
@@ -4827,785 +5316,865 @@ def show_strategy_effects_in_results(result, strategy_type, advisor):
         st.warning("⚠️ Strategy effects not applied - check system integration")
 
 
+# def create_enhanced_interface():
+#     """Create enhanced interface with 95% confidence targeting"""
+#     st.set_page_config(
+#         page_title="Enhanced Stock Advisor",
+#         page_icon="📈",
+#         layout="wide"
+#     )
+#
+#     # Header
+#     st.title("📈 Enhanced Stock Trading Advisor")
+#     st.markdown("### Advanced AI system with 95% confidence targeting!")
+#     st.markdown("---")
+#
+#     # INITIALIZE DEBUG SETTINGS IN SESSION STATE
+#     if 'show_debug' not in st.session_state:
+#         st.session_state.show_debug = False
+#     if 'download_file' not in st.session_state:
+#         st.session_state.download_file = False
+#
+#     # aggressive_config_path = "configuration_files/stockwise_production_params_aggressive_20250816.json"
+#     # pseudo:
+#     prod_cfg = json.load(open("configuration_files/stockwise_production_params_aggressive_20250816.json", "r"))
+#
+#     # Initialize advisor with current settings
+#     if 'enhanced_advisor' not in st.session_state:
+#         st.session_state.enhanced_advisor = ProfessionalStockAdvisor(
+#             debug=True,
+#             config_file=prod_cfg,
+#             strategy_type="aggressive",
+#             download_log=st.session_state.download_file
+#         )
+#
+#     advisor = st.session_state.enhanced_advisor
+#     # advisor.apply_production_config(prod_cfg)
+#
+#
+#     advisor.log("Create Streamlit Page", "INFO")
+#     advisor.log("Enhanced interface initialized", "INFO")
+#
+#     # Sidebar controls
+#     st.sidebar.header("🎯 Get Your Trading Advice")
+#
+#     # Stock input
+#     stock_symbol = st.sidebar.text_input(
+#         "📊 Stock Symbol",
+#         value="NVDA",
+#         help="Enter any stock ticker (e.g., AAPL, GOOGL, TSLA)"
+#     ).upper().strip()
+#
+#     advisor.log(f"Stock Symbol: {stock_symbol}", "INFO")
+#
+#     # Date input
+#     date_input = st.sidebar.text_input(
+#         "📅 Date (MM/DD/YY or MM/DD/YYYY)",
+#         value="7/1/25",
+#         help="Enter date like: 1/7/25 or 1/7/2025"
+#     )
+#     advisor.log(f"Date Input: {date_input}", "INFO")
+#
+#     # Parse the date
+#     try:
+#         if '/' in date_input:
+#             parts = date_input.split('/')
+#             if len(parts) == 3:
+#                 month, day, year = parts
+#                 if len(year) == 2:
+#                     year = "20" + year if int(year) < 50 else "19" + year
+#                 target_date = datetime(int(year), int(month), int(day)).date()
+#                 advisor.log(f"Target Date: {target_date}", "INFO")
+#             else:
+#                 target_date = datetime.now().date()
+#                 advisor.log(f"Target Date: {target_date}", "INFO")
+#         else:
+#             target_date = datetime.now().date()
+#             advisor.log(f"Target Date: {target_date}", "INFO")
+#     except:
+#         target_date = datetime.now().date()
+#         st.sidebar.warning("⚠️ Invalid date format. Using today's date.")
+#         advisor.log("Invalid date format. Using today's date.", "WARNING")
+#
+#     # Investment period
+#     # Investment timeframe selection
+#     advisor.investment_days = st.sidebar.selectbox(
+#         "🕐 Target holding period(up to):",
+#         options=[1, 3, 7, 14, 21, 30, 45, 60, 90, 120],  # Extended options
+#         index=2,  # Default to 7 days
+#         help="Longer periods generally allow for higher profit targets but require more patience"
+#     )
+#     advisor.log(f"Investment Days: {advisor.investment_days}", "INFO")
+#
+#     # Strategy type selection
+#     strategy_type = st.sidebar.radio(
+#         "📈 Strategy Type:",
+#         options=["conservative", "balanced", "aggressive", "swing trading"],
+#         index=1,  # Default to Balanced
+#         help="Strategy affects profit targets and risk tolerance"
+#     )
+#     advisor.log(f"Strategy type selection: {strategy_type}", "INFO")
+#
+#     # Map strategy to multipliers and store in advisor
+#     strategy_multipliers = {
+#         "conservative": {"profit": 0.8, "risk": 0.8, "confidence_req": 85},
+#         "balanced": {"profit": 1.0, "risk": 1.0, "confidence_req": 75},
+#         "aggressive": {"profit": 1.4, "risk": 1.3, "confidence_req": 65},
+#         "swing trading": {"profit": 1.8, "risk": 1.5, "confidence_req": 70}
+#     }
+#     advisor.strategy_settings = strategy_multipliers[strategy_type]
+#     advisor.current_strategy = strategy_type  # Store strategy name for logging
+#     advisor.log(f"Strategy: {strategy_type}, Investment Days: {advisor.investment_days}", "INFO")
+#
+#     # ENHANCED: Show realistic profit targets based on selection
+#     base_profit = 3.7  # Base 3.7%
+#     strategy_multiplier = advisor.strategy_settings["profit"]
+#     time_multiplier = 1.0 + (advisor.investment_days - 7) * 0.05  # More aggressive time scaling
+#
+#     estimated_profit = base_profit * strategy_multiplier * time_multiplier
+#
+#     # Enhanced profit target preview with strategy effect
+#     if advisor.investment_days >= 30:
+#         if strategy_type == "swing trading":
+#             profit_range = f"15-35% profits"
+#         elif strategy_type == "aggressive":
+#             profit_range = f"12-25% profits"
+#         else:
+#             profit_range = f"8-15% profits"
+#         st.sidebar.info(f"💡 {strategy_type} + Long timeframe (≥30 days): Target {profit_range}")
+#     elif advisor.investment_days >= 14:
+#         if strategy_type == "swing trading":
+#             profit_range = f"10-20% profits"
+#         elif strategy_type == "aggressive":
+#             profit_range = f"8-15% profits"
+#         else:
+#             profit_range = f"5-10% profits"
+#         st.sidebar.info(f"💡 {strategy_type} + Medium timeframe: Target {profit_range}")
+#     else:
+#         if strategy_type == "swing trading":
+#             profit_range = f"6-12% profits"
+#         elif strategy_type == "aggressive":
+#             profit_range = f"5-8% profits"
+#         else:
+#             profit_range = f"3-6% profits"
+#         st.sidebar.info(f"💡 {strategy_type} + Short timeframe: Target {profit_range}")
+#
+#     # Show the estimated profit for current settings
+#     st.sidebar.metric(
+#         "📊 Estimated Target Profit",
+#         f"{estimated_profit:.1f}%",
+#         delta=f"vs base {base_profit}%"
+#     )
+#
+#     # Show model availability
+#     if stock_symbol in advisor.models:
+#         st.sidebar.success(f"🤖 AI Model Available for {stock_symbol}")
+#         advisor.log(f"AI Model Available for {stock_symbol}", "SUCCESS")
+#     else:
+#         st.sidebar.info(f"📊 Using Technical Analysis for {stock_symbol}")
+#         advisor.log(f"Using Technical Analysis for {stock_symbol}", "INFO")
+#
+#     # Analyze button
+#     analyze_btn = st.sidebar.button("🚀 Get Enhanced Trading Advice", type="primary", use_container_width=True)
+#     advisor.log("Analyze Button Clicked", "INFO")
+#
+#     # ADD SEPARATOR BEFORE DEBUG CONTROLS
+#     st.sidebar.markdown("---")
+#
+#     # DEBUG CONTROLS - AT THE BOTTOM OF SIDEBAR
+#     st.sidebar.markdown("### 🐛 Debug Options")
+#
+#     # Update session state with current checkbox values
+#     st.session_state.show_debug = st.sidebar.checkbox(
+#         "Show Debug Logs",
+#         value=st.session_state.show_debug,
+#         help="Display detailed calculation logs on screen"
+#     )
+#
+#     st.session_state.download_file = st.sidebar.checkbox(
+#         "Enable Log File Creation",
+#         value=st.session_state.download_file,
+#         help="Create downloadable log file"
+#     )
+#
+#     # UPDATE ADVISOR SETTINGS BASED ON CURRENT STATE
+#     advisor.download_log = st.session_state.download_file
+#     if st.session_state.download_file:
+#         if not hasattr(advisor, 'log_file') or not advisor.log_file:
+#             advisor.ensure_log_file()  # Use the new method
+#             st.sidebar.success(f"📝 Log file created: {os.path.basename(advisor.log_file)}")
+#     else:
+#         advisor.log_file = None
+#
+#     # Show download button if log file exists and download is enabled
+#     if st.session_state.download_file and 'enhanced_advisor' in st.session_state:
+#         # Ensure advisor has log_file attribute in logs directory
+#         if not hasattr(advisor, 'log_file') or not advisor.log_file:
+#             timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+#             # 🔧 FIXED: Use logs directory
+#             advisor.log_file = os.path.join("logs", f"debug_log_{timestamp}.log")
+#
+#         # Check if log file exists and has content
+#         if os.path.exists(advisor.log_file):
+#             try:
+#                 with open(advisor.log_file, 'r', encoding='utf-8') as f:
+#                     log_content = f.read()
+#
+#                 if log_content.strip():  # Only show if file has content
+#                     st.sidebar.download_button(
+#                         label="📥 Download Debug Log",
+#                         data=log_content,
+#                         file_name=f"debug_log_{stock_symbol}_{datetime.now().strftime('%Y%m%d_%H%M')}.log",
+#                         mime="text/plain",
+#                         help="Download the complete debug log file"
+#                     )
+#                     # Show file info
+#                     file_size = len(log_content.encode('utf-8'))
+#                     st.sidebar.caption(f"Log file: {file_size} bytes, {log_content.count(chr(10))} lines")
+#                     # 🔧 NEW: Show log location
+#                     st.sidebar.caption(f"📁 Saved in: {advisor.log_file}")
+#                 else:
+#                     st.sidebar.info("📝 Log file exists but is empty. Run an analysis first.")
+#
+#             except Exception as e:
+#                 st.sidebar.error(f"Error accessing log file: {e}")
+#                 st.sidebar.caption(f"Log file path: {advisor.log_file}")
+#         else:
+#             if advisor.debug_log:  # If there are debug logs in memory but no file
+#                 st.sidebar.info("📝 Debug logs available. Run an analysis to create downloadable file.")
+#             else:
+#                 st.sidebar.info("📝 No debug logs yet. Run an analysis first.")
+#
+#     # Use session state values for the rest of the application
+#     show_debug = st.session_state.show_debug
+#     download_file = st.session_state.download_file
+#
+#     # Analysis results
+#     if analyze_btn and stock_symbol:
+#         with st.spinner(f"🔍 Running enhanced analysis for {stock_symbol}..."):
+#
+#             result = advisor.analyze_stock_enhanced(stock_symbol, target_date)
+#
+#             if result is None:
+#                 st.error("❌ Could not analyze this stock. Please try a different symbol or date.")
+#                 advisor.log("Could not analyze this stock. Please try a different symbol or date.", "ERROR")
+#                 return
+#
+#             # Success message
+#             st.sidebar.success(f"✅ Enhanced analysis complete for {stock_symbol}")
+#             advisor.log(f"Enhanced analysis complete for {stock_symbol}", "SUCCESS")
+#
+#             # Main recommendation box
+#             action = result['action']
+#             confidence = result['confidence']
+#
+#             cal1, cal2 = st.columns(2)
+#             # Enhanced color-coded recommendation
+#             if action == "BUY":
+#                 cal2.success(f"🟢 **RECOMMENDATION: {action}** 📈")
+#                 cal1.markdown(f"### **Confidence Level: {confidence:.0f}%**")
+#                 advisor.log(f"BUY recommendation for {stock_symbol}", "INFO")
+#
+#             elif action == "SELL/AVOID":
+#                 cal2.error(f"🔴 **RECOMMENDATION: {action}** 📉")
+#                 cal1.markdown(f"### **Confidence Level: {confidence:.0f}%**")
+#                 advisor.log(f"SELL/AVOID recommendation for {stock_symbol}", "INFO")
+#
+#             else:
+#                 cal2.warning(f"🟡 **RECOMMENDATION: {action}** ⏳")
+#                 cal1.markdown(f"### **Confidence Level: {confidence:.0f}%**")
+#                 advisor.log(f"NEUTRAL recommendation for {stock_symbol}", "INFO")
+#
+#             # Enhanced price information
+#             st.subheader("💰 Price Information")
+#
+#             col1, col2, col3, col4, col5 = st.columns(5)
+#
+#             with col1:
+#                 st.metric(
+#                     label="Current Price",
+#                     value=f"${result['current_price']:.2f}",
+#                     help="Price on the analysis date"
+#                 )
+#                 advisor.log(f"Current Price: {result['current_price']:.2f}", "INFO")
+#
+#             with col2:
+#                 if result.get('buy_price'):
+#                     st.metric(
+#                         label="🟢 BUY at",
+#                         value=f"${result['buy_price']:.2f}",
+#                         help="Recommended buying price"
+#                     )
+#                     advisor.log(f"BUY Price: {result['buy_price']:.2f}", "INFO")
+#                 else:
+#                     st.metric(
+#                         label="🟢 BUY at",
+#                         value="N/A",
+#                         help="No buy recommendation"
+#                     )
+#                     advisor.log("No buy recommendation", "INFO")
+#
+#             with col3:
+#                 if result.get('sell_price'):
+#                     st.metric(
+#                         label="🔴 SELL at",
+#                         value=f"${result['sell_price']:.2f}",
+#                         help="Target selling price"
+#                     )
+#                     advisor.log(f"SELL Price: {result['sell_price']:.2f}", "INFO")
+#                 else:
+#                     st.metric(
+#                         label="🔴 SELL at",
+#                         value="N/A",
+#                         help="No sell target"
+#                     )
+#                     advisor.log("No sell target", "INFO")
+#
+#             with col4:
+#                 if result['expected_profit_pct'] > 0:
+#                     st.metric(
+#                         label="💰 Expected Profit",
+#                         value=f"{result['expected_profit_pct']:.1f}%",
+#                         delta=f"in {advisor.investment_days} days"
+#                     )
+#                     st.caption(result.get('net_profit_message', ''))
+#                     advisor.log(f"Expected Profit: {result['expected_profit_pct']:.1f}%", "INFO")
+#                 else:
+#                     st.metric(
+#                         label="💰 Expected Profit",
+#                         value="0%",
+#                         help="No profit expected"
+#                     )
+#                     advisor.log("No profit expected", "INFO")
+#
+#             with col5:
+#                 st.metric(
+#                     label="💸 Broker Fee",
+#                     value=f"{result.get('broker_fee_paid', 0.0):.2f}%",
+#                     help="Total cost from buying and selling fees"
+#                 )
+#                 st.metric(
+#                     label="🧾 Tax Paid",
+#                     value=f"{result.get('tax_paid', 0.0):.2f}%",
+#                     help="25% capital gains tax applied to net profit"
+#                 )
+#
+#             def show_enhanced_profit_analysis(result, strategy_type, investment_days):
+#                 """Display enhanced profit analysis"""
+#
+#                 with st.expander("🚀 Enhanced Profit Analysis"):
+#                     col1, col2 = st.columns(2)
+#
+#                     with col1:
+#                         st.markdown("**📊 Profit Target Breakdown:**")
+#                         base_target = result.get('base_profit_target', 3.7)
+#                         final_target = result.get('expected_profit_pct', 3.7)
+#
+#                         st.write(f"• Base Target: {base_target:.1f}%")
+#                         st.write(
+#                             f"• Strategy Multiplier ({strategy_type}): {strategy_multipliers[strategy_type]['profit']:.1f}x")
+#                         st.write(
+#                             f"• Time Multiplier ({investment_days} days): {1.0 + (investment_days - 7) * 0.02:.1f}x")
+#                         st.write(f"• **Final Target: {final_target:.1f}%**")
+#
+#                     with col2:
+#                         st.markdown("**⏰ Time vs Profit Expectations:**")
+#
+#                         timeframes = {
+#                             "1-7 days": "3-6% (Quick trades)",
+#                             "7-21 days": "5-10% (Short swing)",
+#                             "21-60 days": "8-15% (Medium swing)",
+#                             "60+ days": "12-25% (Long swing)"
+#                         }
+#
+#                         for timeframe, profit_range in timeframes.items():
+#                             if investment_days <= 7 and "1-7 days" in timeframe:
+#                                 st.write(f"🎯 **{timeframe}: {profit_range}**")
+#                             elif 7 < investment_days <= 21 and "7-21 days" in timeframe:
+#                                 st.write(f"🎯 **{timeframe}: {profit_range}**")
+#                             elif 21 < investment_days <= 60 and "21-60 days" in timeframe:
+#                                 st.write(f"🎯 **{timeframe}: {profit_range}**")
+#                             elif investment_days > 60 and "60+ days" in timeframe:
+#                                 st.write(f"🎯 **{timeframe}: {profit_range}**")
+#                             else:
+#                                 st.write(f"• {timeframe}: {profit_range}")
+#
+#             show_enhanced_profit_analysis(result, strategy_type, advisor.investment_days)
+#
+#             # Show signal strength breakdown
+#             if confidence >= 85:
+#                 st.info("🎯 **HIGH CONFIDENCE SIGNAL** - Multiple indicators confirm this recommendation")
+#                 advisor.log("HIGH CONFIDENCE SIGNAL", "INFO")
+#             elif confidence >= 70:
+#                 st.info("✅ **GOOD CONFIDENCE** - Most indicators support this recommendation")
+#                 advisor.log("GOOD CONFIDENCE", "INFO")
+#             else:
+#                 st.warning("⚠️ **MODERATE CONFIDENCE** - Mixed signals detected")
+#                 advisor.log("MODERATE CONFIDENCE", "WARNING")
+#
+#             # ADD THIS NEW SECTION:
+#             if result.get('enhancement_active', False):
+#                 st.info("🎯 **95% CONFIDENCE SYSTEM ACTIVE** - Enhanced analysis in use")
+#
+#                 # Show confidence breakdown
+#                 if 'confidence_boost' in result and result['confidence_boost'] > 0:
+#                     st.success(
+#                         f"💪 Confidence Boosted: {result['original_confidence']:.1f}% → {result['confidence']:.1f}% (+{result['confidence_boost']:.1f}%)")
+#
+#                 # Enhanced confidence indicators
+#                 if result['confidence'] >= 95:
+#                     st.success("🏆 **ULTRA-HIGH CONFIDENCE** - Highest quality signal")
+#                 elif result['confidence'] >= 90:
+#                     st.success("🌟 **VERY HIGH CONFIDENCE** - Excellent signal quality")
+#                 elif result['confidence'] >= 85:
+#                     st.info("⭐ **HIGH CONFIDENCE** - Strong signal")
+#
+#                 # Show enhancement details in expander
+#                 with st.expander("🔍 95% Confidence System Details"):
+#                     col1, col2 = st.columns(2)
+#
+#                     with col1:
+#                         st.markdown("**System Status:**")
+#                         st.write("✅ Enhanced Signal Detection: Active")
+#                         st.write("✅ Confidence Builder: Active")
+#                         st.write("✅ Market Regime Detection: Active")
+#
+#                     with col2:
+#                         st.markdown("**Confidence Breakdown:**")
+#                         if 'signal_breakdown' in result:
+#                             for signal_type, score in result['signal_breakdown'].items():
+#                                 st.write(f"• {signal_type.replace('_', ' ').title()}: {score:.2f}")
+#             else:
+#                 st.warning("⚠️ Using original system - 95% confidence enhancements not active")
+#
+#             # Enhanced trading plan
+#             st.subheader("📋 Your Enhanced Trading Plan")
+#
+#             col1, col2, col3 = st.columns(3)
+#
+#             if action == "BUY":
+#                 with col1:
+#                     st.markdown(f"""
+#                     ### 🟢 **BUY PLAN FOR {stock_symbol}**
+#
+#                     **What to do:**
+#                     1. 💰 **Buy the stock at:** ${result['buy_price']:.2f}
+#                     2. 🎯 **Sell it when it reaches:** ${result['sell_price']:.2f}
+#                     3. 🛡️ **Stop loss if it drops to:** ${result['stop_loss']:.2f}
+#                     4. ⏱️ **Max holding time:** {advisor.investment_days} days (can exit earlier at target)
+#                     """)
+#                     advisor.log(f"BUY plan for {stock_symbol}", "INFO")
+#
+#
+#                 with col2:
+#                     st.markdown(f"""
+#                     **Expected Outcome:**
+#                     - 💵 **Profit per share:** ${(result['sell_price'] - result['buy_price']):.2f}
+#                     - 📈 **Percentage gain:** {result['expected_profit_pct']:.1f}%
+#                     - 🎲 **Success probability:** {confidence:.0f}%
+#                     - 🛡️ **Max loss if stopped:** {((result['buy_price'] - result['stop_loss']) / result['buy_price'] * 100):.1f}%
+#                     - ⏰ **Exit strategy:** Sell at target OR after {advisor.investment_days} days
+#                     """)
+#                     advisor.log(f"Expected outcome for {stock_symbol}", "INFO")
+#
+#             elif action == "SELL/AVOID":
+#                 with col1:
+#                     st.markdown(f"""
+#                     ### 🔴 **AVOID/SELL PLAN FOR {stock_symbol}**
+#
+#                     **What to do:**
+#                     - 🚫 **Don't buy this stock right now**
+#                     - 📉 **If you own it, sell at:** ${result['sell_price']:.2f}
+#                     - ⏳ **Re-evaluate in:** {advisor.investment_days} days maximum
+#                     """)
+#                     advisor.log(f"SELL/AVOID plan for {stock_symbol}", "INFO")
+#
+#                 with col2:
+#                     st.markdown(f"""
+#                     **Expected Outcome:**
+#                     - 📉 **Potential loss avoided:** {result['expected_profit_pct']:.1f}%
+#                     - 🎲 **Confidence in decline:** {confidence:.0f}%
+#                     - 💡 **Better opportunities expected within {advisor.investment_days} days**
+#                     """)
+#                     advisor.log(f"Expected outcome for {stock_symbol}", "INFO")
+#
+#             else:
+#                 with col1:
+#                     st.markdown(f"""
+#                     ### 🟡 **WAIT PLAN FOR {stock_symbol}**
+#
+#                     **What to do:**
+#                     - ⏳ **Wait for clearer signals**
+#                     - 👀 **Monitor daily for up to {advisor.investment_days} days**
+#                     - 🔄 **Re-analyze when signals strengthen**
+#                     """)
+#                     advisor.log(f"WAIT plan for {stock_symbol}", "INFO")
+#
+#                 with col2:
+#                     st.markdown(f"""
+#                     **Why wait:**
+#                     - 🤔 **Conflicting signals detected**
+#                     - 📊 **Need stronger confirmation**
+#                     - 🎯 **Better timing expected within {advisor.investment_days} days**
+#                     """)
+#                     advisor.log(f"Wait reason for {stock_symbol}", "INFO")
+#
+#             # Enhanced signal analysis
+#             with col3:
+#                 st.subheader("🔬 Signal Analysis")
+#
+#                 signal_breakdown = result.get('signal_breakdown', {})
+#
+#                 # Show signal strength bars
+#                 if signal_breakdown:
+#                     for signal_type, score in signal_breakdown.items():
+#                         if signal_type == 'trend_score':
+#                             emoji = "📈" if score > 0 else "📉" if score < 0 else "➡️"
+#                             st.write(f"{emoji} **Trend:** {score:.1f}")
+#                             advisor.log(f"Trend score for {stock_symbol}: {score:.1f}", "INFO")
+#
+#                         elif signal_type == 'momentum_score':
+#                             emoji = "🚀" if score > 0 else "🔻" if score < 0 else "⚖️"
+#                             st.write(f"{emoji} **Momentum:** {score:.1f}")
+#                             advisor.log(f"Momentum score for {stock_symbol}: {score:.1f}", "INFO")
+#
+#                         elif signal_type == 'volume_score':
+#                             emoji = "📢" if abs(score) > 1 else "📊"
+#                             st.write(f"{emoji} **Volume:** {score:.1f}")
+#                             advisor.log(f"Volume score for {stock_symbol}: {score:.1f}", "INFO")
+#
+#                         elif signal_type == 'sr_score':
+#                             emoji = "🎯" if abs(score) > 1 else "📊"
+#                             st.write(f"{emoji} **Support/Resistance:** {score:.1f}")
+#                             advisor.log(f"Support/Resistance score for {stock_symbol}: {score:.1f}", "INFO")
+#
+#                         elif signal_type == 'model_score':
+#                             emoji = "🤖" if abs(score) > 1 else "📊"
+#                             st.write(f"{emoji} **AI Model:** {score:.1f}")
+#                             advisor.log(f"AI Model score for {stock_symbol}: {score:.1f}", "INFO")
+#
+#             with st.expander("Recommendation"):
+#                 # Detailed reasoning
+#                 st.subheader("🤔 Why This Recommendation?")
+#
+#                 reasons = result.get('reasons', [])
+#                 if reasons:
+#                     advisor.log(f"Reasons for {stock_symbol}", "INFO")
+#                     # Group reasons by category for better organization
+#                     trend_reasons = [r for r in reasons if any(word in r.lower() for word in ['average', 'trend', 'ema', 'moving'])]
+#                     advisor.log(f"Trend reasons: {trend_reasons}", "INFO")
+#                     momentum_reasons = [r for r in reasons if any(word in r.lower() for word in ['rsi', 'macd', 'stochastic', 'momentum'])]
+#                     advisor.log(f"Momentum reasons: {momentum_reasons}", "INFO")
+#                     volume_reasons = [r for r in reasons if 'volume' in r.lower()]
+#                     advisor.log(f"Volume reasons: {volume_reasons}", "INFO")
+#                     level_reasons = [r for r in reasons if any(word in r.lower() for word in ['support', 'resistance', 'bollinger'])]
+#                     advisor.log(f"Level reasons: {level_reasons}", "INFO")
+#                     model_reasons = [r for r in reasons if 'model' in r.lower()]
+#                     advisor.log(f"Model reasons: {model_reasons}", "INFO")
+#                     other_reasons = [r for r in reasons if r not in trend_reasons + momentum_reasons + volume_reasons + level_reasons + model_reasons]
+#                     advisor.log(f"Other reasons: {other_reasons}", "INFO")
+#                     col1, col2 = st.columns(2)
+#
+#                     with col1:
+#                         if trend_reasons:
+#                             st.markdown("**📈 Trend Analysis:**")
+#                             for reason in trend_reasons:
+#                                 st.write(f"• {reason}")
+#                                 advisor.log(f"Trend reason: {reason}", "INFO")
+#
+#                         if momentum_reasons:
+#                             st.markdown("**🚀 Momentum Indicators:**")
+#                             for reason in momentum_reasons:
+#                                 st.write(f"• {reason}")
+#                                 advisor.log(f"Momentum reason: {reason}", "INFO")
+#
+#                         if volume_reasons:
+#                             st.markdown("**📊 Volume Analysis:**")
+#                             for reason in volume_reasons:
+#                                 st.write(f"• {reason}")
+#                                 advisor.log(f"Volume reason: {reason}", "INFO")
+#
+#                     with col2:
+#                         if level_reasons:
+#                             st.markdown("**🎯 Key Levels:**")
+#                             for reason in level_reasons:
+#                                 st.write(f"• {reason}")
+#                                 advisor.log(f"Level reason: {reason}", "INFO")
+#
+#                         if model_reasons:
+#                             st.markdown("**🤖 AI Analysis:**")
+#                             for reason in model_reasons:
+#                                 st.write(f"• {reason}")
+#                                 advisor.log(f"Model reason: {reason}", "INFO")
+#
+#                         if other_reasons:
+#                             st.markdown("**📋 Additional Factors:**")
+#                             for reason in other_reasons:
+#                                 st.write(f"• {reason}")
+#                                 advisor.log(f"Other reason: {reason}", "INFO")
+#
+#             # Enhanced chart
+#             chart = advisor.create_enhanced_chart(stock_symbol, result)
+#             if chart:
+#                 st.subheader("📊 Enhanced Technical Chart")
+#                 st.plotly_chart(chart, use_container_width=True)
+#                 advisor.log(f"Enhanced chart for {stock_symbol} created", "INFO")
+#
+#             with st.expander("Risk Assessment"):
+#                 # Enhanced risk information
+#                 st.subheader("⚠️ Risk Assessment")
+#
+#                 risk_level = result.get('risk_level', 'Medium-term')
+#                 final_score = result.get('final_score', 0)
+#                 advisor.log(f"Risk level for {stock_symbol}: {risk_level}", "INFO")
+#
+#                 col1, col2, col3 = st.columns(3)
+#
+#                 with col1:
+#                     st.markdown("**📊 Risk Level**")
+#                     if risk_level == "Short-term":
+#                         st.warning("""
+#                         **🏃‍♂️ Short-term (1-7 days):**
+#                         - ⚡ Higher volatility
+#                         - 👀 Monitor closely
+#                         - 🎯 Quick decisions needed
+#                         """)
+#                         advisor.log(f"Risk level for {stock_symbol}: Short-term", "INFO")
+#
+#                     elif risk_level == "Medium-term":
+#                         st.info("""
+#                         **🚶‍♂️ Medium-term (1-3 weeks):**
+#                         - ⚖️ Balanced approach
+#                         - 📅 Weekly monitoring
+#                         - 📈 Trend development time
+#                         """)
+#                         advisor.log(f"Risk level for {stock_symbol}: Medium-term", "INFO")
+#
+#                     else:
+#                         st.success("""
+#                         **🐌 Long-term (3-4 weeks+):**
+#                         - 📉 Lower daily volatility
+#                         - 🔄 Less frequent monitoring
+#                         - 🎯 Fundamental changes
+#                         """)
+#                         advisor.log(f"Risk level for {stock_symbol}: Long-term", "INFO")
+#
+#                 with col2:
+#                     st.markdown("**🎯 Signal Strength**")
+#                     if abs(final_score) >= 2.5:
+#                         st.success("🔥 **VERY STRONG** signal")
+#                         advisor.log(f"Signal strength for {stock_symbol}: Very Strong", "INFO")
+#
+#                     elif abs(final_score) >= 1.5:
+#                         st.info("💪 **STRONG** signal")
+#                         advisor.log(f"Signal strength for {stock_symbol}: Strong", "INFO")
+#
+#                     elif abs(final_score) >= 1.0:
+#                         st.warning("📊 **MODERATE** signal")
+#                         advisor.log(f"Signal strength for {stock_symbol}: Moderate", "INFO")
+#
+#                     else:
+#                         st.error("🤔 **WEAK** signal")
+#                         advisor.log(f"Signal strength for {stock_symbol}: Weak", "INFO")
+#
+#                     st.write(f"Signal Score: {final_score:.2f}")
+#                     advisor.log(f"Signal score for {stock_symbol}: {final_score:.2f}", "INFO")
+#
+#                 with col3:
+#                     st.markdown("**💡 Recommendation Quality**")
+#                     if confidence >= 90:
+#                         st.success("🏆 **EXCELLENT** - Act with confidence")
+#                         advisor.log(f"Recommendation quality for {stock_symbol}: Excellent", "INFO")
+#
+#                     elif confidence >= 80:
+#                         st.success("✅ **VERY GOOD** - Strong recommendation")
+#                         advisor.log(f"Recommendation quality for {stock_symbol}: Very Good", "INFO")
+#
+#                     elif confidence >= 70:
+#                         st.info("👍 **GOOD** - Solid analysis")
+#                         advisor.log(f"Recommendation quality for {stock_symbol}: Good", "INFO")
+#
+#                     elif confidence >= 60:
+#                         st.warning("⚖️ **FAIR** - Consider carefully")
+#                         advisor.log(f"Recommendation quality for {stock_symbol}: Fair", "INFO")
+#
+#                     else:
+#                         st.error("🤔 **POOR** - Wait for better signals")
+#                         advisor.log(f"Recommendation quality for {stock_symbol}: Poor", "ERROR")
+#
+#             # Enhanced disclaimer
+#             st.subheader("📋 Important Trading Guidelines")
+#
+#             # if show_debug:
+#             #     st.markdown("---")
+#             #     st.subheader("🐛 Debug Logs")
+#             #
+#             #     with st.expander("🔍 Full Debug Output", expanded=False):
+#             #         st.code("\n".join(result["debug_log"]), language="text")
+#             #
+#             #     success_lines = [l for l in result['debug_log'] if l.startswith('✅')]
+#             #     error_lines = [l for l in result['debug_log'] if l.startswith('❌')]
+#             #     neutral_lines = [l for l in result['debug_log'] if l.startswith('⚖️')]
+#             #
+#             #     st.markdown("### ✅ Successful Checks")
+#             #     st.code("\n".join(success_lines))
+#             #
+#             #     st.markdown("### ❌ Warnings & Issues")
+#             #     st.code("\n".join(error_lines))
+#             #
+#             #     st.markdown("### ⚖️ Neutral Observations")
+#             #     st.code("\n".join(neutral_lines))
+#
+#             show_debug_logs_safely(result,show_debug)
+#             col1, col2 = st.columns(2)
+#
+#             with col1:
+#                 st.info("""
+#                 **✅ Before You Trade:**
+#                 - 📊 Double-check current market conditions
+#                 - 💰 Only invest what you can afford to lose
+#                 - 🎯 Set stop-losses as recommended
+#                 - 📈 Monitor your positions regularly
+#                 - 📚 Keep learning about the market
+#                 """)
+#
+#             with col2:
+#                 st.warning("""
+#                 **⚠️ Risk Reminders:**
+#                 - 📉 Past performance ≠ future results
+#                 - 🌪️ Markets can be unpredictable
+#                 - 📰 News can change everything quickly
+#                 - 💡 This is educational, not financial advice
+#                 - 👨‍💼 Consult professionals for large investments
+#                 """)
+#
+#     else:
+#         # Enhanced welcome message
+#         st.info("👆 Enter a stock symbol and date to get your enhanced trading advice!")
+#
+#         # Enhanced examples
+#         st.subheader("🚀 Enhanced Features")
+#
+#         col1, col2 = st.columns(2)
+#
+#         with col1:
+#             st.markdown("""
+#             **🎯 What Makes This Enhanced:**
+#             - **🤖 AI + Technical Analysis** - Dual-powered recommendations
+#             - **📊 Multi-timeframe Analysis** - 5 different signal types
+#             - **🔍 95% Confidence Targeting** - Higher accuracy goals
+#             - **📈 Advanced Indicators** - RSI, MACD, Bollinger Bands, Stochastic
+#             - **🎪 Signal Confirmation** - Multiple indicators must agree
+#             """)
+#
+#         with col2:
+#             st.markdown("""
+#             **✅ You Get:**
+#             - **🎯 High-confidence recommendations** (target: 85-95%)
+#             - **💰 Precise buy/sell prices** with stop-losses
+#             - **📊 Detailed signal breakdown** by category
+#             - **🔬 Multi-factor analysis** explanation
+#             - **📈 Enhanced technical charts** with all indicators
+#             """)
+#
+#         # Example recommendation display
+#         st.subheader("📋 Example Enhanced Recommendation")
+#
+#         st.code("""
+#             🟢 RECOMMENDATION: BUY
+#             Confidence Level: 87%
+#
+#             💰 Price Information:
+#             Current Price: $153.30
+#             🟢 BUY at: $153.30
+#             🔴 SELL at: $158.45
+#             💰 Expected Profit: 3.4%
+#
+#             🔬 Signal Analysis:
+#             📈 Trend: +2.1 (Strong upward)
+#             🚀 Momentum: +1.8 (Bullish RSI & MACD)
+#             📢 Volume: +1.2 (Above average confirmation)
+#             🎯 Support/Resistance: +0.9 (Near support)
+#             🤖 AI Model: +2.3 (85% buy confidence)
+#
+#             Final Signal Score: +8.3 (Very Strong)
+#         """)
+
 def create_enhanced_interface():
-    """Create enhanced interface with 95% confidence targeting"""
-    st.set_page_config(
-        page_title="Enhanced Stock Advisor",
-        page_icon="📈",
-        layout="wide"
+    """
+    Simulates a Streamlit-like interface for the ProfessionalStockAdvisor.
+    This function replaces the direct Streamlit calls for local testing.
+    """
+    print("\n" + "=" * 60)
+    print("📈 StockWise Enhanced Confidence Trading Advisor 📈")
+    print("=" * 60)
+
+    # Initialize advisor directly for local testing (replaces st.session_state.advisor)
+    # Removed 'strategy_type' as it's no longer a direct __init__ argument.
+    # The config and strategy settings are loaded internally by the advisor.
+    advisor = ProfessionalStockAdvisor(
+        debug=True,  # Set to True for verbose output during simulation
+        use_ibkr=False,  # Set to True if you have IBKR running and want to test it
+        model_dir="models/400_train_set",  # Ensure this path is correct
+        download_log=True
     )
-
-    # Header
-    st.title("📈 Enhanced Stock Trading Advisor")
-    st.markdown("### Advanced AI system with 95% confidence targeting!")
-    st.markdown("---")
-
-    # INITIALIZE DEBUG SETTINGS IN SESSION STATE
-    if 'show_debug' not in st.session_state:
-        st.session_state.show_debug = False
-    if 'download_file' not in st.session_state:
-        st.session_state.download_file = False
-
-    aggressive_config_path = "configuration_files/stockwise_production_params_aggressive_20250816.json"
-
-    # Initialize advisor with current settings
-    if 'enhanced_advisor' not in st.session_state:
-        st.session_state.enhanced_advisor = ProfessionalStockAdvisor(
-            debug=True,
-            config_file=aggressive_config_path,
-            strategy_type="Aggressive",
-            download_log=st.session_state.download_file
-        )
-
-    advisor = st.session_state.enhanced_advisor
-
-    advisor.log("Create Streamlit Page", "INFO")
-    advisor.log("Enhanced interface initialized", "INFO")
-
-    # Sidebar controls
-    st.sidebar.header("🎯 Get Your Trading Advice")
-
-    # Stock input
-    stock_symbol = st.sidebar.text_input(
-        "📊 Stock Symbol",
-        value="NVDA",
-        help="Enter any stock ticker (e.g., AAPL, GOOGL, TSLA)"
-    ).upper().strip()
-
-    advisor.log(f"Stock Symbol: {stock_symbol}", "INFO")
-
-    # Date input
-    date_input = st.sidebar.text_input(
-        "📅 Date (MM/DD/YY or MM/DD/YYYY)",
-        value="7/1/25",
-        help="Enter date like: 1/7/25 or 1/7/2025"
-    )
-    advisor.log(f"Date Input: {date_input}", "INFO")
-
-    # Parse the date
-    try:
-        if '/' in date_input:
-            parts = date_input.split('/')
-            if len(parts) == 3:
-                month, day, year = parts
-                if len(year) == 2:
-                    year = "20" + year if int(year) < 50 else "19" + year
-                target_date = datetime(int(year), int(month), int(day)).date()
-                advisor.log(f"Target Date: {target_date}", "INFO")
-            else:
-                target_date = datetime.now().date()
-                advisor.log(f"Target Date: {target_date}", "INFO")
-        else:
-            target_date = datetime.now().date()
-            advisor.log(f"Target Date: {target_date}", "INFO")
-    except:
-        target_date = datetime.now().date()
-        st.sidebar.warning("⚠️ Invalid date format. Using today's date.")
-        advisor.log("Invalid date format. Using today's date.", "WARNING")
-
-    # Investment period
-    # Investment timeframe selection
-    advisor.investment_days = st.sidebar.selectbox(
-        "🕐 Target holding period(up to):",
-        options=[1, 3, 7, 14, 21, 30, 45, 60, 90, 120],  # Extended options
-        index=2,  # Default to 7 days
-        help="Longer periods generally allow for higher profit targets but require more patience"
-    )
-    advisor.log(f"Investment Days: {advisor.investment_days}", "INFO")
-
-    # Strategy type selection
-    strategy_type = st.sidebar.radio(
-        "📈 Strategy Type:",
-        options=["Conservative", "Balanced", "Aggressive", "Swing Trading"],
-        index=1,  # Default to Balanced
-        help="Strategy affects profit targets and risk tolerance"
-    )
-    advisor.log(f"Strategy type selection: {strategy_type}", "INFO")
-
-    # Map strategy to multipliers and store in advisor
-    strategy_multipliers = {
-        "Conservative": {"profit": 0.8, "risk": 0.8, "confidence_req": 85},
-        "Balanced": {"profit": 1.0, "risk": 1.0, "confidence_req": 75},
-        "Aggressive": {"profit": 1.4, "risk": 1.3, "confidence_req": 65},
-        "Swing Trading": {"profit": 1.8, "risk": 1.5, "confidence_req": 70}
-    }
-    advisor.strategy_settings = strategy_multipliers[strategy_type]
-    advisor.current_strategy = strategy_type  # Store strategy name for logging
-    advisor.log(f"Strategy: {strategy_type}, Investment Days: {advisor.investment_days}", "INFO")
-
-    # ENHANCED: Show realistic profit targets based on selection
-    base_profit = 3.7  # Base 3.7%
-    strategy_multiplier = advisor.strategy_settings["profit"]
-    time_multiplier = 1.0 + (advisor.investment_days - 7) * 0.05  # More aggressive time scaling
-
-    estimated_profit = base_profit * strategy_multiplier * time_multiplier
-
-    # Enhanced profit target preview with strategy effect
-    if advisor.investment_days >= 30:
-        if strategy_type == "Swing Trading":
-            profit_range = f"15-35% profits"
-        elif strategy_type == "Aggressive":
-            profit_range = f"12-25% profits"
-        else:
-            profit_range = f"8-15% profits"
-        st.sidebar.info(f"💡 {strategy_type} + Long timeframe (≥30 days): Target {profit_range}")
-    elif advisor.investment_days >= 14:
-        if strategy_type == "Swing Trading":
-            profit_range = f"10-20% profits"
-        elif strategy_type == "Aggressive":
-            profit_range = f"8-15% profits"
-        else:
-            profit_range = f"5-10% profits"
-        st.sidebar.info(f"💡 {strategy_type} + Medium timeframe: Target {profit_range}")
+    print("Advisor Initialized. Running self-tests...")
+    if advisor.run_self_tests():
+        print("✅ Advisor self-tests passed! Ready for recommendations.")
     else:
-        if strategy_type == "Swing Trading":
-            profit_range = f"6-12% profits"
-        elif strategy_type == "Aggressive":
-            profit_range = f"5-8% profits"
-        else:
-            profit_range = f"3-6% profits"
-        st.sidebar.info(f"💡 {strategy_type} + Short timeframe: Target {profit_range}")
+        print("❌ Advisor self-tests failed. Check logs for details.")
+        return  # Exit if tests fail
 
-    # Show the estimated profit for current settings
-    st.sidebar.metric(
-        "📊 Estimated Target Profit",
-        f"{estimated_profit:.1f}%",
-        delta=f"vs base {base_profit}%"
-    )
+    print("\n--- Recommendation Simulation ---")
+    test_symbols = ["AAPL", "GOOG", "MSFT", "NVDA", "TSLA", "NFLX"]  # Example symbols
 
-    # Show model availability
-    if stock_symbol in advisor.models:
-        st.sidebar.success(f"🤖 AI Model Available for {stock_symbol}")
-        advisor.log(f"AI Model Available for {stock_symbol}", "SUCCESS")
-    else:
-        st.sidebar.info(f"📊 Using Technical Analysis for {stock_symbol}")
-        advisor.log(f"Using Technical Analysis for {stock_symbol}", "INFO")
+    for symbol in test_symbols:
+        print(f"\nAnalysing: {symbol}")
+        try:
+            # The generate_enhanced_recommendation method now takes only the symbol
+            # and internally fetches data and calculates indicators.
+            recommendation = advisor.generate_enhanced_recommendation(symbol)
 
-    # Analyze button
-    analyze_btn = st.sidebar.button("🚀 Get Enhanced Trading Advice", type="primary", use_container_width=True)
-    advisor.log("Analyze Button Clicked", "INFO")
-
-    # ADD SEPARATOR BEFORE DEBUG CONTROLS
-    st.sidebar.markdown("---")
-
-    # DEBUG CONTROLS - AT THE BOTTOM OF SIDEBAR
-    st.sidebar.markdown("### 🐛 Debug Options")
-
-    # Update session state with current checkbox values
-    st.session_state.show_debug = st.sidebar.checkbox(
-        "Show Debug Logs",
-        value=st.session_state.show_debug,
-        help="Display detailed calculation logs on screen"
-    )
-
-    st.session_state.download_file = st.sidebar.checkbox(
-        "Enable Log File Creation",
-        value=st.session_state.download_file,
-        help="Create downloadable log file"
-    )
-
-    # UPDATE ADVISOR SETTINGS BASED ON CURRENT STATE
-    advisor.download_log = st.session_state.download_file
-    if st.session_state.download_file:
-        if not hasattr(advisor, 'log_file') or not advisor.log_file:
-            advisor.ensure_log_file()  # Use the new method
-            st.sidebar.success(f"📝 Log file created: {os.path.basename(advisor.log_file)}")
-    else:
-        advisor.log_file = None
-
-    # Show download button if log file exists and download is enabled
-    if st.session_state.download_file and 'enhanced_advisor' in st.session_state:
-        # Ensure advisor has log_file attribute in logs directory
-        if not hasattr(advisor, 'log_file') or not advisor.log_file:
-            timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-            # 🔧 FIXED: Use logs directory
-            advisor.log_file = os.path.join("logs", f"debug_log_{timestamp}.log")
-
-        # Check if log file exists and has content
-        if os.path.exists(advisor.log_file):
-            try:
-                with open(advisor.log_file, 'r', encoding='utf-8') as f:
-                    log_content = f.read()
-
-                if log_content.strip():  # Only show if file has content
-                    st.sidebar.download_button(
-                        label="📥 Download Debug Log",
-                        data=log_content,
-                        file_name=f"debug_log_{stock_symbol}_{datetime.now().strftime('%Y%m%d_%H%M')}.log",
-                        mime="text/plain",
-                        help="Download the complete debug log file"
-                    )
-                    # Show file info
-                    file_size = len(log_content.encode('utf-8'))
-                    st.sidebar.caption(f"Log file: {file_size} bytes, {log_content.count(chr(10))} lines")
-                    # 🔧 NEW: Show log location
-                    st.sidebar.caption(f"📁 Saved in: {advisor.log_file}")
+            print(f"   Action: {recommendation['action']}")
+            print(f"   Confidence: {recommendation['confidence']:.1f}%")
+            print(f"   Current Price: ${recommendation['current_price']:.2f}")
+            if recommendation['action'].endswith('BUY'):
+                print(f"   Expected Profit: {recommendation['expected_profit_pct']:.1f}%")
+                print(f"   Target Sell Price: ${recommendation['sell_price']:.2f}")
+                print(f"   Stop Loss: ${recommendation['stop_loss']:.2f}")
+            print(f"   Reasons:")
+            for reason in recommendation['reasons']:
+                print(f"     - {reason}")
+            print("   Trading Plan:")
+            for key, value in recommendation['trading_plan'].items():
+                if isinstance(value, list):
+                    print(f"     - {key}:")
+                    for item in value:
+                        print(f"       - {item}")
                 else:
-                    st.sidebar.info("📝 Log file exists but is empty. Run an analysis first.")
-
-            except Exception as e:
-                st.sidebar.error(f"Error accessing log file: {e}")
-                st.sidebar.caption(f"Log file path: {advisor.log_file}")
-        else:
-            if advisor.debug_log:  # If there are debug logs in memory but no file
-                st.sidebar.info("📝 Debug logs available. Run an analysis to create downloadable file.")
-            else:
-                st.sidebar.info("📝 No debug logs yet. Run an analysis first.")
-
-    # Use session state values for the rest of the application
-    show_debug = st.session_state.show_debug
-    download_file = st.session_state.download_file
-
-    # Analysis results
-    if analyze_btn and stock_symbol:
-        with st.spinner(f"🔍 Running enhanced analysis for {stock_symbol}..."):
-
-            result = advisor.analyze_stock_enhanced(stock_symbol, target_date)
-
-            if result is None:
-                st.error("❌ Could not analyze this stock. Please try a different symbol or date.")
-                advisor.log("Could not analyze this stock. Please try a different symbol or date.", "ERROR")
-                return
-
-            # Success message
-            st.sidebar.success(f"✅ Enhanced analysis complete for {stock_symbol}")
-            advisor.log(f"Enhanced analysis complete for {stock_symbol}", "SUCCESS")
-
-            # Main recommendation box
-            action = result['action']
-            confidence = result['confidence']
-
-            cal1, cal2 = st.columns(2)
-            # Enhanced color-coded recommendation
-            if action == "BUY":
-                cal2.success(f"🟢 **RECOMMENDATION: {action}** 📈")
-                cal1.markdown(f"### **Confidence Level: {confidence:.0f}%**")
-                advisor.log(f"BUY recommendation for {stock_symbol}", "INFO")
-
-            elif action == "SELL/AVOID":
-                cal2.error(f"🔴 **RECOMMENDATION: {action}** 📉")
-                cal1.markdown(f"### **Confidence Level: {confidence:.0f}%**")
-                advisor.log(f"SELL/AVOID recommendation for {stock_symbol}", "INFO")
-
-            else:
-                cal2.warning(f"🟡 **RECOMMENDATION: {action}** ⏳")
-                cal1.markdown(f"### **Confidence Level: {confidence:.0f}%**")
-                advisor.log(f"NEUTRAL recommendation for {stock_symbol}", "INFO")
-
-            # Enhanced price information
-            st.subheader("💰 Price Information")
-
-            col1, col2, col3, col4, col5 = st.columns(5)
-
-            with col1:
-                st.metric(
-                    label="Current Price",
-                    value=f"${result['current_price']:.2f}",
-                    help="Price on the analysis date"
-                )
-                advisor.log(f"Current Price: {result['current_price']:.2f}", "INFO")
-
-            with col2:
-                if result.get('buy_price'):
-                    st.metric(
-                        label="🟢 BUY at",
-                        value=f"${result['buy_price']:.2f}",
-                        help="Recommended buying price"
-                    )
-                    advisor.log(f"BUY Price: {result['buy_price']:.2f}", "INFO")
-                else:
-                    st.metric(
-                        label="🟢 BUY at",
-                        value="N/A",
-                        help="No buy recommendation"
-                    )
-                    advisor.log("No buy recommendation", "INFO")
-
-            with col3:
-                if result.get('sell_price'):
-                    st.metric(
-                        label="🔴 SELL at",
-                        value=f"${result['sell_price']:.2f}",
-                        help="Target selling price"
-                    )
-                    advisor.log(f"SELL Price: {result['sell_price']:.2f}", "INFO")
-                else:
-                    st.metric(
-                        label="🔴 SELL at",
-                        value="N/A",
-                        help="No sell target"
-                    )
-                    advisor.log("No sell target", "INFO")
-
-            with col4:
-                if result['expected_profit_pct'] > 0:
-                    st.metric(
-                        label="💰 Expected Profit",
-                        value=f"{result['expected_profit_pct']:.1f}%",
-                        delta=f"in {advisor.investment_days} days"
-                    )
-                    st.caption(result.get('net_profit_message', ''))
-                    advisor.log(f"Expected Profit: {result['expected_profit_pct']:.1f}%", "INFO")
-                else:
-                    st.metric(
-                        label="💰 Expected Profit",
-                        value="0%",
-                        help="No profit expected"
-                    )
-                    advisor.log("No profit expected", "INFO")
-
-            with col5:
-                st.metric(
-                    label="💸 Broker Fee",
-                    value=f"{result.get('broker_fee_paid', 0.0):.2f}%",
-                    help="Total cost from buying and selling fees"
-                )
-                st.metric(
-                    label="🧾 Tax Paid",
-                    value=f"{result.get('tax_paid', 0.0):.2f}%",
-                    help="25% capital gains tax applied to net profit"
-                )
-
-            def show_enhanced_profit_analysis(result, strategy_type, investment_days):
-                """Display enhanced profit analysis"""
-
-                with st.expander("🚀 Enhanced Profit Analysis"):
-                    col1, col2 = st.columns(2)
-
-                    with col1:
-                        st.markdown("**📊 Profit Target Breakdown:**")
-                        base_target = result.get('base_profit_target', 3.7)
-                        final_target = result.get('expected_profit_pct', 3.7)
-
-                        st.write(f"• Base Target: {base_target:.1f}%")
-                        st.write(
-                            f"• Strategy Multiplier ({strategy_type}): {strategy_multipliers[strategy_type]['profit']:.1f}x")
-                        st.write(
-                            f"• Time Multiplier ({investment_days} days): {1.0 + (investment_days - 7) * 0.02:.1f}x")
-                        st.write(f"• **Final Target: {final_target:.1f}%**")
-
-                    with col2:
-                        st.markdown("**⏰ Time vs Profit Expectations:**")
-
-                        timeframes = {
-                            "1-7 days": "3-6% (Quick trades)",
-                            "7-21 days": "5-10% (Short swing)",
-                            "21-60 days": "8-15% (Medium swing)",
-                            "60+ days": "12-25% (Long swing)"
-                        }
-
-                        for timeframe, profit_range in timeframes.items():
-                            if investment_days <= 7 and "1-7 days" in timeframe:
-                                st.write(f"🎯 **{timeframe}: {profit_range}**")
-                            elif 7 < investment_days <= 21 and "7-21 days" in timeframe:
-                                st.write(f"🎯 **{timeframe}: {profit_range}**")
-                            elif 21 < investment_days <= 60 and "21-60 days" in timeframe:
-                                st.write(f"🎯 **{timeframe}: {profit_range}**")
-                            elif investment_days > 60 and "60+ days" in timeframe:
-                                st.write(f"🎯 **{timeframe}: {profit_range}**")
-                            else:
-                                st.write(f"• {timeframe}: {profit_range}")
-
-            show_enhanced_profit_analysis(result, strategy_type, advisor.investment_days)
-
-            # Show signal strength breakdown
-            if confidence >= 85:
-                st.info("🎯 **HIGH CONFIDENCE SIGNAL** - Multiple indicators confirm this recommendation")
-                advisor.log("HIGH CONFIDENCE SIGNAL", "INFO")
-            elif confidence >= 70:
-                st.info("✅ **GOOD CONFIDENCE** - Most indicators support this recommendation")
-                advisor.log("GOOD CONFIDENCE", "INFO")
-            else:
-                st.warning("⚠️ **MODERATE CONFIDENCE** - Mixed signals detected")
-                advisor.log("MODERATE CONFIDENCE", "WARNING")
-
-            # ADD THIS NEW SECTION:
-            if result.get('enhancement_active', False):
-                st.info("🎯 **95% CONFIDENCE SYSTEM ACTIVE** - Enhanced analysis in use")
-
-                # Show confidence breakdown
-                if 'confidence_boost' in result and result['confidence_boost'] > 0:
-                    st.success(
-                        f"💪 Confidence Boosted: {result['original_confidence']:.1f}% → {result['confidence']:.1f}% (+{result['confidence_boost']:.1f}%)")
-
-                # Enhanced confidence indicators
-                if result['confidence'] >= 95:
-                    st.success("🏆 **ULTRA-HIGH CONFIDENCE** - Highest quality signal")
-                elif result['confidence'] >= 90:
-                    st.success("🌟 **VERY HIGH CONFIDENCE** - Excellent signal quality")
-                elif result['confidence'] >= 85:
-                    st.info("⭐ **HIGH CONFIDENCE** - Strong signal")
-
-                # Show enhancement details in expander
-                with st.expander("🔍 95% Confidence System Details"):
-                    col1, col2 = st.columns(2)
-
-                    with col1:
-                        st.markdown("**System Status:**")
-                        st.write("✅ Enhanced Signal Detection: Active")
-                        st.write("✅ Confidence Builder: Active")
-                        st.write("✅ Market Regime Detection: Active")
-
-                    with col2:
-                        st.markdown("**Confidence Breakdown:**")
-                        if 'signal_breakdown' in result:
-                            for signal_type, score in result['signal_breakdown'].items():
-                                st.write(f"• {signal_type.replace('_', ' ').title()}: {score:.2f}")
-            else:
-                st.warning("⚠️ Using original system - 95% confidence enhancements not active")
-
-            # Enhanced trading plan
-            st.subheader("📋 Your Enhanced Trading Plan")
-
-            col1, col2, col3 = st.columns(3)
-
-            if action == "BUY":
-                with col1:
-                    st.markdown(f"""
-                    ### 🟢 **BUY PLAN FOR {stock_symbol}**
-
-                    **What to do:**
-                    1. 💰 **Buy the stock at:** ${result['buy_price']:.2f}
-                    2. 🎯 **Sell it when it reaches:** ${result['sell_price']:.2f}
-                    3. 🛡️ **Stop loss if it drops to:** ${result['stop_loss']:.2f}
-                    4. ⏱️ **Max holding time:** {advisor.investment_days} days (can exit earlier at target)
-                    """)
-                    advisor.log(f"BUY plan for {stock_symbol}", "INFO")
-
-
-                with col2:
-                    st.markdown(f"""
-                    **Expected Outcome:**
-                    - 💵 **Profit per share:** ${(result['sell_price'] - result['buy_price']):.2f}
-                    - 📈 **Percentage gain:** {result['expected_profit_pct']:.1f}%
-                    - 🎲 **Success probability:** {confidence:.0f}%
-                    - 🛡️ **Max loss if stopped:** {((result['buy_price'] - result['stop_loss']) / result['buy_price'] * 100):.1f}%
-                    - ⏰ **Exit strategy:** Sell at target OR after {advisor.investment_days} days
-                    """)
-                    advisor.log(f"Expected outcome for {stock_symbol}", "INFO")
-
-            elif action == "SELL/AVOID":
-                with col1:
-                    st.markdown(f"""
-                    ### 🔴 **AVOID/SELL PLAN FOR {stock_symbol}**
-
-                    **What to do:**
-                    - 🚫 **Don't buy this stock right now**
-                    - 📉 **If you own it, sell at:** ${result['sell_price']:.2f}
-                    - ⏳ **Re-evaluate in:** {advisor.investment_days} days maximum
-                    """)
-                    advisor.log(f"SELL/AVOID plan for {stock_symbol}", "INFO")
-
-                with col2:
-                    st.markdown(f"""
-                    **Expected Outcome:**
-                    - 📉 **Potential loss avoided:** {result['expected_profit_pct']:.1f}%
-                    - 🎲 **Confidence in decline:** {confidence:.0f}%
-                    - 💡 **Better opportunities expected within {advisor.investment_days} days**
-                    """)
-                    advisor.log(f"Expected outcome for {stock_symbol}", "INFO")
-
-            else:
-                with col1:
-                    st.markdown(f"""
-                    ### 🟡 **WAIT PLAN FOR {stock_symbol}**
-
-                    **What to do:**
-                    - ⏳ **Wait for clearer signals**
-                    - 👀 **Monitor daily for up to {advisor.investment_days} days**
-                    - 🔄 **Re-analyze when signals strengthen**
-                    """)
-                    advisor.log(f"WAIT plan for {stock_symbol}", "INFO")
-
-                with col2:
-                    st.markdown(f"""
-                    **Why wait:**
-                    - 🤔 **Conflicting signals detected**
-                    - 📊 **Need stronger confirmation**
-                    - 🎯 **Better timing expected within {advisor.investment_days} days**
-                    """)
-                    advisor.log(f"Wait reason for {stock_symbol}", "INFO")
-
-            # Enhanced signal analysis
-            with col3:
-                st.subheader("🔬 Signal Analysis")
-
-                signal_breakdown = result.get('signal_breakdown', {})
-
-                # Show signal strength bars
-                if signal_breakdown:
-                    for signal_type, score in signal_breakdown.items():
-                        if signal_type == 'trend_score':
-                            emoji = "📈" if score > 0 else "📉" if score < 0 else "➡️"
-                            st.write(f"{emoji} **Trend:** {score:.1f}")
-                            advisor.log(f"Trend score for {stock_symbol}: {score:.1f}", "INFO")
-
-                        elif signal_type == 'momentum_score':
-                            emoji = "🚀" if score > 0 else "🔻" if score < 0 else "⚖️"
-                            st.write(f"{emoji} **Momentum:** {score:.1f}")
-                            advisor.log(f"Momentum score for {stock_symbol}: {score:.1f}", "INFO")
-
-                        elif signal_type == 'volume_score':
-                            emoji = "📢" if abs(score) > 1 else "📊"
-                            st.write(f"{emoji} **Volume:** {score:.1f}")
-                            advisor.log(f"Volume score for {stock_symbol}: {score:.1f}", "INFO")
-
-                        elif signal_type == 'sr_score':
-                            emoji = "🎯" if abs(score) > 1 else "📊"
-                            st.write(f"{emoji} **Support/Resistance:** {score:.1f}")
-                            advisor.log(f"Support/Resistance score for {stock_symbol}: {score:.1f}", "INFO")
-
-                        elif signal_type == 'model_score':
-                            emoji = "🤖" if abs(score) > 1 else "📊"
-                            st.write(f"{emoji} **AI Model:** {score:.1f}")
-                            advisor.log(f"AI Model score for {stock_symbol}: {score:.1f}", "INFO")
-
-            with st.expander("Recommendation"):
-                # Detailed reasoning
-                st.subheader("🤔 Why This Recommendation?")
-
-                reasons = result.get('reasons', [])
-                if reasons:
-                    advisor.log(f"Reasons for {stock_symbol}", "INFO")
-                    # Group reasons by category for better organization
-                    trend_reasons = [r for r in reasons if any(word in r.lower() for word in ['average', 'trend', 'ema', 'moving'])]
-                    advisor.log(f"Trend reasons: {trend_reasons}", "INFO")
-                    momentum_reasons = [r for r in reasons if any(word in r.lower() for word in ['rsi', 'macd', 'stochastic', 'momentum'])]
-                    advisor.log(f"Momentum reasons: {momentum_reasons}", "INFO")
-                    volume_reasons = [r for r in reasons if 'volume' in r.lower()]
-                    advisor.log(f"Volume reasons: {volume_reasons}", "INFO")
-                    level_reasons = [r for r in reasons if any(word in r.lower() for word in ['support', 'resistance', 'bollinger'])]
-                    advisor.log(f"Level reasons: {level_reasons}", "INFO")
-                    model_reasons = [r for r in reasons if 'model' in r.lower()]
-                    advisor.log(f"Model reasons: {model_reasons}", "INFO")
-                    other_reasons = [r for r in reasons if r not in trend_reasons + momentum_reasons + volume_reasons + level_reasons + model_reasons]
-                    advisor.log(f"Other reasons: {other_reasons}", "INFO")
-                    col1, col2 = st.columns(2)
-
-                    with col1:
-                        if trend_reasons:
-                            st.markdown("**📈 Trend Analysis:**")
-                            for reason in trend_reasons:
-                                st.write(f"• {reason}")
-                                advisor.log(f"Trend reason: {reason}", "INFO")
-
-                        if momentum_reasons:
-                            st.markdown("**🚀 Momentum Indicators:**")
-                            for reason in momentum_reasons:
-                                st.write(f"• {reason}")
-                                advisor.log(f"Momentum reason: {reason}", "INFO")
-
-                        if volume_reasons:
-                            st.markdown("**📊 Volume Analysis:**")
-                            for reason in volume_reasons:
-                                st.write(f"• {reason}")
-                                advisor.log(f"Volume reason: {reason}", "INFO")
-
-                    with col2:
-                        if level_reasons:
-                            st.markdown("**🎯 Key Levels:**")
-                            for reason in level_reasons:
-                                st.write(f"• {reason}")
-                                advisor.log(f"Level reason: {reason}", "INFO")
-
-                        if model_reasons:
-                            st.markdown("**🤖 AI Analysis:**")
-                            for reason in model_reasons:
-                                st.write(f"• {reason}")
-                                advisor.log(f"Model reason: {reason}", "INFO")
-
-                        if other_reasons:
-                            st.markdown("**📋 Additional Factors:**")
-                            for reason in other_reasons:
-                                st.write(f"• {reason}")
-                                advisor.log(f"Other reason: {reason}", "INFO")
-
-            # Enhanced chart
-            chart = advisor.create_enhanced_chart(stock_symbol, result)
-            if chart:
-                st.subheader("📊 Enhanced Technical Chart")
-                st.plotly_chart(chart, use_container_width=True)
-                advisor.log(f"Enhanced chart for {stock_symbol} created", "INFO")
-
-            with st.expander("Risk Assessment"):
-                # Enhanced risk information
-                st.subheader("⚠️ Risk Assessment")
-
-                risk_level = result.get('risk_level', 'Medium-term')
-                final_score = result.get('final_score', 0)
-                advisor.log(f"Risk level for {stock_symbol}: {risk_level}", "INFO")
-
-                col1, col2, col3 = st.columns(3)
-
-                with col1:
-                    st.markdown("**📊 Risk Level**")
-                    if risk_level == "Short-term":
-                        st.warning("""
-                        **🏃‍♂️ Short-term (1-7 days):**
-                        - ⚡ Higher volatility
-                        - 👀 Monitor closely
-                        - 🎯 Quick decisions needed
-                        """)
-                        advisor.log(f"Risk level for {stock_symbol}: Short-term", "INFO")
-
-                    elif risk_level == "Medium-term":
-                        st.info("""
-                        **🚶‍♂️ Medium-term (1-3 weeks):**
-                        - ⚖️ Balanced approach
-                        - 📅 Weekly monitoring
-                        - 📈 Trend development time
-                        """)
-                        advisor.log(f"Risk level for {stock_symbol}: Medium-term", "INFO")
-
-                    else:
-                        st.success("""
-                        **🐌 Long-term (3-4 weeks+):**
-                        - 📉 Lower daily volatility
-                        - 🔄 Less frequent monitoring
-                        - 🎯 Fundamental changes
-                        """)
-                        advisor.log(f"Risk level for {stock_symbol}: Long-term", "INFO")
-
-                with col2:
-                    st.markdown("**🎯 Signal Strength**")
-                    if abs(final_score) >= 2.5:
-                        st.success("🔥 **VERY STRONG** signal")
-                        advisor.log(f"Signal strength for {stock_symbol}: Very Strong", "INFO")
-
-                    elif abs(final_score) >= 1.5:
-                        st.info("💪 **STRONG** signal")
-                        advisor.log(f"Signal strength for {stock_symbol}: Strong", "INFO")
-
-                    elif abs(final_score) >= 1.0:
-                        st.warning("📊 **MODERATE** signal")
-                        advisor.log(f"Signal strength for {stock_symbol}: Moderate", "INFO")
-
-                    else:
-                        st.error("🤔 **WEAK** signal")
-                        advisor.log(f"Signal strength for {stock_symbol}: Weak", "INFO")
-
-                    st.write(f"Signal Score: {final_score:.2f}")
-                    advisor.log(f"Signal score for {stock_symbol}: {final_score:.2f}", "INFO")
-
-                with col3:
-                    st.markdown("**💡 Recommendation Quality**")
-                    if confidence >= 90:
-                        st.success("🏆 **EXCELLENT** - Act with confidence")
-                        advisor.log(f"Recommendation quality for {stock_symbol}: Excellent", "INFO")
-
-                    elif confidence >= 80:
-                        st.success("✅ **VERY GOOD** - Strong recommendation")
-                        advisor.log(f"Recommendation quality for {stock_symbol}: Very Good", "INFO")
-
-                    elif confidence >= 70:
-                        st.info("👍 **GOOD** - Solid analysis")
-                        advisor.log(f"Recommendation quality for {stock_symbol}: Good", "INFO")
-
-                    elif confidence >= 60:
-                        st.warning("⚖️ **FAIR** - Consider carefully")
-                        advisor.log(f"Recommendation quality for {stock_symbol}: Fair", "INFO")
-
-                    else:
-                        st.error("🤔 **POOR** - Wait for better signals")
-                        advisor.log(f"Recommendation quality for {stock_symbol}: Poor", "ERROR")
-
-            # Enhanced disclaimer
-            st.subheader("📋 Important Trading Guidelines")
-
-            # if show_debug:
-            #     st.markdown("---")
-            #     st.subheader("🐛 Debug Logs")
-            #
-            #     with st.expander("🔍 Full Debug Output", expanded=False):
-            #         st.code("\n".join(result["debug_log"]), language="text")
-            #
-            #     success_lines = [l for l in result['debug_log'] if l.startswith('✅')]
-            #     error_lines = [l for l in result['debug_log'] if l.startswith('❌')]
-            #     neutral_lines = [l for l in result['debug_log'] if l.startswith('⚖️')]
-            #
-            #     st.markdown("### ✅ Successful Checks")
-            #     st.code("\n".join(success_lines))
-            #
-            #     st.markdown("### ❌ Warnings & Issues")
-            #     st.code("\n".join(error_lines))
-            #
-            #     st.markdown("### ⚖️ Neutral Observations")
-            #     st.code("\n".join(neutral_lines))
-
-            show_debug_logs_safely(result,show_debug)
-            col1, col2 = st.columns(2)
-
-            with col1:
-                st.info("""
-                **✅ Before You Trade:**
-                - 📊 Double-check current market conditions
-                - 💰 Only invest what you can afford to lose
-                - 🎯 Set stop-losses as recommended
-                - 📈 Monitor your positions regularly
-                - 📚 Keep learning about the market
-                """)
-
-            with col2:
-                st.warning("""
-                **⚠️ Risk Reminders:**
-                - 📉 Past performance ≠ future results
-                - 🌪️ Markets can be unpredictable
-                - 📰 News can change everything quickly
-                - 💡 This is educational, not financial advice
-                - 👨‍💼 Consult professionals for large investments
-                """)
-
-    else:
-        # Enhanced welcome message
-        st.info("👆 Enter a stock symbol and date to get your enhanced trading advice!")
-
-        # Enhanced examples
-        st.subheader("🚀 Enhanced Features")
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.markdown("""
-            **🎯 What Makes This Enhanced:**
-            - **🤖 AI + Technical Analysis** - Dual-powered recommendations
-            - **📊 Multi-timeframe Analysis** - 5 different signal types
-            - **🔍 95% Confidence Targeting** - Higher accuracy goals
-            - **📈 Advanced Indicators** - RSI, MACD, Bollinger Bands, Stochastic
-            - **🎪 Signal Confirmation** - Multiple indicators must agree
-            """)
-
-        with col2:
-            st.markdown("""
-            **✅ You Get:**
-            - **🎯 High-confidence recommendations** (target: 85-95%)
-            - **💰 Precise buy/sell prices** with stop-losses
-            - **📊 Detailed signal breakdown** by category
-            - **🔬 Multi-factor analysis** explanation
-            - **📈 Enhanced technical charts** with all indicators
-            """)
-
-        # Example recommendation display
-        st.subheader("📋 Example Enhanced Recommendation")
-
-        st.code("""
-            🟢 RECOMMENDATION: BUY
-            Confidence Level: 87%
-
-            💰 Price Information:
-            Current Price: $153.30
-            🟢 BUY at: $153.30
-            🔴 SELL at: $158.45
-            💰 Expected Profit: 3.4%
-
-            🔬 Signal Analysis:
-            📈 Trend: +2.1 (Strong upward)
-            🚀 Momentum: +1.8 (Bullish RSI & MACD)
-            📢 Volume: +1.2 (Above average confirmation)
-            🎯 Support/Resistance: +0.9 (Near support)
-            🤖 AI Model: +2.3 (85% buy confidence)
-
-            Final Signal Score: +8.3 (Very Strong)
-        """)
+                    print(f"     - {key}: {value}")
+
+            print("\n   --- Detailed Breakdown ---")
+            print(f"   Final Score: {recommendation['final_score']:.2f}")
+            print("   Signal Breakdown:")
+            for signal, score in recommendation['signal_breakdown'].items():
+                print(f"     - {signal}: {score:.2f}")
+            print("   ML Prediction Details:")
+            print(f"     - Prediction: {recommendation['ml_prediction_details']['prediction']}")
+            print(
+                f"     - Probability: {recommendation['ml_prediction_details']['probability'][1]:.4f} (Buy), {recommendation['ml_prediction_details']['probability'][0]:.4f} (Sell/Avoid)")
+            print(f"     - Features: {recommendation['ml_prediction_details']['features']}")
+            print("   Confidence Breakdown:")
+            print(f"     - Final Confidence: {recommendation['confidence_breakdown']['final_confidence']:.1f}%")
+            print(f"     - Confidence Action: {recommendation['confidence_breakdown']['confidence_action']}")
+            print(
+                f"     - Confluence Reasons: {', '.join(recommendation['confidence_breakdown']['confluence_reasons'])}")
+
+
+        except Exception as e:
+            print(f"   ❌ An error occurred during analysis for {symbol}: {e}")
+            print(f"   {traceback.format_exc()}")
+        print("\n" + "─" * 60)
 
 
 def test_strategy_differences(self):
@@ -5623,16 +6192,16 @@ def test_strategy_differences(self):
         'volatility': 2.5
     }
 
-    strategies = ["Conservative", "Balanced", "Aggressive", "Swing Trading"]
+    strategies = ["conservative", "balanced", "aggressive", "swing trading"]
     final_score = 1.5  # Moderate signal strength
 
     for strategy in strategies:
         self.current_strategy = strategy
         self.strategy_settings = {
-            "Conservative": {"profit": 0.8, "risk": 0.8, "confidence_req": 85},
-            "Balanced": {"profit": 1.0, "risk": 1.0, "confidence_req": 75},
-            "Aggressive": {"profit": 1.4, "risk": 1.3, "confidence_req": 60},
-            "Swing Trading": {"profit": 1.8, "risk": 1.5, "confidence_req": 70}
+            "conservative": {"profit": 0.8, "risk": 0.8, "confidence_req": 85},
+            "balanced": {"profit": 1.0, "risk": 1.0, "confidence_req": 75},
+            "aggressive": {"profit": 1.4, "risk": 1.3, "confidence_req": 60},
+            "swing trading": {"profit": 1.8, "risk": 1.5, "confidence_req": 70}
         }[strategy]
 
         confidence = self.calculate_enhanced_confidence_v2(
@@ -5767,17 +6336,17 @@ def create_professional_interface():
     # Strategy selection
     strategy_type = st.sidebar.radio(
         "📈 Professional Strategy:",
-        options=["Conservative", "Balanced", "Aggressive", "Swing Trading"],
+        options=["conservative", "balanced", "aggressive", "swing trading"],
         index=1,
         help="Professional strategies optimized for IBKR data quality"
     )
 
     # Update advisor strategy
     strategy_multipliers = {
-        "Conservative": {"profit": 0.8, "risk": 0.8, "confidence_req": 85},
-        "Balanced": {"profit": 1.0, "risk": 1.0, "confidence_req": 75},
-        "Aggressive": {"profit": 1.4, "risk": 1.3, "confidence_req": 65},
-        "Swing Trading": {"profit": 1.8, "risk": 1.5, "confidence_req": 70}
+        "conservative": {"profit": 0.8, "risk": 0.8, "confidence_req": 85},
+        "balanced": {"profit": 1.0, "risk": 1.0, "confidence_req": 75},
+        "aggressive": {"profit": 1.4, "risk": 1.3, "confidence_req": 65},
+        "swing trading": {"profit": 1.8, "risk": 1.5, "confidence_req": 70}
     }
     advisor.strategy_settings = strategy_multipliers[strategy_type]
     advisor.current_strategy = strategy_type
