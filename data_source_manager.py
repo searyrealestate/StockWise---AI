@@ -19,6 +19,7 @@ from ibapi.client import EClient
 from ibapi.wrapper import EWrapper
 from ibapi.contract import Contract
 import yfinance as yf # Import yfinance for fallback
+import json
 
 # Setup logging for this specific module
 logging.basicConfig(
@@ -44,6 +45,18 @@ class DataSourceManager(EWrapper, EClient):
 
     def __init__(self, use_ibkr=True, ibkr_host="127.0.0.1", ibkr_port=7497, debug=False,
                  yfinance_max_retries=10, yfinance_retry_delay=1):
+        """
+                Initializes the DataSourceManager.
+
+                Args:
+                    use_ibkr (bool): If True, attempts to use IBKR as the primary data source.
+                    ibkr_host (str): The host IP address for the IBKR TWS or Gateway.
+                    ibkr_port (int): The port number for the IBKR TWS or Gateway.
+                    debug (bool): If True, enables more verbose logging.
+                    yfinance_max_retries (int): The number of times to retry fetching data from yfinance upon failure.
+                    yfinance_retry_delay (int): The delay in seconds between yfinance retry attempts.
+                """
+
         EClient.__init__(self, self)
         self.use_ibkr = use_ibkr
         self.ibkr_host = ibkr_host
@@ -84,7 +97,13 @@ class DataSourceManager(EWrapper, EClient):
             self.connect_to_ibkr()
 
     def log(self, message, level="INFO"):
-        """Enhanced logging with file output, using Python's logging module."""
+        """
+        Logs a message to the console and a file using Python's standard logging module.
+
+        Args:
+            message (str): The message to be logged.
+            level (str): The logging level (e.g., "INFO", "SUCCESS", "ERROR", "WARNING").
+        """
         # Print to console using the logger (which also handles stream output)
         if level == "INFO":
             logger.info(message)
@@ -98,7 +117,15 @@ class DataSourceManager(EWrapper, EClient):
             logger.debug(message) # Default to debug for other levels
 
     def get_all_nasdaq_symbols(self):
-        """Get comprehensive list of NASDAQ symbols (curated for this example)"""
+        """
+        Provides a curated list of high-quality NASDAQ symbols for data processing.
+
+        In a production environment, this function would be replaced with a dynamic method
+        of fetching symbols, such as from an API, a database, or a regularly updated file.
+
+        Returns:
+            list[str]: A list of NASDAQ stock ticker symbols.
+        """
         # In a real-world scenario, this would likely involve an API call
         # to NASDAQ or a regularly updated database.
         return [
@@ -153,7 +180,15 @@ class DataSourceManager(EWrapper, EClient):
         ]
 
     def connect_to_ibkr(self):
-        """Connect using your working configuration for IBKR."""
+        """
+        Establishes a connection to the Interactive Brokers TWS or Gateway.
+
+        It starts a background thread to handle communication with the IBKR API
+        and waits for a successful connection confirmation.
+
+        Returns:
+            bool: True if the connection is successful, False otherwise.
+        """
         if not self.use_ibkr:
             self.log("IBKR connection skipped as use_ibkr is False.", "INFO")
             return False
@@ -180,18 +215,36 @@ class DataSourceManager(EWrapper, EClient):
             return False
 
     def disconnect(self):
-        """Disconnects from IBKR."""
+        """
+        Cleanly disconnects from the Interactive Brokers TWS or Gateway.
+
+        This method should be called at the end of the script to ensure the
+        background communication thread is properly terminated.
+        """
         if self.ibkr_connected:
             self.log("Disconnecting from IBKR...", "INFO")
             super().disconnect()
             self.ibkr_connected = False
             self.log("Disconnected from IBKR.", "INFO")
 
-
     def get_stock_data(self, symbol: str, days_back: int = 730) -> pd.DataFrame:
         """
-        Fetches historical stock data, preferring IBKR and falling back to yfinance.
-        Returns a DataFrame with OHLCV and basic indicators.
+        Fetches historical stock data for a given symbol.
+
+        This is the main data retrieval method. It prioritizes fetching data from
+        Interactive Brokers if enabled and connected. If IBKR fails or is disabled,
+        it automatically falls back to using the yfinance library.
+
+        Args:
+            symbol (str): The stock ticker symbol to fetch (e.g., "AAPL").
+            days_back (int): The number of past days of data to request, primarily
+                             used by the yfinance fallback.
+
+        Returns:
+            tuple[pd.DataFrame, str]: A tuple containing:
+                - A pandas DataFrame with OHLCV data and basic indicators.
+                  The DataFrame will be empty if data cannot be retrieved from any source.
+                - A string indicating the source of the data ("IBKR", "yfinance", or "N/A").
         """
         df = pd.DataFrame()
         source = "N/A"
@@ -206,17 +259,17 @@ class DataSourceManager(EWrapper, EClient):
             else:
                 self.log(f"Failed to get data for {symbol} from IBKR after retries. Trying yfinance...", "WARNING")
 
-        if df.empty:
-            self.log(f"Fetching {symbol} data from yfinance (fallback).", "INFO")
-            df_yf = self._download_from_yfinance(symbol, days_back=days_back)
-            if not df_yf.empty:
-                df = df_yf
-                source = "yfinance"
-                self.log(f"Successfully retrieved {len(df)} bars for {symbol} from yfinance.", "SUCCESS")
-            else:
-                self.log(f"Failed to get data for {symbol} from yfinance.", "ERROR")
-                logger.critical(f"❌ CRITICAL ERROR: Could not retrieve data for {symbol} from any source after all retries. Stopping script.")
-                sys.exit(1)
+            if df.empty:
+                self.log(f"Fetching {symbol} data from yfinance (fallback).", "INFO")
+                df_yf = self._download_from_yfinance(symbol, days_back=days_back)
+                if not df_yf.empty:
+                    df = df_yf
+                    source = "yfinance"
+                    self.log(f"✅ Successfully retrieved {len(df)} bars for {symbol} from yfinance.", "SUCCESS")
+                else:
+                    # Just log the final failure; do not exit the script.
+                    self.log(f"❌ Failed to get data for {symbol} from yfinance after all retries.", "ERROR")
+                    # The function will implicitly return an empty DataFrame and the N/A source
 
 
         if not df.empty:
@@ -227,7 +280,20 @@ class DataSourceManager(EWrapper, EClient):
         return df, source
 
     def _download_from_ibkr(self, symbol, retries=3):
-        """Internal method to download historical data for a single symbol from IBKR with retries."""
+        """
+        Internal method to download data from IBKR with a defensive retry mechanism.
+
+        This function handles the specifics of requesting historical data from the IBKR API.
+        If a request times out, it assumes the connection is stalled, disconnects,
+        reconnects, and then retries the download.
+
+        Args:
+            symbol (str): The stock ticker to download.
+            retries (int): The number of attempts to make before giving up.
+
+        Returns:
+            pd.DataFrame: A DataFrame with the stock's data, or an empty DataFrame on failure.
+        """
         for attempt in range(retries):
             try:
                 self.log(f"📊 Downloading {symbol} from IBKR (attempt {attempt + 1}/{retries})", "INFO")
@@ -278,6 +344,13 @@ class DataSourceManager(EWrapper, EClient):
                         self.log(f"IBKR: Insufficient data for {symbol} ({len(data)} bars).", "WARNING")
                 else:
                     self.log(f"IBKR: Timeout for {symbol} on attempt {attempt + 1}.", "WARNING")
+                    self.log("Attempting to reset the connection...", "INFO")
+                    self.disconnect()
+                    time.sleep(3)  # Give sockets a moment to close before reconnecting
+
+                    if not self.connect_to_ibkr():
+                        self.log("Failed to re-establish IBKR connection. Aborting IBKR for this stock.", "ERROR")
+                        return pd.DataFrame()  # Give up on IBKR for this specific stock
 
             except Exception as e:
                 self.log(f"IBKR: Exception for {symbol} on attempt {attempt + 1}: {e}", "ERROR")
@@ -285,7 +358,17 @@ class DataSourceManager(EWrapper, EClient):
 
     def _download_from_yfinance(self, symbol, days_back=730):
         """
-        Internal method to download historical data for a single symbol from yfinance with retries.
+        Internal method to download data from yfinance with a robust retry mechanism.
+
+        It attempts to download data multiple times with a delay between attempts.
+        It also handles the common issue of yfinance returning multi-level column headers.
+
+        Args:
+            symbol (str): The stock ticker to download.
+            days_back (int): The number of past days of data to request.
+
+        Returns:
+            pd.DataFrame: A DataFrame with the stock's data, or an empty DataFrame on failure.
         """
         for attempt in range(self.yfinance_max_retries):
             try:
@@ -323,9 +406,15 @@ class DataSourceManager(EWrapper, EClient):
         self.log(f"yfinance: Failed to download {symbol} after {self.yfinance_max_retries} attempts.", "ERROR")
         return pd.DataFrame()
 
-
     def save_symbol_data(self, symbol, df, source):
-        """Save symbol data to CSV with metadata"""
+        """
+        Saves the downloaded stock data to a CSV file and creates a corresponding JSON metadata file.
+
+        Args:
+            symbol (str): The stock ticker symbol.
+            df (pd.DataFrame): The DataFrame containing the stock's OHLCV data.
+            source (str): The source from which the data was retrieved (e.g., "IBKR").
+        """
         try:
             if df.empty:
                 self.log(f"Cannot save empty DataFrame for {symbol}.", "WARNING")
@@ -367,9 +456,17 @@ class DataSourceManager(EWrapper, EClient):
             self.log(f"❌ Error saving {symbol}: {e}", "ERROR")
             self.download_progress['failed'].append((symbol, f"Save Error: {e}"))
 
-
     def download_all_nasdaq(self, limit=None, start_from=0):
-        """Download all NASDAQ symbols"""
+        """
+        Orchestrates the download process for a list of NASDAQ symbols.
+
+        It iterates through the provided symbol list, fetches data for each one
+        using the main get_stock_data method, saves the results, and tracks progress.
+
+        Args:
+            limit (int, optional): The maximum number of symbols to download. Defaults to None (all).
+            start_from (int, optional): The index in the symbol list from which to start. Defaults to 0.
+        """
 
         symbols = self.get_all_nasdaq_symbols()
 
@@ -416,7 +513,14 @@ class DataSourceManager(EWrapper, EClient):
         self.generate_final_report()
 
     def save_progress_report(self, report_path='nasdaq_data/progress_report.json'):
-        """Save intermediate progress report"""
+        """
+        Saves a JSON file with the current state of the download process.
+
+        This is useful for monitoring long-running batch jobs.
+
+        Args:
+            report_path (str): The file path where the report should be saved.
+        """
         report = {
             'timestamp': datetime.now().isoformat(),
             'progress': self.download_progress.copy(),
@@ -429,7 +533,12 @@ class DataSourceManager(EWrapper, EClient):
             json.dump(report, f, indent=2)
 
     def generate_final_report(self):
-        """Generate comprehensive final report"""
+        """
+        Generates and saves a final JSON report summarizing the entire download session.
+
+        The report includes statistics like success rate, total time, download speed,
+        and lists of successful and failed symbols.
+        """
         total_time = time.time() - self.start_time
         successful = len(self.download_progress['successful'])
         failed = len(self.download_progress['failed'])
@@ -480,16 +589,28 @@ class DataSourceManager(EWrapper, EClient):
 
     # IBKR Callback Methods
     def nextValidId(self, orderId):
+        """
+        IBKR callback that confirms a successful connection.
+        """
         self.connection_ready.set()
 
     def historicalData(self, reqId, bar):
+        """
+        IBKR callback that receives one bar of historical data at a time.
+        """
         if reqId in self.historical_data:
             self.historical_data[reqId].append(bar)
 
     def historicalDataEnd(self, reqId, start, end):
+        """
+        IBKR callback that signals the end of a historical data request.
+        """
         self.data_ready.set()
 
     def error(self, reqId, errorCode, errorString, advancedOrderRejectJson=""):
+        """
+        IBKR callback that handles errors and informational messages.
+        """
         # Ignore common IBKR informational messages and non-critical warnings
         if errorCode in [2104, 2106, 2158, 2174]:
             self.log(f"IBKR Info/Warning (ReqId: {reqId if reqId != -1 else 'N/A'}): {errorCode} - {errorString}", "INFO")
@@ -505,7 +626,10 @@ class DataSourceManager(EWrapper, EClient):
 
 
 def main():
-    """Main execution"""
+    """
+    Main execution function to run the NASDAQ downloader as a standalone script.
+    Provides a command-line interface for the user to select a download option.
+    """
     logger.info("🏢 Complete NASDAQ Historical Data Downloader")
     logger.info("=" * 50)
     logger.info("Now with yfinance fallback for enhanced reliability!")
