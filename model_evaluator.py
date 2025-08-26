@@ -5,6 +5,7 @@ import pandas as pd
 from tqdm import tqdm
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from data_manager import DataManager
+import glob
 
 
 class ModelEvaluator:
@@ -23,8 +24,7 @@ class ModelEvaluator:
     def _load_feature_columns(self):
         # Construct the path to the feature columns JSON file
         # This assumes the JSON is saved next to the model PKL with a consistent naming convention
-        json_path = self.model_path.replace(".pkl", ".json").replace("nasdaq_general_model",
-                                                                     "feature_cols_nasdaq_general_model")
+        json_path = self.model_path.replace(".pkl", "_features.json")
 
         if not os.path.exists(json_path):
             raise FileNotFoundError(f"Feature column file not found: {json_path}. "
@@ -110,11 +110,20 @@ class ModelEvaluator:
 
 
 if __name__ == "__main__":
-    # This should point to the 'features' sub-directory of the testing set
+    # Define the directories
     TEST_FEATURE_DIR = "models/NASDAQ-testing set/features"
+    MODEL_DIR = "models/NASDAQ-training set/features"  # The directory where the trainer saves the model
 
-    # This should point to the exact model file you just created
-    MODEL_PATH = "models/NASDAQ-training set/features/nasdaq_general_model_lgbm_tech-400stocks.pkl"
+    # --- NEW: Automatically find the latest model file ---
+    # Search for all files matching the "Gen 2" model name pattern
+    model_files = glob.glob(os.path.join(MODEL_DIR, "nasdaq_gen2_optimized_model_*.pkl"))
+    if not model_files:
+        raise FileNotFoundError(f"FATAL: No 'Gen 2' model files found in '{MODEL_DIR}'. Please run the trainer first.")
+
+    # Find the most recently created file
+    MODEL_PATH = max(model_files, key=os.path.getctime)
+    print(f"[Evaluator] Found and using latest model: {os.path.basename(MODEL_PATH)}")
+    # --- End of new code ---
 
     test_data_manager = DataManager(TEST_FEATURE_DIR, label="Test")
     evaluator = ModelEvaluator(MODEL_PATH, test_data_manager)
