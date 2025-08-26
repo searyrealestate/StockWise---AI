@@ -36,6 +36,8 @@ import logging
 import sys
 import traceback
 from tqdm import tqdm
+import random
+
 
 # --- Logging Setup ---
 try:
@@ -70,32 +72,9 @@ logging.getLogger('requests').setLevel(logging.WARNING)
 # --- End Logging Setup ---
 
 
-# Parse command line arguments
-parser = argparse.ArgumentParser(description='StockWise NASDAQ Data Processor - Comprehensive')
-parser.add_argument('--debug', action='store_true', help='Enable debug mode with detailed output')
-parser.add_argument('--stock', type=str, help='Process only specific stock (for debugging)')
-parser.add_argument('--max-stocks', type=int, default=1000, help='Maximum number of stocks to process') # Default set to 1000
-parser.add_argument('--quick', action='store_true', help='Enable quick mode, using a predefined small list of quality stocks')
-parser.add_argument('--use-ibkr', action='store_true', default=True, help='Attempt to use IBKR for data retrieval (requires TWS/Gateway)')
-parser.add_argument('--ibkr-host', type=str, default="127.0.0.1", help='IBKR TWS/Gateway host')
-parser.add_argument('--ibkr-port', type=int, default=7497, help='IBKR TWS/Gateway port')
-parser.add_argument('--yfinance-retries', type=int, default=10, help='Number of retries for yfinance data fetching')
-parser.add_argument('--yfinance-retry-delay', type=int, default=1, help='Delay in seconds between yfinance retries')
 
-args = parser.parse_args()
 
-debug = args.debug
-debug_stock = args.stock
-max_stocks = args.max_stocks
-quick_mode = args.quick
-use_ibkr = args.use_ibkr
-ibkr_host = args.ibkr_host
-ibkr_port = args.ibkr_port
-yfinance_max_retries = args.yfinance_retries
-yfinance_retry_delay = args.yfinance_retry_delay
 
-if debug:
-    logger.setLevel(logging.DEBUG)
 
 
 # Define directories
@@ -219,7 +198,7 @@ def get_yfinance_nasdaq_symbols_fallback(min_market_cap=150_000_000, max_stocks_
 
 
         valid_symbols = []
-        import random
+
         random.shuffle(common_nasdaq_symbols)
 
         for i, symbol in enumerate(common_nasdaq_symbols):
@@ -301,15 +280,49 @@ def generate_comprehensive_nasdaq_ticker_lists(train_file, test_file):
     return train_tickers, test_tickers
 
 
+def get_dominant_cycle(data: pd.Series, min_period=3, max_period=100) -> float:
+    """
+    Uses FFT to find the dominant cycle period in a time series on a rolling window.
+    """
+    if data.isnull().all() or len(data) < min_period:
+        return 0.0
+
+    # Detrend the data to focus on cycles rather than the overall trend
+    detrended = data - np.poly1d(np.polyfit(np.arange(len(data)), data, 1))(np.arange(len(data)))
+
+    # Apply the Fast Fourier Transform
+    fft_result = np.fft.fft(detrended.values)
+    frequencies = np.fft.fftfreq(len(detrended))
+
+    # Find the power (magnitude squared) of each frequency
+    power = np.abs(fft_result) ** 2
+
+    # Focus only on positive frequencies (the second half is a mirror image)
+    positive_freq_mask = frequencies > 0
+    periods = 1 / frequencies[positive_freq_mask]
+
+    # Filter for periods within a reasonable range for trading (e.g., 3 to 100 days)
+    period_mask = (periods >= min_period) & (periods <= max_period)
+
+    if not np.any(period_mask):
+        return 0.0  # No cycles found in the desired range
+
+    # Find the period with the highest power
+    dominant_idx = power[positive_freq_mask][period_mask].argmax()
+    dominant_period = periods[period_mask][dominant_idx]
+
+    return dominant_period
+
+
+# Replace your existing function with this upgraded version
 def add_technical_indicators_and_features(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Adds a comprehensive set of technical indicators and engineered features to the DataFrame.
-    This function explicitly defines the 12 features required by the ML model.
+    Adds a comprehensive and expanded set of technical indicators and features.
     """
     df = df.copy()
 
-    if df.empty:
-        logger.warning("Input DataFrame is empty, cannot add technical indicators.")
+    if df.empty or len(df) < 50:  # Increased minimum length for new indicators
+        logger.warning("Input DataFrame is empty or too short (< 50 rows), cannot add all indicators.")
         return pd.DataFrame()
 
     for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
@@ -320,10 +333,7 @@ def add_technical_indicators_and_features(df: pd.DataFrame) -> pd.DataFrame:
 
     df.dropna(subset=['Close', 'Volume'], inplace=True)
 
-    if df.empty:
-        logger.warning("DataFrame became empty after dropping NaNs for essential columns. Cannot add indicators.")
-        return df
-
+    # --- Standard Features ---
     df['Volume_MA_20'] = ta.trend.sma_indicator(df['Volume'], window=20)
     df['RSI_14'] = ta.momentum.rsi(df['Close'], window=14)
     df['Momentum_5'] = df['Close'].diff(5)
@@ -331,21 +341,36 @@ def add_technical_indicators_and_features(df: pd.DataFrame) -> pd.DataFrame:
     df['MACD'] = macd.macd()
     df['MACD_Signal'] = macd.macd_signal()
     df['MACD_Histogram'] = macd.macd_diff()
-
     bb = ta.volatility.BollingerBands(close=df["Close"], window=20, window_dev=2)
     df['BB_Upper'] = bb.bollinger_hband()
     df['BB_Lower'] = bb.bollinger_lband()
     df['BB_Middle'] = bb.bollinger_mavg()
-    bb_range = df['BB_Upper'] - df['BB_Lower']
-    df['BB_Position'] = (df['Close'] - df['BB_Lower']) / (bb_range + 1e-9)
-    df['BB_Position'] = df['BB_Position'].replace([np.inf, -np.inf], np.nan).fillna(0.5)
-
-    df['BB_Width'] = (df['BB_Upper'] - df['BB_Lower']) / (df['BB_Middle'] + 1e-9)
-    df['BB_Width'] = df['BB_Width'].replace([np.inf, -np.inf], np.nan).fillna(0)
-
+    df['BB_Position'] = bb.bollinger_pband()  # This calculates %B
     df['Daily_Return'] = df['Close'].pct_change()
-    df['Volatility_20D'] = df['Daily_Return'].rolling(window=20).std() * np.sqrt(252)
+    df['Volatility_20D'] = df['Daily_Return'].rolling(window=20).std()
 
+    # --- NEW Advanced Features ---
+    # Volatility Indicator
+    df['ATR_14'] = ta.volatility.AverageTrueRange(high=df['High'], low=df['Low'], close=df['Close'],
+                                                  window=14).average_true_range()
+
+    # Trend Strength Indicator
+    adx_indicator = ta.trend.ADXIndicator(high=df['High'], low=df['Low'], close=df['Close'], window=14)
+    df['ADX'] = adx_indicator.adx()
+    df['ADX_pos'] = adx_indicator.adx_pos()
+    df['ADX_neg'] = adx_indicator.adx_neg()
+
+    # Volume-Based Indicator
+    df['OBV'] = ta.volume.OnBalanceVolumeIndicator(close=df['Close'], volume=df['Volume']).on_balance_volume()
+
+    # Multiple Time Windows
+    df['RSI_28'] = ta.momentum.rsi(df['Close'], window=28)  # Longer-term RSI
+
+    # --- NEW FFT Feature ---
+    # Calculate dominant cycle on a rolling 126-day window (approx 6 months)
+    df['Dominant_Cycle_126D'] = df['Close'].rolling(window=126, min_periods=50).apply(get_dominant_cycle, raw=False)
+
+    # --- Target Definition ---
     future_window = 5
     gain_threshold = 0.01
     df['Future_Close'] = df['Close'].shift(-future_window)
@@ -354,26 +379,26 @@ def add_technical_indicators_and_features(df: pd.DataFrame) -> pd.DataFrame:
     initial_rows = len(df)
     df.dropna(inplace=True)
     final_rows = len(df)
-    dropped_rows = initial_rows - final_rows
-    if dropped_rows > 0:
-        logger.debug(f"Dropped {dropped_rows} rows due to NaN values after indicator calculation for features and target.")
+    logger.debug(f"Dropped {initial_rows - final_rows} rows due to NaN values after indicator calculation.")
 
+    # --- IMPORTANT: Update the final list of columns ---
     expected_features_for_model = [
         'Volume_MA_20', 'RSI_14', 'Momentum_5', 'MACD', 'MACD_Signal',
         'MACD_Histogram', 'BB_Upper', 'BB_Lower', 'BB_Middle',
-        'BB_Position', 'Daily_Return', 'Volatility_20D'
+        'BB_Position', 'Daily_Return', 'Volatility_20D',
+        # Add the new features to the list
+        'ATR_14', 'ADX', 'ADX_pos', 'ADX_neg', 'OBV', 'RSI_28', 'Dominant_Cycle_126D'
     ]
 
     missing_features = [f for f in expected_features_for_model if f not in df.columns]
     if missing_features:
-        logger.error(f"❌ After indicator calculation, missing expected features for model: {missing_features}")
+        logger.error(f"❌ After indicator calculation, missing expected features: {missing_features}")
         return pd.DataFrame()
 
     final_cols = expected_features_for_model + ['Target', 'Datetime', 'Open', 'High', 'Low', 'Close', 'Volume']
-    final_cols = [col for col in final_cols if col in df.columns]
     df = df[final_cols]
 
-    logger.debug(f"DataFrame after feature engineering. Shape: {df.shape}, Columns: {df.columns.tolist()}")
+    logger.debug(f"DataFrame after feature engineering. Shape: {df.shape}")
     return df
 
 
@@ -428,7 +453,8 @@ def train_model(df, symbol, model_output_dir):
         return None, None
 
 
-def process_ticker_list(tickers, output_base_dir, train=True, data_source_manager_instance=None):
+def process_ticker_list(tickers, output_base_dir, train=True, data_source_manager_instance=None, debug_stock=None):
+    # ...:
     """Processes a list of tickers to download data, add features, and save."""
     processed_count = 0
     skipped_tickers_log = []
@@ -461,7 +487,7 @@ def process_ticker_list(tickers, output_base_dir, train=True, data_source_manage
             try:
                 logger.debug(f"Downloading data for {symbol} using DataSourceManager...")
 
-                df, source_used = data_source_manager_instance.get_stock_data(symbol, days_back=5 * 365)
+                df = data_source_manager_instance.get_stock_data(symbol)
 
                 if df is None or df.empty or 'Close' not in df.columns:
                     error_msg = f"❌ Critical: Failed to retrieve sufficient data for {symbol} from any source after all attempts."
@@ -537,7 +563,7 @@ def process_ticker_list(tickers, output_base_dir, train=True, data_source_manage
     logger.info(f"📊 Completed processing for the current batch. Processed {processed_count} stocks.")
 
 
-def main(ticker_list_file, train, data_source_manager_instance):
+def main(ticker_list_file, train, data_source_manager_instance, debug_stock=None):
     """Main function to orchestrate the data processing pipeline."""
     target_base_dir = TRAIN_DIR if train else TEST_DIR
     logger.info(f"✨ Starting data processing for {ticker_list_file} to {target_base_dir}")
@@ -551,11 +577,41 @@ def main(ticker_list_file, train, data_source_manager_instance):
 
     logger.info(f"Loaded {len(tickers)} tickers from {ticker_list_file}")
 
-    process_ticker_list(tickers, output_base_dir=target_base_dir, train=train, data_source_manager_instance=data_source_manager_instance)
+    process_ticker_list(tickers, output_base_dir=target_base_dir, train=train,
+                        data_source_manager_instance=data_source_manager_instance, debug_stock=debug_stock)
 
 
 if __name__ == "__main__":
     """🚀 Main execution block when the script is run directly."""
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='StockWise NASDAQ Data Processor - Comprehensive')
+    parser.add_argument('--debug', action='store_true', help='Enable debug mode with detailed output')
+    parser.add_argument('--stock', type=str, help='Process only specific stock (for debugging)')
+    parser.add_argument('--max-stocks', type=int, default=1000,
+                        help='Maximum number of stocks to process')  # Default set to 1000
+    parser.add_argument('--quick', action='store_true',
+                        help='Enable quick mode, using a predefined small list of quality stocks')
+    parser.add_argument('--use-ibkr', action='store_true', default=True,
+                        help='Attempt to use IBKR for data retrieval (requires TWS/Gateway)')
+    parser.add_argument('--ibkr-host', type=str, default="127.0.0.1", help='IBKR TWS/Gateway host')
+    parser.add_argument('--ibkr-port', type=int, default=7497, help='IBKR TWS/Gateway port')
+    parser.add_argument('--yfinance-retries', type=int, default=10, help='Number of retries for yfinance data fetching')
+    parser.add_argument('--yfinance-retry-delay', type=int, default=1, help='Delay in seconds between yfinance retries')
+
+    args = parser.parse_args()
+
+    debug = args.debug
+    debug_stock = args.stock
+    max_stocks = args.max_stocks
+    quick_mode = args.quick
+    use_ibkr = args.use_ibkr
+    ibkr_host = args.ibkr_host
+    ibkr_port = args.ibkr_port
+    yfinance_max_retries = args.yfinance_retries
+    yfinance_retry_delay = args.yfinance_retry_delay
+
+    if debug:
+        logger.setLevel(logging.DEBUG)
 
     if debug:
         logger.info("🐛 DEBUG MODE ENABLED")
@@ -593,11 +649,11 @@ if __name__ == "__main__":
 
     if train_tickers and (not debug_stock or debug_stock in train_tickers):
         logger.info(f"\n🚀 Processing {len(train_tickers)} training tickers...")
-        main(train_tickers_file, train=True, data_source_manager_instance=data_source_manager)
+        main(train_tickers_file, train=True, data_source_manager_instance=data_source_manager, debug_stock=args.stock)
 
     if test_tickers and (not debug_stock or debug_stock in test_tickers):
         logger.info(f"\n🚀 Processing {len(test_tickers)} testing tickers...")
-        main(test_tickers_file, train=False, data_source_manager_instance=data_source_manager)
+        main(test_tickers_file, train=False, data_source_manager_instance=data_source_manager, debug_stock=args.stock)
 
     logger.info("\n✅ COMPREHENSIVE PROCESSING COMPLETE!")
     total_processed_stocks = len(train_tickers) + len(test_tickers)
