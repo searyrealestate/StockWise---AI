@@ -112,7 +112,7 @@ class ModelEvaluator:
 if __name__ == "__main__":
     # Define the directories
     TEST_FEATURE_DIR = "models/NASDAQ-testing set/features"
-    MODEL_DIR = "models/NASDAQ-training set/features"  # The directory where the trainer saves the model
+    MODEL_DIR = "models/NASDAQ-training set"  # The directory where the trainer saves the model
 
     # --- NEW: Automatically find the latest model file ---
     # Search for all files matching the "Gen 2" model name pattern
