@@ -376,6 +376,12 @@ def add_technical_indicators_and_features(df: pd.DataFrame) -> pd.DataFrame:
     df['Future_Close'] = df['Close'].shift(-future_window)
     df['Target'] = ((df['Future_Close'] / df['Close']) - 1 > gain_threshold).astype(int)
 
+    # 1. Create a smoothed version of the Close price
+    df['Smoothed_Close_5D'] = df['Close'].rolling(window=5).mean()
+
+    # 2. Calculate a new RSI based on the smoothed price instead of the raw price
+    df['RSI_14_Smoothed'] = ta.momentum.rsi(df['Smoothed_Close_5D'], window=14)
+
     initial_rows = len(df)
     df.dropna(inplace=True)
     final_rows = len(df)
@@ -387,7 +393,8 @@ def add_technical_indicators_and_features(df: pd.DataFrame) -> pd.DataFrame:
         'MACD_Histogram', 'BB_Upper', 'BB_Lower', 'BB_Middle',
         'BB_Position', 'Daily_Return', 'Volatility_20D',
         # Add the new features to the list
-        'ATR_14', 'ADX', 'ADX_pos', 'ADX_neg', 'OBV', 'RSI_28', 'Dominant_Cycle_126D'
+        'ATR_14', 'ADX', 'ADX_pos', 'ADX_neg', 'OBV', 'RSI_28', 'Dominant_Cycle_126D', "Smoothed_Close_5D",
+        "RSI_14_Smoothed"
     ]
 
     missing_features = [f for f in expected_features_for_model if f not in df.columns]
