@@ -15,11 +15,6 @@ import traceback
 from plotly.subplots import make_subplots
 from data_source_manager import DataSourceManager
 
-
-
-# --- Import your custom data source manager ---
-from data_source_manager import DataSourceManager
-
 # --- Page Configuration ---
 st.set_page_config(
     page_title="StockWise AI Trading Advisor",
@@ -49,10 +44,12 @@ class FeatureCalculator:
 
     def calculate_all_features(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
-        if df.empty or len(df) < 200: return pd.DataFrame()
+        if df.empty or len(df) < 200:
+            return pd.DataFrame()
         close, high, low, volume = df['Close'].squeeze(), df['High'].squeeze(), df['Low'].squeeze(), df[
             'Volume'].squeeze()
 
+        # --- Calculate all indicators ---
         df['Volume_MA_20'] = ta.trend.sma_indicator(volume, window=20)
         df['RSI_14'] = ta.momentum.rsi(close, window=14)
         df['Momentum_5'] = close.diff(5)
@@ -69,24 +66,42 @@ class FeatureCalculator:
         df['OBV'] = ta.volume.OnBalanceVolumeIndicator(close=close, volume=volume).on_balance_volume()
         df['RSI_28'] = ta.momentum.rsi(close, window=28)
         df['Dominant_Cycle_126D'] = close.rolling(window=126, min_periods=50).apply(self.get_dominant_cycle, raw=True)
-        df['Smoothed_Close_5D'] = close.rolling(window=5).mean()
-        df['RSI_14_Smoothed'] = ta.momentum.rsi(df['Smoothed_Close_5D'], window=14)
-        df.dropna(inplace=True)
+
+        # --- THIS IS THE KEY FIX ---
+        # Instead of dropping rows with ANY NaN, we only drop rows where critical
+        # model inputs are NaN. This makes the process much more robust.
+        critical_features = ['RSI_14', 'MACD_Histogram', 'BB_Position', 'ADX', 'OBV', 'Dominant_Cycle_126D']
+        df.dropna(subset=critical_features, inplace=True)
+
         return df
 
 
 # --- Main Application Class (with DataSourceManager integrated) ---
 class ProfessionalStockAdvisor:
-    def __init__(self, debug=False, download_log=False):
+    def __init__(self, debug=False, download_log=False, data_source_manager=None, testing_mode=False):
         self.log_entries = []
         self.debug = debug
         self.download_log = download_log
-        self.data_source_manager = DataSourceManager(use_ibkr=True, debug=self.debug)
-        self.model, self.feature_names, self.model_filename = self.load_model()
-        self.calculator = FeatureCalculator()
+        self.testing_mode = testing_mode
 
-        self.tax = 0.25  # 25% capital gains tax
-        self.broker_fee = 0.004 # 0.4% commission
+        # Logic to handle testing vs. live mode for the data source
+        if data_source_manager:
+            self.data_source_manager = data_source_manager
+        elif self.testing_mode:
+            self.data_source_manager = None
+        else:
+            self.data_source_manager = DataSourceManager(use_ibkr=True, debug=self.debug)
+
+        # In testing mode, we do NOT load the model from disk.
+        # The test will provide a fake model manually.
+        if self.testing_mode:
+            self.model, self.feature_names, self.model_filename = None, [], None
+        else:
+            self.model, self.feature_names, self.model_filename = self.load_model()
+
+        self.calculator = FeatureCalculator()
+        self.tax = 0.25
+        self.broker_fee = 0.004
 
         if self.download_log:
             self.log_file = self.setup_log_file()
@@ -130,40 +145,53 @@ class ProfessionalStockAdvisor:
             _self.log(f"ERROR: Failed to load model - {e}", "ERROR")
             return None, None, None
 
-    def validate_symbol_professional(self, symbol):
-        """
-        What's new:
-        - It no longer calls the non-existent 'validate_symbol' from DataSourceManager.
-        - The yfinance validation logic is now correctly placed here as a fallback.
-        - It correctly checks the IBKR connection status via the 'ibkr_connected' attribute,
-          fixing the 'AttributeError: ... has no attribute 'is_ibkr_connected''.
-        """
-        # First, try to validate using the IBKR connection if available
-        if self.data_source_manager.use_ibkr and self.data_source_manager.ibkr_connected:
-            try:
-                # This part now correctly assumes your DataSourceManager might have a
-                # method for IBKR validation, but it will gracefully fail if not.
-                if hasattr(self.data_source_manager, 'validate_symbol'):
-                    is_valid = self.data_source_manager.validate_symbol(symbol)
-                    self.log(f"🔍 IBKR validation for {symbol}: {is_valid}", "INFO")
-                    return is_valid
-            except Exception as e:
-                self.log(f"❌ IBKR validation error for {symbol}: {e}", "ERROR")
+    # def validate_symbol_professional(self, symbol):
+    #     """
+    #     What's new:
+    #     - It no longer calls the non-existent 'validate_symbol' from DataSourceManager.
+    #     - The yfinance validation logic is now correctly placed here as a fallback.
+    #     - It correctly checks the IBKR connection status via the 'ibkr_connected' attribute,
+    #       fixing the 'AttributeError: ... has no attribute 'is_ibkr_connected''.
+    #     """
+    #     # First, try to validate using the IBKR connection if available
+    #     if self.data_source_manager.use_ibkr and self.data_source_manager.ibkr_connected:
+    #         try:
+    #             # This part now correctly assumes your DataSourceManager might have a
+    #             # method for IBKR validation, but it will gracefully fail if not.
+    #             if hasattr(self.data_source_manager, 'validate_symbol'):
+    #                 is_valid = self.data_source_manager.validate_symbol(symbol)
+    #                 self.log(f"🔍 IBKR validation for {symbol}: {is_valid}", "INFO")
+    #                 return is_valid
+    #         except Exception as e:
+    #             self.log(f"❌ IBKR validation error for {symbol}: {e}", "ERROR")
+    #
+    #     # If IBKR is not used or fails, fallback to yfinance validation here
+    #     self.log(f"Using yfinance for validation of {symbol}", "INFO")
+    #     try:
+    #         ticker = yf.Ticker(symbol)
+    #         info = ticker.info
+    #         # A reliable check for a valid ticker is to see if it has price data
+    #         if 'regularMarketPrice' in info and info['regularMarketPrice'] is not None:
+    #             return True
+    #         if 'currentPrice' in info and info['currentPrice'] is not None:
+    #             return True
+    #         self.log(f"yfinance validation failed for {symbol}: No price data in info dict.", "WARNING")
+    #         return False
+    #     except Exception:
+    #         self.log(f"yfinance lookup failed for {symbol}.", "ERROR")
+    #         return False
 
-        # If IBKR is not used or fails, fallback to yfinance validation here
+    def validate_symbol_professional(self, symbol):
         self.log(f"Using yfinance for validation of {symbol}", "INFO")
         try:
             ticker = yf.Ticker(symbol)
-            info = ticker.info
-            # A reliable check for a valid ticker is to see if it has price data
-            if 'regularMarketPrice' in info and info['regularMarketPrice'] is not None:
+            # Check if the info dictionary contains a price, a reliable way to validate a ticker
+            if 'regularMarketPrice' in ticker.info and ticker.info['regularMarketPrice'] is not None:
                 return True
-            if 'currentPrice' in info and info['currentPrice'] is not None:
+            if 'currentPrice' in ticker.info and ticker.info['currentPrice'] is not None:
                 return True
-            self.log(f"yfinance validation failed for {symbol}: No price data in info dict.", "WARNING")
             return False
         except Exception:
-            self.log(f"yfinance lookup failed for {symbol}.", "ERROR")
             return False
 
     def run_analysis(self, ticker_symbol, analysis_date):
@@ -187,9 +215,9 @@ class ProfessionalStockAdvisor:
                 return stock_data_filtered, None
 
             self.log("Feature calculation complete. Making prediction...", "INFO")
-            latest_features_df = featured_data[self.feature_names].iloc[-1:]
-            prediction = self.model.predict(latest_features_df[self.feature_names])[0]
-            probability = self.model.predict_proba(latest_features_df[self.feature_names])[0]
+            latest_features_df = featured_data[self.feature_names]
+            prediction = self.model.predict(latest_features_df)[-1]
+            probability = self.model.predict_proba(latest_features_df)[-1]
             confidence = probability[1] if prediction == 1 else probability[0]
 
             current_price = float(stock_data_filtered['Close'].iloc[-1])
