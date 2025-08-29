@@ -5,7 +5,7 @@ import os
 
 # --- 1. SET THE CORRECT PATH TO YOUR MODEL FILE HERE ---
 # Example: "models/NASDAQ-training set/nasdaq_gen2_optimized_model_20250826.pkl"
-MODEL_PATH = "models/NASDAQ-training set/nasdaq_gen2_optimized_model_20250826.pkl"
+MODEL_PATH = "models/NASDAQ-training set/nasdaq_gen2_optimized_model_20250827.pkl"
 
 
 # --- Script starts here ---
@@ -40,29 +40,38 @@ def analyze_feature_importance(model_path: str):
             'Importance': importances
         }).sort_values(by='Importance', ascending=False).reset_index(drop=True)
 
+        # --- NEW: Calculate the percentage contribution ---
+        total_importance = feature_importance_df['Importance'].sum()
+        if total_importance > 0:
+            feature_importance_df['Percentage'] = (feature_importance_df['Importance'] / total_importance) * 100
+        else:
+            feature_importance_df['Percentage'] = 0.0 # Handle case with no importance scores
+
         feature_importance_df['Rank'] = feature_importance_df.index + 1
 
         # --- Print the Analysis in a Markdown Table ---
         print("\n## 💡 Feature Importance Analysis")
         print(
             "\nThis table shows which features the model relied on most to make its predictions. A higher score means a more influential feature.")
-        print("\n| Rank | Feature                 |   Importance |")
-        print("|-----:|:------------------------|-------------:|")
+        # --- UPDATED: Added '%' column to header ---
+        print("\n| Rank | Feature                 |   Importance |        % |")
+        print("|-----:|:------------------------|-------------:|---------:|")
         for index, row in feature_importance_df.iterrows():
-            print(f"| {row['Rank']:>4} | {row['Feature']:<23} | {row['Importance']:>12} |")
+            # --- UPDATED: Print the new 'Percentage' column with formatting ---
+            print(f"| {row['Rank']:>4} | {row['Feature']:<23} | {row['Importance']:>12} | {row['Percentage']:>7.2f}% |")
 
         # --- Find the FFT feature and provide a conclusion ---
         fft_feature_name = 'Dominant_Cycle_126D'
-        if fft_feature_name in feature_importance_df['Feature'].values:
-            fft_rank = feature_importance_df[feature_importance_df['Feature'] == fft_feature_name]['Rank'].iloc[0]
-
-            print("\n---\n")
-            print(f"### ✅ **Conclusion on FFT**\n")
-            print(
-                f"Yes, the data shows that the FFT feature ('{fft_feature_name}') was **highly beneficial to the model**.")
-            print(f"It ranked as the **#{fft_rank}** most important feature out of {len(feature_importance_df)}.")
-            print(
-                "This places it in the top tier of all features, confirming that the cyclical information it provides is a valuable signal for making predictions.")
+        # if fft_feature_name in feature_importance_df['Feature'].values:
+        #     fft_rank = feature_importance_df[feature_importance_df['Feature'] == fft_feature_name]['Rank'].iloc[0]
+        #
+        #     print("\n---\n")
+        #     print(f"### ✅ **Conclusion on FFT**\n")
+        #     print(
+        #         f"Yes, the data shows that the FFT feature ('{fft_feature_name}') was **highly beneficial to the model**.")
+        #     print(f"It ranked as the **#{fft_rank}** most important feature out of {len(feature_importance_df)}.")
+        #     print(
+        #         "This places it in the top tier of all features, confirming that the cyclical information it provides is a valuable signal for making predictions.")
 
     except FileNotFoundError as e:
         print(f"\n**Error:** {e}")
