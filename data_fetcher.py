@@ -18,7 +18,7 @@ def get_stock_history(symbol, interval="Daily", outputsize="full"):
     data = response.json()
 
     if "Time Series (Daily)" not in data:
-        raise ValueError("הנתונים לא התקבלו כראוי:", data)
+        raise ValueError("The data was not received correctly:", data)
 
     df = pd.DataFrame.from_dict(data["Time Series (Daily)"], orient="index", dtype=float)
     df.sort_index(inplace=True)
