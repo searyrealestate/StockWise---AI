@@ -19,4 +19,10 @@ git rev-parse HEAD
 1. run Create_parquet_file_NASDAQ.py - created parquet file
 2. run model_trainer.py - train the model
 3. run model_evaluator.py - This will assess how well your model performs on unseen test data, giving you a better understanding of its real-world effectiveness.
-4. 
+
+
+# How to run the test_system_performance.py?
+test that run test on stockwise_simulation_gen2.py scripts
+pytest -s test_system_performance.py --html=test_report.html
+
+
