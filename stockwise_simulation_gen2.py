@@ -202,6 +202,7 @@ class ProfessionalStockAdvisor:
             if stock_data is None or stock_data.empty: return None, None
             stock_data_filtered = stock_data[stock_data.index <= pd.to_datetime(analysis_date)].copy()
             if stock_data_filtered.empty: return None, None
+
             featured_data = self.calculator.calculate_all_features(stock_data_filtered)
             if featured_data.empty: return stock_data, None
 
@@ -210,14 +211,14 @@ class ProfessionalStockAdvisor:
             probability = self.model.predict_proba(latest_features_df)[-1]
 
             confidence = probability[1] if prediction == 1 else probability[0]
+            confidence_pct = confidence * 100
             current_price = float(stock_data_filtered['Close'].iloc[-1])
             action = "BUY" if prediction == 1 else "WAIT / AVOID"
 
-            result = {'action': action, 'confidence': confidence * 100, 'current_price': current_price}
+            result = {'action': action, 'confidence': confidence_pct, 'current_price': current_price}
 
-            # If it's a BUY signal, just add the gross profit percentage
             if action == "BUY":
-                result['gross_profit_pct'] = 5.0  # Still hardcoded, we can make this dynamic later
+                result['gross_profit_pct'] = self.calculate_dynamic_profit_target(confidence_pct)
 
             result['latest_features'] = latest_features_df.iloc[-1].to_dict()
             return stock_data, result
@@ -225,26 +226,45 @@ class ProfessionalStockAdvisor:
             st.code(traceback.format_exc())
             return None, None
 
-    def apply_israeli_fees_and_tax(self, gross_profit_pct, total_investment):
+    def apply_israeli_fees_and_tax(self, gross_profit_dollars, num_shares):
         """
-        Applies a fixed $5.00 round-trip fee and Israeli capital gains tax.
+        Applies a complex broker fee (per-share vs. minimum) and Israeli capital gains tax.
+        Works with dollar amounts for precision.
         """
-        # Calculate profit and fees in dollars
-        gross_profit_dollars = total_investment * (gross_profit_pct / 100)
-        total_fees_dollars = 5.00  # $2.50 for buy + $2.50 for sell
+        # 1. Calculate the fee for a single transaction (a buy or a sell)
+        per_share_fee = 0.008 * num_shares
+        minimum_fee = 2.50
+        single_transaction_fee = max(per_share_fee, minimum_fee)
 
+        # 2. Calculate the total fee for a round-trip trade (buy + sell)
+        total_fees_dollars = single_transaction_fee * 2
+
+        # 3. Calculate profit after fees
         profit_after_fees_dollars = gross_profit_dollars - total_fees_dollars
 
-        # Apply tax only if there's a profit after fees
+        # 4. Apply tax only if there's a profit after fees
         tax_dollars = (profit_after_fees_dollars * self.tax) if profit_after_fees_dollars > 0 else 0
         net_profit_dollars = profit_after_fees_dollars - tax_dollars
 
-        # Convert the dollar amounts back to percentages of the total investment
-        net_profit_pct = (net_profit_dollars / total_investment) * 100
+        # 5. Return the final dollar amounts
         total_deducted_dollars = total_fees_dollars + tax_dollars
-        total_deducted_pct = (total_deducted_dollars / total_investment) * 100
+        return net_profit_dollars, total_deducted_dollars
 
-        return net_profit_pct, total_deducted_pct
+    def calculate_dynamic_profit_target(self, confidence):
+        """
+        Calculates a dynamic gross profit target based on model confidence.
+        """
+        if confidence > 90:
+            gross_profit_pct = 8.0  # Very High Confidence -> Higher Target
+        elif confidence > 75:
+            gross_profit_pct = 6.5  # High Confidence
+        elif confidence > 60:
+            gross_profit_pct = 5.0  # Moderate Confidence
+        else:
+            gross_profit_pct = 3.5  # Low Confidence -> More Conservative Target
+
+        self.log(f"Dynamic profit target set to: {gross_profit_pct:.2f}% (Confidence: {confidence:.1f}%)")
+        return gross_profit_pct
 
     def create_chart(self, stock_symbol, stock_data, result, analysis_date):
         """Creates a comprehensive Plotly chart with price, volume, indicators, and annotations."""
@@ -395,19 +415,21 @@ def create_enhanced_interface():
         return
 
     # --- Part 3: Display Successful Results ---
-    st.success(f"✅ Analysis complete for {stock_symbol}")
     action = result['action']
     confidence = result['confidence']
     current_price = result['current_price']
 
     # Display top-level recommendation metrics
-    col1, col2 = st.columns([3, 2])
+    col1, col2, col3 = st.columns([3, 2, 2])
     with col1:
         if "BUY" in action:
             st.success(f"🟢 **RECOMMENDATION: {action}**")
         else:
             st.warning(f"🟡 **RECOMMENDATION: {action}**")
     with col2:
+        st.success(f"✅ Analysis complete for {stock_symbol}")
+
+    with col3:
         if confidence < 55: color = "red"
         elif 55 <= confidence < 60: color = "yellow"
         elif 60 <= confidence < 70: color = "orange"
@@ -418,18 +440,40 @@ def create_enhanced_interface():
     # Display EITHER the profit panel OR the wait message
     if "BUY" in action:
         st.subheader("💰 Price Information & Profit Analysis")
-        net_profit_pct, total_deducted_pct = advisor.apply_israeli_fees_and_tax(result['gross_profit_pct'], investment_amount)
-        total_investment = investment_amount
-        gross_profit_dollars = total_investment * (result['gross_profit_pct'] / 100)
-        net_profit_dollars = total_investment * (net_profit_pct / 100)
-        fees_and_tax_dollars = total_investment * (total_deducted_pct / 100)
-        price_col, target_col, stop_col, gross_profit_col = st.columns(4)
-        sell_price, stop_loss = current_price * 1.05, current_price * 0.97
+
+        # --- All calculations for the metrics ---
+        # (This part is unchanged)
+        num_shares = investment_amount / current_price
+        gross_profit_dollars = investment_amount * (result['gross_profit_pct'] / 100)
+        net_profit_dollars, total_deducted_dollars = advisor.apply_israeli_fees_and_tax(
+            gross_profit_dollars,
+            num_shares
+        )
+        net_profit_pct = (net_profit_dollars / investment_amount) * 100 if investment_amount > 0 else 0
+        total_deducted_pct = (total_deducted_dollars / investment_amount) * 100 if investment_amount > 0 else 0
+
+        # --- THIS IS THE KEY CHANGE ---
+        # 1. Change the layout to 5 columns
+        # price_col, target_col, stop_col, gross_profit_col, net_profit_col = st.columns(5)
+        price_col, target_col, stop_col, profit_col4 = st.columns(4)
+
+
+        sell_price = current_price * (1 + result['gross_profit_pct'] / 100)
+        stop_loss = current_price * 0.97
+
+        # 2. Display the 5 metrics
         price_col.metric("Current Price", f"${current_price:.2f}")
         target_col.metric("🟢 Target Sell", f"${sell_price:.2f}")
         stop_col.metric("🔴 Stop-Loss", f"${stop_loss:.2f}")
-        gross_profit_col.metric("💰 Gross Profit", f"${gross_profit_dollars:.2f} ({result['gross_profit_pct']:.2f}%)")
-        st.markdown(f"**Net Profit Breakdown:** **`${net_profit_dollars:.2f}`** (`{net_profit_pct:.2f}%`) (after deducting `${fees_and_tax_dollars:.2f}` (`{total_deducted_pct:.2f}%`) for Israeli tax & fees)")
+        profit_col4.metric("💰 Gross Profit", f"${gross_profit_dollars:.2f} ({result['gross_profit_pct']:.2f}%)")
+
+        # 3. Add the new Net Profit metric
+        profit_col4.metric("✨ Net Profit", f"${net_profit_dollars:.2f} ({net_profit_pct:.2f}%)",
+                              help="Profit after all fees and taxes.")
+
+        # Keep the detailed breakdown below, but simplified
+        st.caption(
+            f"_(Deducted ${total_deducted_dollars:.2f} ({total_deducted_pct:.2f}%) for Israeli tax & fixed broker fees)_")
     else:
         st.info(f"The model recommends to wait or avoid taking a new position in **{stock_symbol}** at this time.")
 
