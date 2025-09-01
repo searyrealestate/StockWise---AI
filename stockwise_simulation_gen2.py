@@ -198,30 +198,52 @@ class ProfessionalStockAdvisor:
 
     def run_analysis(self, ticker_symbol, analysis_date):
         try:
-            stock_data = self.data_source_manager.get_stock_data(ticker_symbol)
-            if stock_data is None or stock_data.empty: return None, None
-            stock_data_filtered = stock_data[stock_data.index <= pd.to_datetime(analysis_date)].copy()
-            if stock_data_filtered.empty: return None, None
+            full_stock_data = self.data_source_manager.get_stock_data(ticker_symbol)
+            if full_stock_data is None or full_stock_data.empty: return None, None
 
+            # Search for a BUY signal up to 5 days from the user's selected date
+            for i in range(5):
+                current_analysis_date = pd.to_datetime(analysis_date) + timedelta(days=i)
+                stock_data_filtered = full_stock_data[full_stock_data.index <= current_analysis_date].copy()
+                if stock_data_filtered.empty or len(stock_data_filtered) < 50: continue
+
+                featured_data = self.calculator.calculate_all_features(stock_data_filtered)
+                if featured_data.empty: continue
+
+                latest_features_df = featured_data[self.feature_names]
+                prediction = self.model.predict(latest_features_df)[-1]
+
+                if prediction == 1:
+                    probability = self.model.predict_proba(latest_features_df)[-1]
+                    result = {
+                        'action': "BUY",
+                        'confidence': probability[1] * 100,
+                        'current_price': float(stock_data_filtered['Close'].iloc[-1]),
+                        'buy_date': current_analysis_date.date(),
+                        'latest_features': latest_features_df.iloc[-1].to_dict()
+                    }
+                    result['gross_profit_pct'] = self.calculate_dynamic_profit_target(result['confidence'])
+                    return full_stock_data, result
+
+            # If no BUY signal, generate a WAIT signal with a Target Buy Price
+            stock_data_filtered = full_stock_data[full_stock_data.index <= pd.to_datetime(analysis_date)].copy()
             featured_data = self.calculator.calculate_all_features(stock_data_filtered)
-            if featured_data.empty: return stock_data, None
-
             latest_features_df = featured_data[self.feature_names]
-            prediction = self.model.predict(latest_features_df)[-1]
             probability = self.model.predict_proba(latest_features_df)[-1]
 
-            confidence = probability[1] if prediction == 1 else probability[0]
-            confidence_pct = confidence * 100
-            current_price = float(stock_data_filtered['Close'].iloc[-1])
-            action = "BUY" if prediction == 1 else "WAIT / AVOID"
+            # Calculate a target buy price (e.g., the lower Bollinger Band or 50-day MA)
+            lower_bb = featured_data['BB_Lower'].iloc[-1]
+            ma_50 = ta.trend.sma_indicator(stock_data_filtered['Close'], window=50).iloc[-1]
+            target_buy_price = min(lower_bb, ma_50)  # Use the lower of the two as a support target
 
-            result = {'action': action, 'confidence': confidence_pct, 'current_price': current_price}
-
-            if action == "BUY":
-                result['gross_profit_pct'] = self.calculate_dynamic_profit_target(confidence_pct)
-
-            result['latest_features'] = latest_features_df.iloc[-1].to_dict()
-            return stock_data, result
+            return full_stock_data, {
+                'action': "WAIT / AVOID",
+                'confidence': probability[0] * 100,
+                'current_price': float(stock_data_filtered['Close'].iloc[-1]),
+                'buy_date': None,
+                'target_buy_price': target_buy_price,  # Add the new target
+                'latest_features': latest_features_df.iloc[-1].to_dict()
+            }
         except Exception as e:
             st.code(traceback.format_exc())
             return None, None
@@ -267,110 +289,87 @@ class ProfessionalStockAdvisor:
         return gross_profit_pct
 
     def create_chart(self, stock_symbol, stock_data, result, analysis_date):
-        """Creates a comprehensive Plotly chart with price, volume, indicators, and annotations."""
-        self.log(f"Generating chart for {stock_symbol}...", "INFO")
-
-        if stock_data.empty:
-            self.log("WARNING: No data available to create chart.", "WARNING")
-            return None
-
+        if stock_data.empty: return None
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.8, 0.2])
-
-        # Plot the candlestick chart
-        fig.add_trace(go.Candlestick(
-            x=stock_data.index, open=stock_data['Open'], high=stock_data['High'],
-            low=stock_data['Low'], close=stock_data['Close'], name='Price'
-        ), row=1, col=1)
-
-        # Add Moving Averages
+        fig.add_trace(
+            go.Candlestick(x=stock_data.index, open=stock_data['Open'], high=stock_data['High'], low=stock_data['Low'],
+                           close=stock_data['Close'], name='Price'), row=1, col=1)
         for period, color in [(5, 'orange'), (20, 'blue'), (50, 'red')]:
             if len(stock_data) >= period:
                 ma = stock_data['Close'].rolling(window=period).mean()
-                fig.add_trace(go.Scatter(
-                    x=stock_data.index, y=ma, mode='lines', name=f'MA{period}',
-                    line=dict(color=color, width=1)
-                ), row=1, col=1)
-
-        # Add Bollinger Bands
+                fig.add_trace(go.Scatter(x=stock_data.index, y=ma, mode='lines', name=f'MA{period}',
+                                         line=dict(color=color, width=1)), row=1, col=1)
         if len(stock_data) >= 20:
             try:
                 bb = ta.volatility.BollingerBands(stock_data['Close'])
-                fig.add_trace(go.Scatter(
-                    x=stock_data.index, y=bb.bollinger_hband(), mode='lines', name='BB Upper',
-                    line=dict(color='gray', dash='dot', width=1), showlegend=False
-                ), row=1, col=1)
-                fig.add_trace(go.Scatter(
-                    x=stock_data.index, y=bb.bollinger_lband(), mode='lines', name='BB Lower',
-                    line=dict(color='gray', dash='dot', width=1),
-                    fill='tonexty', fillcolor='rgba(128,128,128,0.1)', showlegend=False
-                ), row=1, col=1)
+                fig.add_trace(go.Scatter(x=stock_data.index, y=bb.bollinger_hband(), mode='lines', name='BB Upper',
+                                         line=dict(color='gray', dash='dot', width=1), showlegend=False), row=1, col=1)
+                fig.add_trace(go.Scatter(x=stock_data.index, y=bb.bollinger_lband(), mode='lines', name='BB Lower',
+                                         line=dict(color='gray', dash='dot', width=1), fill='tonexty',
+                                         fillcolor='rgba(128,128,128,0.1)', showlegend=False), row=1, col=1)
             except Exception as e:
                 self.log(f"Could not calculate Bollinger Bands: {e}", "WARNING")
+        fig.add_trace(
+            go.Bar(x=stock_data.index, y=stock_data['Volume'], name='Volume', marker_color='rgba(100,110,120,0.6)'),
+            row=2, col=1)
 
-        # Plot the volume chart
-        fig.add_trace(go.Bar(
-            x=stock_data.index, y=stock_data['Volume'], name='Volume',
-            marker_color='rgba(100,110,120,0.6)'
-        ), row=2, col=1)
+        # Add the marker for the user's selected analysis date
+        fig.add_vline(x=analysis_date, line_width=1, line_dash="dash", line_color="white", name="Analysis Date",
+                      row=1)
 
-        # Add markers and lines for a "BUY" signal
         action = result['action']
         current_price = result['current_price']
         if "BUY" in action:
-            sell_price = current_price * 1.05
+            buy_date = result['buy_date']  # Get the actual buy date
+            sell_price = current_price * (1 + result['gross_profit_pct'] / 100)
             stop_loss = current_price * 0.97
 
-            # Analysis Date Marker (Vertical Line)
-            fig.add_vline(x=analysis_date, line_width=1, line_dash="dash", line_color="white", name="Analysis Date",
-                          row=1)
-            # Buy Price Marker (Circle)
+            # Add the marker for the actual buying date
             fig.add_trace(go.Scatter(
-                x=[analysis_date], y=[current_price], mode='markers',
-                marker=dict(color='cyan', size=12, symbol='circle-open', line=dict(width=2)), name='Buy Price'
+                x=[buy_date], y=[current_price], mode='markers',
+                marker=dict(color='cyan', size=12, symbol='circle-open', line=dict(width=2)), name='Target Buy'
             ), row=1, col=1)
-            # Sell Price Marker (Horizontal Line)
             fig.add_hline(y=float(sell_price), line_dash="dash", line_color="lightgreen",
                           name="Target Sell Price", row=1, annotation_text=f"Target: ${sell_price:.2f}",
                           annotation_position="top right")
-            # Stop-Loss Marker (Horizontal Line)
+
+            # --- THIS IS THE CORRECTED LINE ---
             fig.add_hline(y=float(stop_loss), line_dash="dash", line_color="red",
                           name="Stop-Loss Price", row=1, annotation_text=f"Stop-Loss: ${stop_loss:.2f}",
                           annotation_position="bottom right")
 
-        # Define the initial zoom range
-        zoom_start_date = pd.to_datetime(analysis_date) - timedelta(days=10)  # Updated from 2 to 10 days
+        zoom_start_date = pd.to_datetime(analysis_date) - timedelta(days=10)
         zoom_end_date = pd.to_datetime(analysis_date) + timedelta(days=120)
-
-        # Update layout
-        fig.update_layout(
-            title_text=f'{stock_symbol} Price & Volume Analysis',
-            xaxis_rangeslider_visible=False, showlegend=True,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-        )
+        fig.update_layout(title_text=f'{stock_symbol} Price & Volume Analysis', xaxis_rangeslider_visible=False,
+                          showlegend=True, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
         fig.update_xaxes(range=[zoom_start_date, zoom_end_date], row=1, col=1)
         fig.update_xaxes(range=[zoom_start_date, zoom_end_date], row=2, col=1)
         fig.update_yaxes(title_text="Price (USD)", row=1, col=1)
         fig.update_yaxes(title_text="Volume", row=2, col=1)
-
         return fig
 
 
 def create_enhanced_interface():
-    # --- Part 1: Setup and Sidebar ---
+    # --- Part 1: Setup and Sidebar (No changes here) ---
     st.title("🏢 StockWise AI Trading Advisor")
-    if 'advisor' not in st.session_state:
-        st.session_state.advisor = ProfessionalStockAdvisor()
+    if 'advisor' not in st.session_state: st.session_state.advisor = ProfessionalStockAdvisor()
     advisor = st.session_state.advisor
-
+    if 'analysis_date' not in st.session_state: st.session_state.analysis_date = datetime.now().date()
     st.markdown(f"### Powered by Gen-2 Model: `{advisor.model_filename or 'N/A'}`")
     st.markdown("---")
 
-    st.sidebar.header("🎯 Trading Analysis")
-    stock_symbol = st.sidebar.text_input("📊 Stock Symbol", value="NVDA", help="Enter any stock ticker").upper().strip()
-    analysis_date = st.sidebar.date_input("📅 Analysis Date", value=datetime.now().date())
-    investment_amount = st.sidebar.number_input("💰 Investment Amount ($)", min_value=1.0, value=10.0, step=1.0,
-                                                help="Enter the total amount you want to invest in dollars.")
+    def set_date_to_today():
+        st.session_state.analysis_date = datetime.now().date()
 
+    st.sidebar.header("🎯 Trading Analysis")
+    stock_symbol = st.sidebar.text_input("📊 Stock Symbol", value="NVDA").upper().strip()
+    col1, col2 = st.sidebar.columns([3, 1])
+    with col1:
+        st.date_input("📅 Analysis Date", key='analysis_date')
+    with col2:
+        st.write(" ")
+        st.button("Today", on_click=set_date_to_today, use_container_width=True)
+    investment_amount = st.sidebar.number_input("💰 Investment Amount ($)", min_value=1.0, value=1000.0, step=100.0)
     if stock_symbol:
         if 'last_validated_symbol' not in st.session_state or st.session_state.last_validated_symbol != stock_symbol:
             with st.spinner(f"Validating {stock_symbol}..."):
@@ -380,36 +379,17 @@ def create_enhanced_interface():
             st.sidebar.success(f"✅ {stock_symbol} is a valid symbol.")
         else:
             st.sidebar.error(f"❌ {stock_symbol} is not a valid symbol.")
-
     analyze_btn = st.sidebar.button("🚀 Run Professional Analysis", type="primary", use_container_width=True)
 
-    # Debug Panel Setup
-    st.sidebar.markdown("---")
-    st.sidebar.header("🔧 Settings & Debug")
-    debug_mode = st.sidebar.checkbox("Show Debug Logs", value=False)
-    advisor.download_log = st.sidebar.checkbox("Create Downloadable Log File", value=False)
-    if advisor.download_log and (not hasattr(advisor, 'log_file') or not advisor.log_file):
-        advisor.log_file = advisor.setup_log_file()
-
-
     # --- Part 2: Main Display Logic ---
-
-    # Guard Clause: Handle the initial welcome screen
     if not analyze_btn or not stock_symbol:
         st.info("Enter a stock symbol and date in the sidebar, then click 'Run Analysis' to begin.")
         return
-
-    # Guard Clause: Handle invalid symbol
     if not st.session_state.get('is_valid_symbol', False):
-        st.error(f"Cannot analyze {stock_symbol} as it is not a valid symbol. Please try another.")
+        st.error(f"Cannot analyze {stock_symbol} as it is not a valid symbol.")
         return
-
-    # Run Analysis (now without num_shares)
     with st.spinner(f"Running analysis for {stock_symbol}..."):
-        stock_data, result = advisor.run_analysis(stock_symbol,
-                                                  datetime.combine(analysis_date, datetime.min.time()))
-
-    # Guard Clause: Handle analysis failure
+        stock_data, result = advisor.run_analysis(stock_symbol, st.session_state.analysis_date)
     if not result:
         st.error("Analysis failed. Please check the debug logs for more information.")
         return
@@ -435,7 +415,9 @@ def create_enhanced_interface():
         elif 60 <= confidence < 70: color = "orange"
         elif 70 <= confidence < 80: color = "green"
         else: color = "blue"
-        st.markdown(f"""<div style="text-align: right;"><span style="font-size: 1em;">Model Confidence</span><br><span style="font-size: 2.5em; color: {color}; font-weight: bold;">{confidence:.1f}%</span></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div style="text-align: right;"><span style="font-size: 1em;">Model Confidence</span><br><span 
+        style="font-size: 2.5em; color: {color}; font-weight: bold;">{confidence:.1f}%</span></div>""",
+                    unsafe_allow_html=True)
 
     # Display EITHER the profit panel OR the wait message
     if "BUY" in action:
@@ -457,7 +439,6 @@ def create_enhanced_interface():
         # price_col, target_col, stop_col, gross_profit_col, net_profit_col = st.columns(5)
         price_col, target_col, stop_col, profit_col4 = st.columns(4)
 
-
         sell_price = current_price * (1 + result['gross_profit_pct'] / 100)
         stop_loss = current_price * 0.97
 
@@ -475,11 +456,16 @@ def create_enhanced_interface():
         st.caption(
             f"_(Deducted ${total_deducted_dollars:.2f} ({total_deducted_pct:.2f}%) for Israeli tax & fixed broker fees)_")
     else:
-        st.info(f"The model recommends to wait or avoid taking a new position in **{stock_symbol}** at this time.")
+        st.subheader("⏳ Market Position & Future Opportunity")
+        col1, col2 = st.columns(2)
+        col1.metric("Current Price", f"${current_price:.2f}")
+        if result.get('target_buy_price'):
+            col2.metric("🎯 Target Buy Price", f"${result['target_buy_price']:.2f}",
+                        help="A price at which the stock may become a better buying opportunity based on technical support levels.")
 
     # Display the Chart
     st.subheader("📊 Price Chart")
-    fig = advisor.create_chart(stock_symbol, stock_data, result, analysis_date)
+    fig = advisor.create_chart(stock_symbol, stock_data, result, st.session_state.analysis_date)
     if fig:
         st.plotly_chart(fig, use_container_width=True)
         with st.expander("Chart Legend Explained"):
@@ -497,6 +483,42 @@ def create_enhanced_interface():
     # Display Debug Logs if toggled
     # ... (Your debug display logic can go here) ...
 
+        # --- NEW: Redesigned Action Summary Section ---
+        st.subheader("📝 Action Summary")
+        if "BUY" in action and result.get('buy_date'):
+            buy_date_str = result['buy_date'].strftime('%B %d, %Y')
+            sell_price = current_price * (1 + result['gross_profit_pct'] / 100)
+            stop_loss = current_price * 0.97
+
+            st.markdown("#### For Those Looking to Buy:")
+            st.success(f"""
+            - **Action:** The model recommends **BUYING** {stock_symbol}.
+            - **When:** A high-probability entry point was detected on or around **{buy_date_str}**.
+            - **Price:** The suggested entry price is **${current_price:.2f}**.
+            """)
+
+            st.markdown("#### For Existing Stock Holders:")
+            st.info(f"""
+            - **Action:** The model recommends **HOLDING** your position.
+            - **Target Sell Price:** Consider taking profits around **${sell_price:.2f}**.
+            - **Stop-Loss:** To manage risk, consider placing a stop-loss order near **${stop_loss:.2f}**.
+            """)
+        else:  # This is the WAIT / AVOID case
+            target_buy_price_str = f"${result.get('target_buy_price', current_price * 0.95):.2f}"  # Added a fallback
+
+            st.markdown("#### For Those Looking to Buy:")
+            st.warning(f"""
+            - **Action:** The model recommends to **WAIT or AVOID** buying {stock_symbol} at its current price.
+            - **Reason:** No high-probability "BUY" signal was detected in the near term.
+            - **Target Buy Price:** The stock may become a more attractive opportunity if it pulls back to the key support level around **{target_buy_price_str}**.
+            """)
+
+            st.markdown("#### For Existing Stock Holders:")
+            st.error(f"""
+            - **Action:** The model recommends **CAUTION**.
+            - **Reason:** The current trend does not show strong bullish momentum.
+            - **Recommendation:** Consider protecting your profits by setting a **trailing stop-loss** to lock in gains if the price begins to fall.
+            """)
 
 # --- Main Execution ---
 if __name__ == "__main__":
