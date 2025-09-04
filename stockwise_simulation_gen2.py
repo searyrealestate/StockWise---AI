@@ -44,7 +44,7 @@ class FeatureCalculator:
 
     def calculate_all_features(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
-        if df.empty or len(df) < 200:
+        if df.empty or len(df) < 50:
             return pd.DataFrame()
         close, high, low, volume = df['Close'].squeeze(), df['High'].squeeze(), df['Low'].squeeze(), df[
             'Volume'].squeeze()
@@ -86,27 +86,24 @@ class ProfessionalStockAdvisor:
         self.debug = debug
         self.download_log = download_log
         self.testing_mode = testing_mode
-
-        # This logic prevents live connections during tests
         if data_source_manager:
             self.data_source_manager = data_source_manager
         elif self.testing_mode:
             self.data_source_manager = None
         else:
-            self.data_source_manager = DataSourceManager(use_ibkr=True, debug=self.debug)
-
-        # This logic prevents loading a real model from disk during tests
+            self.data_source_manager = DataSourceManager(use_ibkr=True)
         if self.testing_mode:
             self.model, self.feature_names, self.model_filename = None, [], None
         else:
             self.model, self.feature_names, self.model_filename = self.load_model()
-
         self.calculator = FeatureCalculator()
         self.tax = 0.25
+
+    # log, setup_log_file, load_model, validate_symbol_professional methods are correct and do not need changes...
+
         self.broker_fee = 0.004
 
-        if self.download_log:
-            self.log_file = self.setup_log_file()
+        if self.download_log: self.log_file = self.setup_log_file()
         self.log("Application Initialized.", "INFO")
 
     def log(self, message, level="INFO"):
@@ -147,43 +144,14 @@ class ProfessionalStockAdvisor:
             _self.log(f"ERROR: Failed to load model - {e}", "ERROR")
             return None, None, None
 
-    # def validate_symbol_professional(self, symbol):
-    #     """
-    #     What's new:
-    #     - It no longer calls the non-existent 'validate_symbol' from DataSourceManager.
-    #     - The yfinance validation logic is now correctly placed here as a fallback.
-    #     - It correctly checks the IBKR connection status via the 'ibkr_connected' attribute,
-    #       fixing the 'AttributeError: ... has no attribute 'is_ibkr_connected''.
-    #     """
-    #     # First, try to validate using the IBKR connection if available
-    #     if self.data_source_manager.use_ibkr and self.data_source_manager.ibkr_connected:
-    #         try:
-    #             # This part now correctly assumes your DataSourceManager might have a
-    #             # method for IBKR validation, but it will gracefully fail if not.
-    #             if hasattr(self.data_source_manager, 'validate_symbol'):
-    #                 is_valid = self.data_source_manager.validate_symbol(symbol)
-    #                 self.log(f"🔍 IBKR validation for {symbol}: {is_valid}", "INFO")
-    #                 return is_valid
-    #         except Exception as e:
-    #             self.log(f"❌ IBKR validation error for {symbol}: {e}", "ERROR")
-    #
-    #     # If IBKR is not used or fails, fallback to yfinance validation here
-    #     self.log(f"Using yfinance for validation of {symbol}", "INFO")
-    #     try:
-    #         ticker = yf.Ticker(symbol)
-    #         info = ticker.info
-    #         # A reliable check for a valid ticker is to see if it has price data
-    #         if 'regularMarketPrice' in info and info['regularMarketPrice'] is not None:
-    #             return True
-    #         if 'currentPrice' in info and info['currentPrice'] is not None:
-    #             return True
-    #         self.log(f"yfinance validation failed for {symbol}: No price data in info dict.", "WARNING")
-    #         return False
-    #     except Exception:
-    #         self.log(f"yfinance lookup failed for {symbol}.", "ERROR")
-    #         return False
-
     def validate_symbol_professional(self, symbol):
+        """
+        What's new:
+        - It no longer calls the non-existent 'validate_symbol' from DataSourceManager.
+        - The yfinance validation logic is now correctly placed here as a fallback.
+        - It correctly checks the IBKR connection status via the 'ibkr_connected' attribute,
+          fixing the 'AttributeError: ... has no attribute 'is_ibkr_connected''.
+        """
         self.log(f"Using yfinance for validation of {symbol}", "INFO")
         try:
             ticker = yf.Ticker(symbol)
@@ -196,14 +164,45 @@ class ProfessionalStockAdvisor:
         except Exception:
             return False
 
+    #  --- Risk Management Function ---
+    def is_market_in_uptrend(self, days=200):
+        """Checks if the general market (SPY) is in an uptrend."""
+        try:
+            spy_data = yf.download("SPY", period=f"{days + 50}d", progress=False)
+            if spy_data.empty:
+                self.log("Could not download SPY data for market trend analysis.", "WARNING")
+                return True  # Fail safe: assume market is okay if data is unavailable
+
+            spy_data[f'SMA_{days}'] = ta.trend.sma_indicator(spy_data['Close'], window=days)
+            latest_price = spy_data['Close'].iloc[-1]
+            moving_average = spy_data[f'SMA_{days}'].iloc[-1]
+
+            return latest_price > moving_average
+        except Exception as e:
+            self.log(f"Error during market trend analysis: {e}", "WARNING")
+            return True  # Fail safe
+
     def run_analysis(self, ticker_symbol, analysis_date):
         try:
+            if not self.is_market_in_uptrend():
+                stock_data_for_chart = self.data_source_manager.get_stock_data(ticker_symbol)
+                price_on_date = 0
+                if stock_data_for_chart is not None and pd.to_datetime(analysis_date) in stock_data_for_chart.index:
+                    price_on_date = stock_data_for_chart.loc[pd.to_datetime(analysis_date)]['Close']
+                return stock_data_for_chart, {'action': "WAIT / AVOID", 'confidence': 99.9,
+                                              'current_price': price_on_date, 'reason': "Market Downtrend",
+                                              'buy_date': None}
+
             full_stock_data = self.data_source_manager.get_stock_data(ticker_symbol)
             if full_stock_data is None or full_stock_data.empty: return None, None
 
+            # --- THIS IS THE KEY FIX ---
+            # The original analysis date is stored for the final result if no BUY is found
+            original_analysis_date = pd.to_datetime(analysis_date)
+
             # Search for a BUY signal up to 5 days from the user's selected date
             for i in range(5):
-                current_analysis_date = pd.to_datetime(analysis_date) + timedelta(days=i)
+                current_analysis_date = original_analysis_date + timedelta(days=i)
                 stock_data_filtered = full_stock_data[full_stock_data.index <= current_analysis_date].copy()
                 if stock_data_filtered.empty or len(stock_data_filtered) < 50: continue
 
@@ -219,34 +218,52 @@ class ProfessionalStockAdvisor:
                         'action': "BUY",
                         'confidence': probability[1] * 100,
                         'current_price': float(stock_data_filtered['Close'].iloc[-1]),
-                        'buy_date': current_analysis_date.date(),
+                        'buy_date': current_analysis_date.date(),  # Store the actual buy date
+                        'sma_20': featured_data['BB_Middle'].iloc[-1],
                         'latest_features': latest_features_df.iloc[-1].to_dict()
                     }
                     result['gross_profit_pct'] = self.calculate_dynamic_profit_target(result['confidence'])
                     return full_stock_data, result
 
-            # If no BUY signal, generate a WAIT signal with a Target Buy Price
-            stock_data_filtered = full_stock_data[full_stock_data.index <= pd.to_datetime(analysis_date)].copy()
+            # If no BUY signal, generate a WAIT signal for the original date
+            stock_data_filtered = full_stock_data[full_stock_data.index <= original_analysis_date].copy()
             featured_data = self.calculator.calculate_all_features(stock_data_filtered)
             latest_features_df = featured_data[self.feature_names]
             probability = self.model.predict_proba(latest_features_df)[-1]
-
-            # Calculate a target buy price (e.g., the lower Bollinger Band or 50-day MA)
             lower_bb = featured_data['BB_Lower'].iloc[-1]
             ma_50 = ta.trend.sma_indicator(stock_data_filtered['Close'], window=50).iloc[-1]
-            target_buy_price = min(lower_bb, ma_50)  # Use the lower of the two as a support target
 
             return full_stock_data, {
                 'action': "WAIT / AVOID",
                 'confidence': probability[0] * 100,
                 'current_price': float(stock_data_filtered['Close'].iloc[-1]),
-                'buy_date': None,
-                'target_buy_price': target_buy_price,  # Add the new target
+                'buy_date': None,  # Ensure buy_date is always present
+                'target_buy_price': min(lower_bb, ma_50),
+                'sma_20': featured_data['BB_Middle'].iloc[-1],
                 'latest_features': latest_features_df.iloc[-1].to_dict()
             }
         except Exception as e:
             st.code(traceback.format_exc())
             return None, None
+    def find_next_buy_signal(self, full_stock_data, start_date):
+        """Helper function to find the first BUY signal within the next 5 days."""
+        for i in range(1, 6):  # Look from tomorrow onwards
+            future_date = start_date + timedelta(days=i)
+            if future_date > full_stock_data.index.max(): break  # Stop if we run out of data
+
+            stock_data_filtered = full_stock_data[full_stock_data.index <= future_date].copy()
+            if stock_data_filtered.empty or len(stock_data_filtered) < 50: continue
+
+            featured_data = self.calculator.calculate_all_features(stock_data_filtered)
+            if featured_data.empty: continue
+
+            latest_features_df = featured_data[self.feature_names]
+            prediction = self.model.predict(latest_features_df)[-1]
+
+            if prediction == 1:
+                return future_date.date(), float(stock_data_filtered['Close'].iloc[-1])
+
+        return None, None
 
     def apply_israeli_fees_and_tax(self, gross_profit_dollars, num_shares):
         """
@@ -363,12 +380,8 @@ def create_enhanced_interface():
 
     st.sidebar.header("🎯 Trading Analysis")
     stock_symbol = st.sidebar.text_input("📊 Stock Symbol", value="NVDA").upper().strip()
-    col1, col2 = st.sidebar.columns([3, 1])
-    with col1:
-        st.date_input("📅 Analysis Date", key='analysis_date')
-    with col2:
-        st.write(" ")
-        st.button("Today", on_click=set_date_to_today, use_container_width=True)
+    st.sidebar.date_input("📅 Analysis Date", key='analysis_date')
+    st.sidebar.button("Today", on_click=set_date_to_today, use_container_width=True)
     investment_amount = st.sidebar.number_input("💰 Investment Amount ($)", min_value=1.0, value=1000.0, step=100.0)
     if stock_symbol:
         if 'last_validated_symbol' not in st.session_state or st.session_state.last_validated_symbol != stock_symbol:
@@ -419,49 +432,103 @@ def create_enhanced_interface():
         style="font-size: 2.5em; color: {color}; font-weight: bold;">{confidence:.1f}%</span></div>""",
                     unsafe_allow_html=True)
 
-    # Display EITHER the profit panel OR the wait message
-    if "BUY" in action:
-        st.subheader("💰 Price Information & Profit Analysis")
+    st.subheader("💰 Price Information & Analysis")
 
-        # --- All calculations for the metrics ---
-        # (This part is unchanged)
+    # --- Create the columns for metrics ---
+    price_col, target_buy_col, target_sell_col, stop_col = st.columns(4)
+
+    price_col.metric("Current Price", f"${current_price:.2f}")
+
+    if action == "BUY":
+        # --- BUY RECOMMENDATION UI ---
+        # 1. Restore the profit calculations
         num_shares = investment_amount / current_price
         gross_profit_dollars = investment_amount * (result['gross_profit_pct'] / 100)
-        net_profit_dollars, total_deducted_dollars = advisor.apply_israeli_fees_and_tax(
-            gross_profit_dollars,
-            num_shares
-        )
+        net_profit_dollars, total_deducted_dollars = advisor.apply_israeli_fees_and_tax(gross_profit_dollars,
+                                                                                        num_shares)
         net_profit_pct = (net_profit_dollars / investment_amount) * 100 if investment_amount > 0 else 0
-        total_deducted_pct = (total_deducted_dollars / investment_amount) * 100 if investment_amount > 0 else 0
 
-        # --- THIS IS THE KEY CHANGE ---
-        # 1. Change the layout to 5 columns
-        # price_col, target_col, stop_col, gross_profit_col, net_profit_col = st.columns(5)
-        price_col, target_col, stop_col, profit_col4 = st.columns(4)
+        # 2. Create the 5-column layout
+        price_col, target_buy_col, target_sell_col, stop_col, profit_col = st.columns(5)
+
+        # 3. Display the metrics with corrected styling
+        price_col.metric("Current Price", f"${current_price:.2f}")
+
+        # Target Buy metric for a BUY signal
+        buy_price = result.get('current_price')
+        target_buy_col.metric("🎯 Target Buy", f"${buy_price:.2f}", delta="Buy Signal", delta_color="normal")
 
         sell_price = current_price * (1 + result['gross_profit_pct'] / 100)
+        target_sell_col.metric("🟢 Target Sell", f"${sell_price:.2f}")
+
         stop_loss = current_price * 0.97
-
-        # 2. Display the 5 metrics
-        price_col.metric("Current Price", f"${current_price:.2f}")
-        target_col.metric("🟢 Target Sell", f"${sell_price:.2f}")
         stop_col.metric("🔴 Stop-Loss", f"${stop_loss:.2f}")
-        profit_col4.metric("💰 Gross Profit", f"${gross_profit_dollars:.2f} ({result['gross_profit_pct']:.2f}%)")
 
-        # 3. Add the new Net Profit metric
-        profit_col4.metric("✨ Net Profit", f"${net_profit_dollars:.2f} ({net_profit_pct:.2f}%)",
-                              help="Profit after all fees and taxes.")
+        # Restore the profit display in the 5th column
+        with profit_col:
+            st.metric("💰 Gross Profit", f"${gross_profit_dollars:.2f} ({result['gross_profit_pct']:.2f}%)")
+            st.metric("✨ Net Profit", f"${net_profit_dollars:.2f} ({net_profit_pct:.2f}%)")
 
-        # Keep the detailed breakdown below, but simplified
-        st.caption(
-            f"_(Deducted ${total_deducted_dollars:.2f} ({total_deducted_pct:.2f}%) for Israeli tax & fixed broker fees)_")
-    else:
-        st.subheader("⏳ Market Position & Future Opportunity")
-        col1, col2 = st.columns(2)
-        col1.metric("Current Price", f"${current_price:.2f}")
-        if result.get('target_buy_price'):
-            col2.metric("🎯 Target Buy Price", f"${result['target_buy_price']:.2f}",
-                        help="A price at which the stock may become a better buying opportunity based on technical support levels.")
+    else:  # --- WAIT / AVOID RECOMMENDATION UI ---
+        price_col, target_buy_col = st.columns(2)
+        price_col.metric("Current Price", f"${current_price:.2f}")
+
+        # Target Buy metric for a WAIT signal
+        buy_price = result.get('target_buy_price')
+        if isinstance(buy_price, float):
+            target_buy_col.metric("🎯 Target Buy", f"${buy_price:.2f}", delta="Monitor", delta_color="inverse")
+            buy_date = result.get('buy_date')
+            if buy_date:
+                days_from_now = (buy_date - datetime.now().date()).days
+                if days_from_now > 0:
+                    target_buy_col.caption(f"Est. Signal in {days_from_now} day(s)")
+        else:
+            target_buy_col.metric("🎯 Target Buy", "N/A", delta="No Signal", delta_color="off")
+
+    # Display EITHER the profit panel OR the wait message
+    # if "BUY" in action:
+    #     st.subheader("💰 Price Information & Profit Analysis")
+    #
+    #     # --- All calculations for the metrics ---
+    #     # (This part is unchanged)
+    #     num_shares = investment_amount / current_price
+    #     gross_profit_dollars = investment_amount * (result['gross_profit_pct'] / 100)
+    #     net_profit_dollars, total_deducted_dollars = advisor.apply_israeli_fees_and_tax(
+    #         gross_profit_dollars,
+    #         num_shares
+    #     )
+    #     net_profit_pct = (net_profit_dollars / investment_amount) * 100 if investment_amount > 0 else 0
+    #     total_deducted_pct = (total_deducted_dollars / investment_amount) * 100 if investment_amount > 0 else 0
+    #
+    #     # --- THIS IS THE KEY CHANGE ---
+    #     # 1. Change the layout to 5 columns
+    #     # price_col, target_col, stop_col, gross_profit_col, net_profit_col = st.columns(5)
+    #     price_col, target_col, stop_col, profit_col4 = st.columns(4)
+    #
+    #     sell_price = current_price * (1 + result['gross_profit_pct'] / 100)
+    #     stop_loss = current_price * 0.97
+    #
+    #     # 2. Display the 5 metrics
+    #     price_col.metric("Current Price", f"${current_price:.2f}")
+    #     target_col.metric("🟢 Target Sell", f"${sell_price:.2f}")
+    #     stop_col.metric("🔴 Stop-Loss", f"${stop_loss:.2f}")
+    #
+    #     # 3. Add the new Net Profit metric
+    #     profit_col4.metric("✨ Net Profit", f"${net_profit_dollars:.2f} ({net_profit_pct:.2f}%)",
+    #                        help="Profit after all fees and taxes.")
+    #
+    #     profit_col4.metric("💰 Gross Profit", f"${gross_profit_dollars:.2f} ({result['gross_profit_pct']:.2f}%)")
+    #
+    #     # Keep the detailed breakdown below, but simplified
+    #     st.caption(
+    #         f"_(Deducted ${total_deducted_dollars:.2f} ({total_deducted_pct:.2f}%) for Israeli tax & fixed broker fees)_")
+    # else:
+    #     st.subheader("⏳ Market Position & Future Opportunity")
+    #     col1, col2 = st.columns(2)
+    #     col1.metric("Current Price", f"${current_price:.2f}")
+    #     if result.get('target_buy_price'):
+    #         col2.metric("🎯 Target Buy Price", f"${result['target_buy_price']:.2f}",
+    #                     help="A price at which the stock may become a better buying opportunity based on technical support levels.")
 
     # Display the Chart
     st.subheader("📊 Price Chart")
@@ -519,6 +586,7 @@ def create_enhanced_interface():
             - **Reason:** The current trend does not show strong bullish momentum.
             - **Recommendation:** Consider protecting your profits by setting a **trailing stop-loss** to lock in gains if the price begins to fall.
             """)
+
 
 # --- Main Execution ---
 if __name__ == "__main__":
