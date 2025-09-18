@@ -3,86 +3,79 @@ import json
 import joblib
 import logging
 import pandas as pd
-import lightgbm as lgb  # Import the full lightgbm library for advanced features
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+import lightgbm as lgb
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, classification_report
 from sklearn.model_selection import train_test_split
 from data_manager import DataManager
 from datetime import datetime
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger("ModelTrainer")
+# --- Setup logging ---
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] (%(name)s) %(message)s")
+logger = logging.getLogger("Gen3ModelTrainer")
 
 
-class ModelTrainer:
-    def __init__(self, model_dir: str, label_col: str = "Target", custom_params: dict = None):
+class Gen3ModelTrainer:
+    """
+    Trains the full suite of Gen-3 specialist "orchestra" models.
+    This trainer iterates through each volatility cluster and trains three
+    distinct binary models for each: Entry, Profit-Taking, and Risk Management.
+    """
+
+    def __init__(self, model_dir: str, custom_params: dict):
         self.model_dir = model_dir
-        self.label_col = label_col
         self.params = custom_params
+        # Ensure the output directory for Gen-3 models exists
         os.makedirs(self.model_dir, exist_ok=True)
+        logger.info(f"Gen-3 Model Trainer initialized. Models will be saved to: {self.model_dir}")
 
-    def train_model(self, df: pd.DataFrame, model_name: str) -> dict:
-        logger.info("Preparing training data for Gen-2 model...")
+    def _train_single_model(self, df: pd.DataFrame, feature_cols: list, label_col: str, model_name: str) -> dict:
+        """
+        Internal helper function to train one specialist binary model.
+        """
+        if label_col not in df.columns:
+            logger.error(f"Target column '{label_col}' not found in the DataFrame. Skipping training for {model_name}.")
+            return {}
 
-        # --- CHANGE #1: Update the feature list to include all new features ---
-        expected_features = [
-            'Volume_MA_20', 'RSI_14', 'Momentum_5', 'MACD', 'MACD_Signal',
-            'MACD_Histogram', 'BB_Upper', 'BB_Lower', 'BB_Middle',
-            'BB_Position', 'Daily_Return', 'Volatility_20D',
-            'ATR_14', 'ADX', 'ADX_pos', 'ADX_neg', 'OBV', 'RSI_28',
-            'Dominant_Cycle_126D'
-        ]
+        X = df[feature_cols]
+        y = df[label_col]
 
-        final_feature_cols = [col for col in expected_features if col in df.columns]
+        # Filter out rows where the label is not 0 or 1, as this is a binary task
+        binary_mask = y.isin([0, 1])
+        X = X[binary_mask]
+        y = y[binary_mask]
 
-        missing_features = set(expected_features) - set(final_feature_cols)
-        if missing_features:
-            logger.warning(f"⚠️ Missing expected features in training data: {sorted(list(missing_features))}.")
+        if y.nunique() < 2:
+            logger.warning(f"⚠️ Target '{label_col}' has fewer than 2 unique classes. Cannot train {model_name}.")
+            return {}
 
-        if self.label_col not in df.columns:
-            raise ValueError(f"Target column '{self.label_col}' missing.")
-
-        logger.info(f"Using {len(final_feature_cols)} features for training.")
-
-        X = df[final_feature_cols]
-        y = df[self.label_col]
-
-        # Save the list of feature columns used for this model
-        feature_cols_path = os.path.join(self.model_dir, model_name.replace(".pkl", "_features.json"))
-        with open(feature_cols_path, "w") as f:
-            json.dump(final_feature_cols, f, indent=4)
-        logger.info(f"Saved feature columns to: {feature_cols_path}")
+        if len(y[y == 1]) < 10:
+            logger.warning(
+                f"⚠️ Insufficient positive samples ({len(y[y == 1])}) for '{label_col}'. Skipping {model_name}.")
+            return {}
 
         X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+        logger.info(f"Training {model_name} with {len(X_train)} samples. Target: '{label_col}'.")
 
-        logger.info("Training Advanced LightGBM model...")
-
-        # --- CHANGE #2: Use more advanced model parameters ---
-        if self.params:
-            model_params = self.params.copy()
-            model_params.update({
-                'objective': 'binary',
-                'n_estimators': 50000,  # Still use a high number for early stopping
-                'seed': 42,
-                'n_jobs': -1,
-                'verbose': -1,
-                'class_weight': 'balanced'
-            })
-        else:
-            # Fallback to default parameters if none are provided
-            model_params = {'objective': 'binary', 'n_estimators': 2000, 'learning_rate': 0.02}
+        # --- Use more advanced model parameters ---
+        model_params = self.params.copy()
+        model_params.update({
+            'objective': 'binary',  # Critical change: each model is a simple binary classifier
+            'n_estimators': 10000,
+            'seed': 42,
+            'n_jobs': -1,
+            'verbose': -1,
+            'class_weight': 'balanced'
+        })
 
         model = lgb.LGBMClassifier(**model_params)
 
-        # --- CHANGE #3: Use early stopping to prevent overfitting ---
-        # The model will stop training if performance on the validation set doesn't improve for 100 rounds.
+        # Use early stopping to prevent overfitting
         model.fit(X_train, y_train,
                   eval_set=[(X_val, y_val)],
                   eval_metric='logloss',
                   callbacks=[lgb.early_stopping(100, verbose=False)])
 
         y_pred = model.predict(X_val)
-        y_pred_proba = model.predict_proba(X_val)[:, 1]  # Get probabilities for the positive class
 
         metrics = {
             "accuracy": accuracy_score(y_val, y_pred),
@@ -92,45 +85,94 @@ class ModelTrainer:
             "best_iteration": model.best_iteration_
         }
 
-        logger.info(f"Metrics: {metrics}")
+        logger.info(
+            f"Metrics for {model_name}: F1={metrics['f1']:.4f}, Precision={metrics['precision']:.4f}, Recall={metrics['recall']:.4f}")
 
+        # --- Save the model and its feature list ---
         model_path = os.path.join(self.model_dir, model_name)
         joblib.dump(model, model_path)
-        logger.info(f"Model saved to: {model_path}")
+
+        feature_cols_path = model_path.replace(".pkl", "_features.json")
+        with open(feature_cols_path, "w") as f:
+            json.dump(feature_cols, f, indent=4)
+
+        logger.info(f"✅ Model saved to: {model_path}")
+        logger.info(f"✅ Features saved to: {feature_cols_path}")
 
         return metrics
 
+    def train_specialist_models(self, df: pd.DataFrame):
+        """
+        Main orchestration method to train the entire suite of Gen-3 models.
+        """
+        logger.info("🚀 Starting Gen-3 'Orchestra' Model Training Pipeline...")
+
+        # --- Define the full feature set for Gen-3 ---
+        # Note: 'Volatility_Cluster' is used for filtering, NOT as a feature itself.
+        gen3_feature_cols = [
+            'Volume_MA_20', 'RSI_14', 'Momentum_5', 'MACD', 'MACD_Signal',
+            'MACD_Histogram', 'BB_Upper', 'BB_Lower', 'BB_Middle',
+            'BB_Position', 'Daily_Return', 'Volatility_20D', 'ATR_14',
+            'ADX', 'ADX_pos', 'ADX_neg', 'OBV', 'RSI_28', 'Dominant_Cycle_126D',
+            "Smoothed_Close_5D", "RSI_14_Smoothed",
+            'Z_Score_20', 'BB_Width', 'Correlation_50D_QQQ'
+        ]
+
+        # Define the clusters and the models to be trained for each
+        clusters = ['low', 'mid', 'high']
+        model_specs = {
+            'entry': 'Target_Entry',
+            'profit_take': 'Target_Profit_Take',
+            'cut_loss': 'Target_Cut_Loss'
+        }
+
+        for cluster in clusters:
+            logger.info(f"\n{'─' * 20} Training models for VOLATILITY CLUSTER: '{cluster.upper()}' {'─' * 20}")
+
+            cluster_df = df[df['Volatility_Cluster'] == cluster].copy()
+
+            if cluster_df.empty:
+                logger.warning(f"No data found for cluster '{cluster}'. Skipping training for this cluster.")
+                continue
+
+            for model_type, target_col in model_specs.items():
+                model_filename = f"{model_type}_model_{cluster}_vol.pkl"
+                self._train_single_model(
+                    df=cluster_df,
+                    feature_cols=gen3_feature_cols,
+                    label_col=target_col,
+                    model_name=model_filename
+                )
+
+        logger.info("\n🎉 Gen-3 Model Training Pipeline Finished Successfully!")
+
 
 if __name__ == "__main__":
+    # Define directories for training data and where models will be saved
     TRAIN_FEATURE_DIR = "models/NASDAQ-training set/features"
-    MODEL_DIR = "models/NASDAQ-training set"
-    MODEL_NAME = f"nasdaq_gen2_optimized_model_{datetime.now().strftime('%Y%m%d')}.pkl"
+    GEN3_MODEL_DIR = "models/NASDAQ-gen3"  # New dedicated directory for Gen-3 models
+
+    # Path to the optimized hyperparameters from a tuning process
     PARAMS_PATH = "models/best_lgbm_params.json"
 
-    # --- NEW: Load the best parameters from the tuning process ---
+    # Load the best hyperparameters
     try:
         with open(PARAMS_PATH, 'r') as f:
             best_params = json.load(f)
         logger.info(f"✅ Successfully loaded best parameters from {PARAMS_PATH}")
     except FileNotFoundError:
         logger.error(f"❌ Best parameter file not found at {PARAMS_PATH}. Cannot proceed.")
-        best_params = None  # Set to None if file not found
+        best_params = None
 
     if best_params:
-        # --- End of new code ---
-
+        # Load and combine all training data
         train_data_manager = DataManager(TRAIN_FEATURE_DIR, label="Train")
         symbols = train_data_manager.get_available_symbols()
-        df = train_data_manager.combine_feature_files(symbols)
+        combined_df = train_data_manager.combine_feature_files(symbols)
 
-        if df.empty:
-            logger.error("❌ Combined training DataFrame is empty. Cannot train model.")
+        if combined_df.empty:
+            logger.error("❌ Combined training DataFrame is empty. Cannot train models.")
         else:
-            # Pass the loaded parameters into the ModelTrainer
-            trainer = ModelTrainer(model_dir=MODEL_DIR, custom_params=best_params)  # Pass params here
-            metrics = trainer.train_model(df, model_name=MODEL_NAME)
-
-            print("\n📊 Gen-2 OPTIMIZED Model Validation Metrics:")
-            for metric, value in metrics.items():
-                print(f"{metric.capitalize():<15}: {value:.4f}" if isinstance(value,
-                                    float) else f"{metric.capitalize():<15}: {value}")
+            # Initialize and run the Gen-3 trainer
+            trainer = Gen3ModelTrainer(model_dir=GEN3_MODEL_DIR, custom_params=best_params)
+            trainer.train_specialist_models(combined_df)
