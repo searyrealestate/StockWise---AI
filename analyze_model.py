@@ -2,88 +2,83 @@ import pandas as pd
 import joblib
 import json
 import os
+import glob
+from tqdm import tqdm
 
-# --- 1. SET THE CORRECT PATH TO YOUR MODEL FILE HERE ---
-# Example: "models/NASDAQ-training set/nasdaq_gen2_optimized_model_20250826.pkl"
-MODEL_PATH = "models/NASDAQ-training set/nasdaq_gen2_optimized_model_20250827.pkl"
+# --- Configuration for Gen-3 ---
+MODEL_DIR = "models/NASDAQ-gen3"
+OUTPUT_FILE = "gen3_feature_importance_summary.csv"
 
 
-# --- Script starts here ---
-
-def analyze_feature_importance(model_path: str):
+def analyze_all_feature_importances(model_dir: str):
     """
-    Loads a trained model and its feature list to analyze and display
-    the importance of each feature.
+    Loads all Gen-3 specialist models, analyzes their feature importances,
+    and consolidates the results into a single DataFrame and CSV file.
     """
-    print(f"Analyzing model: {os.path.basename(model_path)}")
+    all_importances = []
 
-    # Construct the path to the corresponding features JSON file
-    features_path = model_path.replace(".pkl", "_features.json")
+    # 1. Find all model files in the dedicated Gen-3 directory
+    model_files = glob.glob(os.path.join(model_dir, "*.pkl"))
+    if not model_files:
+        print(f"❌ Error: No model files found in '{model_dir}'. Please run the model trainer first.")
+        return
 
-    try:
-        # --- Load the Model and Feature List ---
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model file not found at the specified path: {model_path}")
-        if not os.path.exists(features_path):
-            raise FileNotFoundError(f"Features file not found at the specified path: {features_path}")
+    print(f"🔍 Found {len(model_files)} specialist models. Analyzing feature importances...")
 
-        model = joblib.load(model_path)
-        with open(features_path, 'r') as f:
-            feature_names = json.load(f)
+    # 2. Loop through each model and extract importance
+    for model_path in tqdm(model_files, desc="Processing models"):
+        model_name = os.path.basename(model_path).replace(".pkl", "")
+        features_path = model_path.replace(".pkl", "_features.json")
 
-        # --- Get Feature Importances from the trained model ---
-        importances = model.feature_importances_
+        try:
+            model = joblib.load(model_path)
+            with open(features_path, 'r') as f:
+                feature_names = json.load(f)
 
-        # --- Create a DataFrame for Analysis ---
-        feature_importance_df = pd.DataFrame({
-            'Feature': feature_names,
-            'Importance': importances
-        }).sort_values(by='Importance', ascending=False).reset_index(drop=True)
+            importances = model.feature_importances_
 
-        # --- NEW: Calculate the percentage contribution ---
-        total_importance = feature_importance_df['Importance'].sum()
-        if total_importance > 0:
-            feature_importance_df['Percentage'] = (feature_importance_df['Importance'] / total_importance) * 100
-        else:
-            feature_importance_df['Percentage'] = 0.0 # Handle case with no importance scores
+            # Create a temporary DataFrame for this model's data
+            df_temp = pd.DataFrame({
+                'model_name': model_name,
+                'feature_name': feature_names,
+                'importance': importances
+            })
+            all_importances.append(df_temp)
 
-        feature_importance_df['Rank'] = feature_importance_df.index + 1
+        except FileNotFoundError:
+            print(f"⚠️ Warning: Missing features file for {model_name}. Skipping.")
+            continue
+        except Exception as e:
+            print(f"❌ Error analyzing model {model_name}: {e}. Skipping.")
+            continue
 
-        # --- Print the Analysis in a Markdown Table ---
-        print("\n## 💡 Feature Importance Analysis")
-        print(
-            "\nThis table shows which features the model relied on most to make its predictions. A higher score means a more influential feature.")
-        # --- UPDATED: Added '%' column to header ---
-        print("\n| Rank | Feature                 |   Importance |        % |")
-        print("|-----:|:------------------------|-------------:|---------:|")
-        for index, row in feature_importance_df.iterrows():
-            # --- UPDATED: Print the new 'Percentage' column with formatting ---
-            print(f"| {row['Rank']:>4} | {row['Feature']:<23} | {row['Importance']:>12} | {row['Percentage']:>7.2f}% |")
+    if not all_importances:
+        print("❌ No feature importance data could be extracted.")
+        return
 
-        # --- Find the FFT feature and provide a conclusion ---
-        fft_feature_name = 'Dominant_Cycle_126D'
-        # if fft_feature_name in feature_importance_df['Feature'].values:
-        #     fft_rank = feature_importance_df[feature_importance_df['Feature'] == fft_feature_name]['Rank'].iloc[0]
-        #
-        #     print("\n---\n")
-        #     print(f"### ✅ **Conclusion on FFT**\n")
-        #     print(
-        #         f"Yes, the data shows that the FFT feature ('{fft_feature_name}') was **highly beneficial to the model**.")
-        #     print(f"It ranked as the **#{fft_rank}** most important feature out of {len(feature_importance_df)}.")
-        #     print(
-        #         "This places it in the top tier of all features, confirming that the cyclical information it provides is a valuable signal for making predictions.")
+    # 3. Consolidate and rank the data
+    combined_df = pd.concat(all_importances, ignore_index=True)
 
-    except FileNotFoundError as e:
-        print(f"\n**Error:** {e}")
-        print("Please ensure the path and filename are correct.")
-    except Exception as e:
-        print(f"\nAn unexpected error occurred: {e}")
+    # Calculate the average importance for each feature across all models
+    average_importance = combined_df.groupby('feature_name')['importance'].mean().reset_index()
+    average_importance.rename(columns={'importance': 'average_importance'}, inplace=True)
+    average_importance.sort_values(by='average_importance', ascending=False, inplace=True)
+
+    # Add a global rank
+    average_importance['global_rank'] = range(1, len(average_importance) + 1)
+
+    print("\n## 💡 Consolidated Feature Importance Analysis")
+    print("\nThis table shows the average importance of each feature across all 9 specialist models.")
+
+    # 4. Save the report to a CSV file
+    output_path = os.path.join(MODEL_DIR, OUTPUT_FILE)
+    average_importance.to_csv(output_path, index=False)
+    print(f"\n✅ Detailed feature importance report saved to: {output_path}")
+
+    # 5. Print a summary to the console
+    print("\n### Top 10 Most Important Features (Across All Models)")
+    print(average_importance.head(10).to_markdown(index=False))
 
 
 if __name__ == "__main__":
-    if "PASTE_THE_FULL_PATH" in MODEL_PATH:
-        print("---")
-        print("⚠️ Please open this script and set the MODEL_PATH variable on line 12 to the correct file path.")
-        print("---")
-    else:
-        analyze_feature_importance(MODEL_PATH)
+    analyze_all_feature_importances(MODEL_DIR)
