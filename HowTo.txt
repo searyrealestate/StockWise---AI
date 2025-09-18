@@ -1,7 +1,3 @@
-Before commit - run the following commands:
-pip install -r requirements.txt
-pip freeze > requirements.txt
-
 # GitHub commands
 # see all branches
 git branch -a
@@ -9,11 +5,18 @@ git branch -a
 # Switch between branches
 git checkout <branch_name>
 
+# check commit number
+git rev-parse HEAD
+
 # Copy a commit from one branch to another
 git cherry-pick <commit_hash>
 
-# check commit number
-git rev-parse HEAD
+# Before commit - run the following commands:
+# 1. Prepare the environment
+# Install required packages and update requirements.txt.
+pip install -r requirements.txt
+pip freeze > requirements.txt
+
 
 # How to used the scripts:
 1. run Create_parquet_file_NASDAQ.py - created parquet file
@@ -21,8 +24,43 @@ git rev-parse HEAD
 3. run model_evaluator.py - This will assess how well your model performs on unseen test data, giving you a better understanding of its real-world effectiveness.
 
 
+
+# --- Gen-3 Model Creation and Evaluation Workflow ---
+
+# 2. Run the Data Pipeline
+# This step generates the raw feature and target label data, optimized for Gen-3.
+# The process may take several hours depending on the number of stocks.
+python Create_parquet_file_NASDAQ.py
+
+# run 3 train stock and 2 test stocks - to verity that the script is OK
+python Create_parquet_file_NASDAQ.py --small-test
+
+# number of train stocks
+python Create_parquet_file_NASDAQ.py --max-stocks 50
+
+
+
+# 3. Train the "Orchestra" of Specialist Models
+# This step uses the data from step 2 to train 9 specialist models (3 clusters x 3 agents).
+python model_trainer.py
+
+# 4. Evaluate the Specialist Models
+# This script assesses the performance of all 9 models on unseen test data.
+# A summary report named 'gen3_model_performance_summary.csv' will be created.
+python model_evaluator.py
+
+# --- Running Tests ---
+
+# How to run all unit tests?
+# This will run all tests in the test_create_parquet_NASDAQ_file.py,
+# test_system_performance.py, and other test files.
+pytest
+
 # How to run the test_system_performance.py?
-test that run test on stockwise_simulation_gen2.py scripts
+# This will run the backtest simulations and generate an HTML report.
 pytest -s test_system_performance.py --html=test_report.html
 
 
+# How to run the test_system_performance.py?
+test that run test on stockwise_simulation_gen2.py scripts
+pytest -s test_system_performance.py --html=test_report.html
