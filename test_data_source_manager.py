@@ -8,7 +8,7 @@ from data_source_manager import DataSourceManager
 
 class TestDataSourceManager(unittest.TestCase):
     """
-    Unit tests for the DataSourceManager class.
+    Unit tests for the upgraded DataSourceManager class using the Client Portal API.
     It uses mocking to test the logic without making real network calls.
     """
 
@@ -16,7 +16,6 @@ class TestDataSourceManager(unittest.TestCase):
         """This method is called before each test."""
         # We initialize the manager with use_ibkr=False in setUp
         # because most tests will mock the download functions directly.
-        # Tests that need the IBKR connection logic can re-initialize it.
         self.manager = DataSourceManager(use_ibkr=False)
 
     @patch('data_source_manager.DataSourceManager._download_from_yfinance')
@@ -27,25 +26,19 @@ class TestDataSourceManager(unittest.TestCase):
         """
         print("\n--- Running Test: IBKR Success ---")
         # --- Arrange ---
-        # Create a sample DataFrame that our mock IBKR function will return
         sample_df = pd.DataFrame({'Close': [150, 151, 152]})
         mock_ibkr_download.return_value = sample_df
 
-        # Create a manager instance that is configured to use IBKR
         ibkr_manager = DataSourceManager(use_ibkr=True)
-        # We need to mock the connection logic as well for this test
+        # Mock the connection check for the Client Portal API to return True
         ibkr_manager.connect_to_ibkr = MagicMock(return_value=True)
 
         # --- Act ---
-        # Call the main function we want to test
         result_df = ibkr_manager.get_stock_data("AAPL")
 
         # --- Assert ---
-        # Check that the IBKR download function was called exactly once
         mock_ibkr_download.assert_called_once_with("AAPL")
-        # CRITICAL: Check that the yfinance download function was NEVER called
         mock_yfinance_download.assert_not_called()
-        # Check that the returned DataFrame is the one from our mock IBKR
         self.assertTrue(result_df.equals(sample_df))
         print("✅ Test Passed")
 
@@ -53,18 +46,15 @@ class TestDataSourceManager(unittest.TestCase):
     @patch('data_source_manager.DataSourceManager._download_from_ibkr')
     def test_yfinance_fallback_scenario(self, mock_ibkr_download, mock_yfinance_download):
         """
-        Test Case 2: Verify that if IBKR fails (returns empty), the system correctly falls back to yfinance.
+        Test Case 2: Verify that if IBKR fails, the system correctly falls back to yfinance.
         """
         print("\n--- Running Test: YFinance Fallback ---")
         # --- Arrange ---
-        # Simulate IBKR failing by having it return an empty DataFrame
         mock_ibkr_download.return_value = pd.DataFrame()
 
-        # Simulate yfinance succeeding by returning a sample DataFrame
         sample_df = pd.DataFrame({'Close': [200, 201, 202]})
         mock_yfinance_download.return_value = sample_df
 
-        # Create a manager instance configured to use IBKR
         ibkr_manager = DataSourceManager(use_ibkr=True)
         ibkr_manager.connect_to_ibkr = MagicMock(return_value=True)
 
@@ -72,10 +62,8 @@ class TestDataSourceManager(unittest.TestCase):
         result_df = ibkr_manager.get_stock_data("GOOG")
 
         # --- Assert ---
-        # Check that both download methods were called exactly once
         mock_ibkr_download.assert_called_once_with("GOOG")
         mock_yfinance_download.assert_called_once_with("GOOG", days_back=5 * 365)
-        # Check that the final result is the DataFrame from yfinance
         self.assertTrue(result_df.equals(sample_df))
         print("✅ Test Passed")
 
@@ -87,11 +75,9 @@ class TestDataSourceManager(unittest.TestCase):
         """
         print("\n--- Running Test: Total Failure ---")
         # --- Arrange ---
-        # Simulate both sources failing by returning an empty DataFrame
         mock_ibkr_download.return_value = pd.DataFrame()
         mock_yfinance_download.return_value = pd.DataFrame()
 
-        # Create a manager instance
         ibkr_manager = DataSourceManager(use_ibkr=True)
         ibkr_manager.connect_to_ibkr = MagicMock(return_value=True)
 
@@ -99,11 +85,37 @@ class TestDataSourceManager(unittest.TestCase):
         result_df = ibkr_manager.get_stock_data("TSLA")
 
         # --- Assert ---
-        # Check that both download methods were called
         mock_ibkr_download.assert_called_once_with("TSLA")
         mock_yfinance_download.assert_called_once_with("TSLA", days_back=5 * 365)
-        # Check that the final result is an empty DataFrame
         self.assertTrue(result_df.empty)
+        print("✅ Test Passed")
+
+    @patch('data_source_manager.DataSourceManager.connect_to_ibkr')
+    @patch('data_source_manager.DataSourceManager._download_from_yfinance')
+    @patch('data_source_manager.DataSourceManager._download_from_ibkr')
+    def test_ibkr_connection_failure_scenario(self, mock_ibkr_download, mock_yfinance_download, mock_connect):
+        """
+        Test Case 4: Verify that if the IBKR connection itself fails, the system falls back to yfinance.
+        """
+        print("\n--- Running Test: IBKR Connection Failure ---")
+        # --- Arrange ---
+        # Simulate IBKR connection failing
+        mock_connect.return_value = False
+
+        # Simulate yfinance succeeding
+        sample_df = pd.DataFrame({'Close': [200, 201, 202]})
+        mock_yfinance_download.return_value = sample_df
+
+        ibkr_manager = DataSourceManager(use_ibkr=True)
+
+        # --- Act ---
+        result_df = ibkr_manager.get_stock_data("MSFT")
+
+        # --- Assert ---
+        # The IBKR download method should NOT be called at all, since the connection failed
+        mock_ibkr_download.assert_not_called()
+        mock_yfinance_download.assert_called_once_with("MSFT", days_back=5 * 365)
+        self.assertTrue(result_df.equals(sample_df))
         print("✅ Test Passed")
 
 
