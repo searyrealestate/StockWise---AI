@@ -2,130 +2,164 @@ import os
 import json
 import joblib
 import pandas as pd
-from tqdm import tqdm
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+import logging
+from sklearn.metrics import classification_report
 from data_manager import DataManager
 import glob
 
+# --- Setup logging ---
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] (%(name)s) %(message)s")
+logger = logging.getLogger("Gen3ModelEvaluator")
 
-class ModelEvaluator:
-    def __init__(self, model_path: str, test_data_manager: DataManager, label_col: str = "Target"):
-        self.model_path = model_path
+
+class Gen3ModelEvaluator:
+    """
+    Evaluates the performance of the full suite of Gen-3 specialist models.
+    It loads all nine models, segments the test data by volatility cluster,
+    and reports the performance of each specialist model on its specific task.
+    """
+
+    def __init__(self, model_dir: str, test_data_manager: DataManager):
+        self.model_dir = model_dir
         self.test_data_manager = test_data_manager
-        self.label_col = label_col
-        self.model = self._load_model()
-        self.feature_cols = self._load_feature_columns()  # This will now load the correct features
+        self.models = {}
+        self.feature_cols = {}
+        self._load_all_models()
 
-    def _load_model(self):
-        if not os.path.exists(self.model_path):
-            raise FileNotFoundError(f"Model not found: {self.model_path}")
-        return joblib.load(self.model_path)
+    def _load_all_models(self):
+        """
+        Scans the model directory to find and load all nine specialist models
+        and their corresponding feature lists.
+        """
+        logger.info(f"🔍 Scanning for Gen-3 models in: {self.model_dir}")
+        model_files = glob.glob(os.path.join(self.model_dir, "*.pkl"))
 
-    def _load_feature_columns(self):
-        # Construct the path to the feature columns JSON file
-        # This assumes the JSON is saved next to the model PKL with a consistent naming convention
-        json_path = self.model_path.replace(".pkl", "_features.json")
+        if len(model_files) < 9:
+            logger.warning(f"⚠️ Found only {len(model_files)} model files. Expected 9. Evaluation may be incomplete.")
 
-        if not os.path.exists(json_path):
-            raise FileNotFoundError(f"Feature column file not found: {json_path}. "
-                                    "Please ensure model_trainer.py saved the feature columns.")
-        with open(json_path, "r") as f:
-            feature_cols = json.load(f)
-        print(f"[Evaluator] Loaded {len(feature_cols)} feature columns from: {json_path}")
-        return feature_cols
-
-    def evaluate_model_performance(self, output_csv: str = "summary_model_performance.csv"):
-        symbols = self.test_data_manager.get_available_symbols()
-        results = []
-
-        print(f"🔍 Found {len(symbols)} test stocks. Evaluating model performance...")
-        for symbol in tqdm(symbols, desc="Evaluating stocks"):
+        for model_path in model_files:
+            model_name = os.path.basename(model_path).replace(".pkl", "")
+            features_path = model_path.replace(".pkl", "_features.json")
             try:
-                df = self.test_data_manager.load_feature_file(symbol)
-
-                if df is None or df.empty:
-                    print(f"[Evaluator] Skipping {symbol}: No data or empty DataFrame after processing.")
-                    continue
-
-                # Ensure all required feature columns are present in the DataFrame for prediction
-                # Filter out features that might be missing for this specific DataFrame (e.g., due to short data)
-                features_for_this_df = [col for col in self.feature_cols if col in df.columns]
-
-                if not features_for_this_df:
-                    print(f"[Evaluator] Skipping {symbol}: No valid features found in DataFrame to make predictions.")
-                    continue
-
-                missing_cols_for_pred = [col for col in self.feature_cols if col not in features_for_this_df]
-                if missing_cols_for_pred:
-                    print(
-                        f"[Evaluator] Warning for {symbol}: Missing features for prediction: {missing_cols_for_pred}. "
-                        "Using available features only.")
-
-                X = df[features_for_this_df]
-                y_true = df[self.label_col]
-
-                if X.empty or y_true.empty:
-                    print(f"[Evaluator] Skipping {symbol}: Feature or target data is empty after filtering.")
-                    continue
-
-                # Ensure X has the same number of features as the model was trained with
-                # This is crucial for consistent prediction.
-                # If the loaded model's expected features (from self.feature_cols) differ from
-                # what's available in X for the current DataFrame, you need to handle it.
-                # The ideal scenario is that self.feature_cols already matches what the model expects.
-                if len(features_for_this_df) != len(self.feature_cols):
-                    print(f"[Evaluator] Warning: Number of features for {symbol} ({len(features_for_this_df)}) "
-                          f"does not match trained model's features ({len(self.feature_cols)}). This may cause issues.")
-                    # A more robust solution might involve re-aligning columns or padding,
-                    # but for now, we proceed with available features hoping for the best or skipping.
-                    # Given the fix to `data_manager.py`, this warning should appear less often.
-
-                y_pred = self.model.predict(X)
-
-                metrics = {
-                    "symbol": symbol,
-                    "accuracy": accuracy_score(y_true, y_pred),
-                    "precision": precision_score(y_true, y_pred, zero_division=0),
-                    "recall": recall_score(y_true, y_pred, zero_division=0),
-                    "f1": f1_score(y_true, y_pred, zero_division=0),
-                    "n_samples": len(df)
-                }
-                results.append(metrics)
+                self.models[model_name] = joblib.load(model_path)
+                with open(features_path, 'r') as f:
+                    self.feature_cols[model_name] = json.load(f)
+                logger.info(f"  ✅ Loaded model: {model_name}")
             except Exception as e:
-                print(f"[Evaluator] Failed on {symbol}: {e}")
-                import traceback
-                traceback.print_exc()  # Print full traceback for debugging
+                logger.error(f"❌ Failed to load model or features for {model_name}: {e}")
 
-        summary_df = pd.DataFrame(results)
-        summary_df.to_csv(output_csv, index=False)
-        print(f"[Evaluator] Saved summary to {output_csv}")
+    def evaluate_all_models(self) -> pd.DataFrame:
+        """
+        Orchestrates the evaluation process for all loaded models.
+        """
+        logger.info("\n🚀 Starting Gen-3 Model Evaluation Pipeline...")
+        test_df = self.test_data_manager.combine_feature_files(self.test_data_manager.get_available_symbols())
 
-        if not summary_df.empty and "accuracy" in summary_df.columns:
-            avg_accuracy = summary_df["accuracy"].mean()
-            print(f"[Evaluator] Average accuracy across {len(summary_df)} stocks: {avg_accuracy:.4f}")
-        else:
-            print("[Evaluator] No valid results to summarize.")
+        if test_df.empty:
+            logger.error("❌ Combined test DataFrame is empty. Cannot evaluate models.")
+            return pd.DataFrame()
+
+        all_results = []
+        clusters = ['low', 'mid', 'high']
+        model_specs = {
+            'entry': 'Target_Entry',
+            'profit_take': 'Target_Profit_Take',
+            'cut_loss': 'Target_Cut_Loss'
+        }
+
+        for cluster in clusters:
+            logger.info(f"\n{'─' * 20} Evaluating models for VOLATILITY CLUSTER: '{cluster.upper()}' {'─' * 20}")
+            cluster_df = test_df[test_df['Volatility_Cluster'] == cluster].copy()
+
+            if cluster_df.empty:
+                logger.warning(f"No test data found for cluster '{cluster}'. Skipping evaluation.")
+                continue
+
+            for model_type, target_col in model_specs.items():
+                model_name = f"{model_type}_model_{cluster}_vol"
+
+                if model_name not in self.models:
+                    logger.warning(f"Model '{model_name}' not loaded. Skipping its evaluation.")
+                    continue
+
+                report = self._evaluate_single_model(
+                    df=cluster_df,
+                    model_name=model_name,
+                    label_col=target_col
+                )
+                if report:
+                    # We are interested in the metrics for class '1' (the positive class)
+                    positive_class_metrics = report.get('1', {})
+                    if positive_class_metrics:
+                        # Add model identifiers to the dictionary
+                        positive_class_metrics['model_name'] = model_name
+                        positive_class_metrics['cluster'] = cluster
+                        positive_class_metrics['model_type'] = model_type
+                        all_results.append(positive_class_metrics)
+
+        if not all_results:
+            logger.error("❌ No evaluation results were generated.")
+            return pd.DataFrame()
+
+        summary_df = pd.DataFrame(all_results)
+
+        # Reorder columns for clarity
+        cols_order = ['model_name', 'cluster', 'model_type', 'precision', 'recall', 'f1-score', 'support']
+        summary_df = summary_df[cols_order]
+
+        # Save detailed report to CSV
+        output_path = os.path.join(self.model_dir, "gen3_model_performance_summary.csv")
+        summary_df.to_csv(output_path, index=False)
+        logger.info(f"\n🎉 Detailed evaluation report for positive class (1) saved to: {output_path}")
 
         return summary_df
 
+    def _evaluate_single_model(self, df: pd.DataFrame, model_name: str, label_col: str) -> dict:
+        """
+        Evaluates a single specialist model on the provided DataFrame.
+        """
+        model = self.models[model_name]
+        feature_cols = self.feature_cols[model_name]
+
+        # Verify all necessary columns are present
+        required_cols = feature_cols + [label_col]
+        if not all(col in df.columns for col in required_cols):
+            missing = [col for col in required_cols if col not in df.columns]
+            logger.error(f"Missing required columns for {model_name} in the test data: {missing}.")
+            return None
+
+        X_test = df[feature_cols]
+        y_test = df[label_col]
+
+        if y_test.nunique() < 2:
+            logger.warning(f"Target '{label_col}' for {model_name} has fewer than 2 classes in the test set. Skipping.")
+            return None
+
+        logger.info(f"Evaluating {model_name} on {len(X_test)} samples...")
+        y_pred = model.predict(X_test)
+
+        report = classification_report(y_test, y_pred, output_dict=True, zero_division=0)
+
+        # --- Print a concise summary to the console ---
+        # We focus on the performance for the positive class '1' as it's the action signal
+        f1_score = report.get('1', {}).get('f1-score', 0)
+        precision = report.get('1', {}).get('precision', 0)
+        recall = report.get('1', {}).get('recall', 0)
+
+        print(f"  - Model: {model_name}")
+        print(f"    - Metrics for class '1' (Action Signal):")
+        print(f"      - F1-Score: {f1_score:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}")
+
+        return report
+
 
 if __name__ == "__main__":
-    # Define the directories
     TEST_FEATURE_DIR = "models/NASDAQ-testing set/features"
-    MODEL_DIR = "models/NASDAQ-training set"  # The directory where the trainer saves the model
+    GEN3_MODEL_DIR = "models/NASDAQ-gen3"
 
-    # --- NEW: Automatically find the latest model file ---
-    # Search for all files matching the "Gen 2" model name pattern
-    model_files = glob.glob(os.path.join(MODEL_DIR, "nasdaq_gen2_optimized_model_*.pkl"))
-    if not model_files:
-        raise FileNotFoundError(f"FATAL: No 'Gen 2' model files found in '{MODEL_DIR}'. Please run the trainer first.")
-
-    # Find the most recently created file
-    MODEL_PATH = max(model_files, key=os.path.getctime)
-    print(f"[Evaluator] Found and using latest model: {os.path.basename(MODEL_PATH)}")
-    # --- End of new code ---
-
-    test_data_manager = DataManager(TEST_FEATURE_DIR, label="Test")
-    evaluator = ModelEvaluator(MODEL_PATH, test_data_manager)
-
-    summary_df = evaluator.evaluate_model_performance(output_csv="summary_model_performance.csv")
+    if not os.path.exists(GEN3_MODEL_DIR):
+        logger.error(f"FATAL: Gen-3 model directory not found at '{GEN3_MODEL_DIR}'. Please run the trainer first.")
+    else:
+        test_data_manager = DataManager(TEST_FEATURE_DIR, label="Test")
+        evaluator = Gen3ModelEvaluator(model_dir=GEN3_MODEL_DIR, test_data_manager=test_data_manager)
+        evaluator.evaluate_all_models()
