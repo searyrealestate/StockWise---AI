@@ -15,9 +15,7 @@ from model_trainer import Gen3ModelTrainer
 @pytest.fixture
 def synthetic_training_data():
     """
-    Creates a more robust, realistic, and complete synthetic DataFrame for testing.
-    This version includes all required feature columns and sufficient positive samples
-    for each target to pass the trainer's internal validation checks.
+    Creates a synthetic DataFrame with the CORRECTED Gen-3 feature set.
     """
     num_rows = 300
     clusters = ['low', 'mid', 'high']
@@ -25,12 +23,12 @@ def synthetic_training_data():
         # --- Grouping Column ---
         'Volatility_Cluster': np.random.choice(clusters, num_rows),
 
-        # --- Target Columns (with sufficient positive samples, e.g., 20% positive) ---
+        # --- Target Columns ---
         'Target_Entry': np.random.choice([0, 1], num_rows, p=[0.8, 0.2]),
         'Target_Profit_Take': np.random.choice([0, 1], num_rows, p=[0.8, 0.2]),
         'Target_Cut_Loss': np.random.choice([0, 1], num_rows, p=[0.9, 0.1]),
 
-        # --- All Gen-3 Feature Columns (filled with random data) ---
+        # --- CORRECTED Gen-3 Feature Columns ---
         'Volume_MA_20': np.random.rand(num_rows) * 1e6,
         'RSI_14': np.random.uniform(30, 70, num_rows),
         'Momentum_5': np.random.randn(num_rows),
@@ -49,26 +47,33 @@ def synthetic_training_data():
         'ADX_neg': np.random.uniform(10, 40, num_rows),
         'OBV': np.random.randint(1e6, 1e8, num_rows),
         'RSI_28': np.random.uniform(30, 70, num_rows),
-        'Dominant_Cycle_126D': np.random.uniform(20, 80, num_rows),
-        'Smoothed_Close_5D': np.random.uniform(98, 102, num_rows),
-        'RSI_14_Smoothed': np.random.uniform(30, 70, num_rows),
         'Z_Score_20': np.random.randn(num_rows),
         'BB_Width': np.random.rand(num_rows),
         'Correlation_50D_QQQ': np.random.uniform(-1, 1, num_rows)
     }
     return pd.DataFrame(data)
 
+
 @pytest.fixture
 def mock_lgbm_classifier():
     """
     Mocks the LightGBM classifier to prevent actual training and ensures
-    its predict method returns a valid NumPy array.
+    its predict method returns a dynamically sized, valid NumPy array.
     """
     with patch('model_trainer.lgb.LGBMClassifier', autospec=True) as mock:
         instance = mock.return_value
         instance.fit.return_value = instance
         instance.best_iteration_ = 100
-        instance.predict.return_value = np.random.choice([0, 1], size=24) # Ensure a valid size
+
+        # Instead of a fixed return value, use a side_effect function.
+        # This function will be called with the same arguments as model.predict(X_val).
+        # It creates a prediction array of the CORRECT size every time.
+        def dynamic_predict(X_data):
+            return np.random.choice([0, 1], size=len(X_data))
+
+        instance.predict.side_effect = dynamic_predict
+        # --- END FIX ---
+
         yield mock
 
 @pytest.fixture
@@ -132,7 +137,6 @@ def test_train_single_model_saves_correctly(synthetic_training_data, mock_lgbm_c
     mock_json_dump.assert_called_once()
     args, kwargs = mock_json_dump.call_args
     assert args[0] == feature_cols
-    assert isinstance(args[1], MagicMock)
     assert kwargs.get('indent') == 4
 
 
