@@ -22,27 +22,21 @@ import logging
 import traceback
 import numpy as np
 import pandas as pd
-import ta
 import yfinance as yf
 from tqdm import tqdm
-from ta.momentum import StochasticOscillator, RSIIndicator
-from ta.trend import MACD
-from ta.volatility import BollingerBands
-from ta.volatility import AverageTrueRange
-from ta.trend import ADXIndicator
 from datetime import timedelta, datetime
+import pandas_ta as ta
+import ibkr_connection_manager
 
 
-# --- Logging Setup ---
 try:
-    from data_source_manager import DataSourceManager
+    from ibkr_connection_manager import ProfessionalIBKRManager
     logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s', stream=sys.stdout)
     logger = logging.getLogger(__name__)
     logger.info("✅ Successfully imported DataSourceManager.")
 except ImportError as e:
     print(f"❌ Critical Error: Could not import DataSourceManager. Please ensure 'data_source_manager.py' is in the correct directory. {e}")
     sys.exit(1)
-# --- End Logging Setup ---
 
 # --- Directory Definitions ---
 BASE_DIR = os.getcwd()
@@ -130,16 +124,18 @@ def get_dominant_cycle(data: pd.Series, min_period=3, max_period=100) -> float:
 
 
 def apply_triple_barrier(
-    close_prices: pd.Series,
-    high_prices: pd.Series,
-    low_prices: pd.Series,
-    atr: pd.Series,
-    profit_take_mult: float,
-    stop_loss_mult: float,
-    time_limit_days: int
+        close_prices: pd.Series,
+        high_prices: pd.Series,
+        low_prices: pd.Series,
+        atr: pd.Series,
+        profit_take_mult: float,
+        stop_loss_mult: float,
+        time_limit_days: int,
+        profit_mode: str = 'dynamic',
+        net_profit_target: float = 0.03
 ) -> pd.Series:
     """Implements the Triple Barrier Method for labeling financial time series data."""
-    logger.info("Applying Triple Barrier Method for intelligent labeling...")
+    logger.info(f"Applying Triple Barrier Method in '{profit_mode}' mode...")
     outcomes = pd.Series(index=close_prices.index, dtype=np.int8, data=0)
 
     for i in tqdm(range(len(close_prices) - time_limit_days), desc="Labeling events", leave=False, ascii=True):
@@ -148,7 +144,17 @@ def apply_triple_barrier(
         if pd.isna(current_atr) or current_atr == 0:
             continue
 
-        upper_barrier = entry_price + (current_atr * profit_take_mult)
+        # --- Logic switch for calculating the upper (profit take) barrier ---
+        if profit_mode == 'fixed_net':
+            # Calculate the required gross profit to achieve the net target
+            tax_rate = 0.25
+            commission_rate = 0.004
+            required_gross_profit = (net_profit_target + commission_rate) / (1 - tax_rate)
+            upper_barrier = entry_price * (1 + required_gross_profit)
+        else:  # 'dynamic' mode
+            # This is your original ATR-based system
+            upper_barrier = entry_price + (current_atr * profit_take_mult)
+
         lower_barrier = entry_price - (current_atr * stop_loss_mult)
 
         for j in range(1, time_limit_days + 1):
@@ -165,7 +171,7 @@ def apply_triple_barrier(
     return outcomes
 
 
-def calculate_global_volatility_thresholds(tickers: list, data_source_manager_instance) -> tuple:
+def calculate_global_volatility_thresholds(tickers: list, ibkr_manager) -> tuple:
     """Performs a pre-calculation across all training tickers to find global volatility thresholds."""
     logger.info("🌀 Calculating global volatility thresholds across the training dataset...")
     all_volatilities = []
@@ -174,7 +180,7 @@ def calculate_global_volatility_thresholds(tickers: list, data_source_manager_in
 
     for symbol in tqdm(sample_tickers, desc="Analyzing volatility", ascii=True):
         try:
-            df = data_source_manager_instance.get_stock_data(symbol)
+            df = ibkr_manager.get_stock_data(symbol, days_back=5*365)
             if df is not None and not df.empty and len(df) > 90:
                 # Add this line to normalize the DataFrame columns
                 df = normalize_dataframe_columns(df)
@@ -248,151 +254,94 @@ def normalize_dataframe_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def add_technical_indicators_and_features(df: pd.DataFrame, vol_thresholds: tuple) -> pd.DataFrame:
+# In Create_parquet_file_NASDAQ.py
+
+def add_technical_indicators_and_features(
+        df: pd.DataFrame,
+        vol_thresholds: tuple,
+        qqq_close: pd.Series,
+        profit_mode: str,
+        net_profit_target: float,
+        debug: bool = False
+) -> pd.DataFrame:
     df = df.copy()
-    df = normalize_dataframe_columns(df)  # Add this line here
-    print("Names of df columns - after df.copy()", df.columns)
 
-    # Check minimal length required to calculate any rolling features (20 here)
-    # if df.empty or len(df) < 20:
-    #     logger.warning(f"Insufficient data length ({len(df)} rows) for feature engineering.")
-    #     return pd.DataFrame()
+    if df.empty or len(df) < 90:
+        return pd.DataFrame()
 
-    # Calculate daily return early
+    if debug:
+        print("\n--- STARTING DEBUG FOR add_technical_indicators_and_features ---")
+        print(f"Initial columns: {df.columns.tolist()}")
+
+    df.ta.bbands(length=20, append=True, col_names=("BB_Lower", "BB_Middle", "BB_Upper", "BB_Width", "BB_Position"))
+    df.ta.atr(length=14, append=True, col_names="ATR_14")
+    df.ta.rsi(length=14, append=True, col_names="RSI_14")
+    df.ta.rsi(length=28, append=True, col_names="RSI_28")
+    df.ta.macd(append=True, col_names=("MACD", "MACD_Histogram", "MACD_Signal"))
+
+    # --- THIS IS THE FIX ---
+    # MODIFIED: Provide 4 names to satisfy the library's expectation for ADX.
+    df.ta.adx(length=14, append=True, col_names=("ADX", "ADX_pos", "ADX_neg", "ADXR_temp"))
+    # MODIFIED: Immediately drop the temporary 4th column which we don't need.
+    df.drop(columns=["ADXR_temp"], inplace=True)
+    # --- END FIX ---
+
+    df.ta.mom(length=5, append=True, col_names="Momentum_5")
+    df.ta.obv(append=True)
+
+    if debug:
+        print(f"Columns after ALL indicators: {df.columns.tolist()}")
+        print(f"--- FINISHED DEBUG ---")
+
     df['Daily_Return'] = df['Close'].pct_change()
+    df['Volume_MA_20'] = df['Volume'].rolling(20).mean()
+    df['Volatility_20D'] = df['Daily_Return'].rolling(20).std()
+    df['Z_Score_20'] = (df['Close'] - df['BB_Middle']) / df['Close'].rolling(20).std()
 
-    # Calculate Bollinger Bands (20-day window)
-    bb = BollingerBands(close=df['Close'], window=20, window_dev=2)
-    df['BB_Middle'] = bb.bollinger_mavg()
-    df['BB_Upper'] = bb.bollinger_hband()
-    df['BB_Lower'] = bb.bollinger_lband()
+    if not qqq_close.empty:
+        aligned_qqq = qqq_close.reindex(df.index, method='ffill')
+        df['Correlation_50D_QQQ'] = df['Close'].rolling(50).corr(aligned_qqq)
+    else:
+        df['Correlation_50D_QQQ'] = 0.0
 
-    # Fill NaNs in these columns to prevent data loss
-    df[['Daily_Return', 'BB_Middle', 'BB_Upper', 'BB_Lower']] = \
-        df[['Daily_Return', 'BB_Middle', 'BB_Upper', 'BB_Lower']].bfill().ffill()
-
-    # Calculate Z-Score (make sure to use consistent naming)
-    rolling_std_20 = df['Close'].rolling(20).std()
-    df['Z_Score_20'] = (df['Close'] - df['BB_Middle']) / rolling_std_20
-
-    # Calculate Bollinger Band Width
-    df['BB_Width'] = (df['BB_Upper'] - df['BB_Lower']) / df['BB_Middle']
-
-    # Calculate BB Position relative to bands
-    df['BB_Position'] = (df['Close'] - df['BB_Lower']) / (df['BB_Upper'] - df['BB_Lower'])
-
-    # ATR (Average True Range)
-    atr = AverageTrueRange(high=df['High'], low=df['Low'], close=df['Close'], window=14)
-    df['ATR_14'] = atr.average_true_range()
-
-    # Volume 20-day Moving Average
-    df['Volume_MA_20'] = df['Volume'].rolling(20).mean()  # עדכן לשם הנכון
-
-    # Momentum over 5 days
-    df['Momentum_5'] = df['Close'] - df['Close'].shift(5)
-
-    # ADX indicators
-    adx = ADXIndicator(high=df['High'], low=df['Low'], close=df['Close'], window=14)
-    df['ADX'] = adx.adx()
-    df['ADX_pos'] = adx.adx_pos()
-    df['ADX_neg'] = adx.adx_neg()
-
-    # On-Balance Volume (OBV)
-    df['OBV'] = (np.sign(df['Close'].diff()) * df['Volume']).fillna(0).cumsum()
-
-    # RSI 14 and RSI 28
-    rsi_14 = RSIIndicator(close=df['Close'], window=14)
-    df['RSI_14'] = rsi_14.rsi()
-    df['RSI_14_Smoothed'] = df['RSI_14'].ewm(span=5, adjust=False).mean()
-
-    rsi_28 = RSIIndicator(close=df['Close'], window=28)
-    df['RSI_28'] = rsi_28.rsi()
-
-    # Stochastic Oscillator
-    stoch = StochasticOscillator(high=df['High'], low=df['Low'], close=df['Close'], window=14, smooth_window=3)
-    df['Stoch_%K'] = stoch.stoch()
-    df['Stoch_%D'] = stoch.stoch_signal()
-
-    # MACD and signals
-    macd = MACD(close=df['Close'])
-    df['MACD'] = macd.macd()
-    df['MACD_Signal'] = macd.macd_signal()
-    df['MACD_Histogram'] = macd.macd_diff()
-
-    # KAMA (using your existing function)
-    df['KAMA_10'] = calculate_kama(df['Close'], window=10)
-
-    # Detrended Price Oscillator (DPO)
-    dpo_period = 20
-    dpo_sma = df['Close'].rolling(window=dpo_period).mean().shift(int(dpo_period / 2) + 1)
-    df['DPO_20'] = df['Close'] - dpo_sma
-
-    # Correlation with QQQ ETF (50-day window)
-    try:
-        qqq_df = yf.download("QQQ", start=df.index.min(), end=df.index.max(), progress=False, auto_adjust=True)
-        qqq_close = qqq_df['Close'].reindex(df.index).ffill()
-    except Exception as e:
-        logger.warning(f"Could not download QQQ data: {e}, setting correlation to 0")
-        qqq_close = pd.Series(0, index=df.index)
-
-    df['Correlation_50D_QQQ'] = df['Close'].rolling(50).corr(qqq_close)
-
-    # Smoothed Close price (EWMA)
-    df['Smoothed_Close_5D'] = df['Close'].ewm(span=5, adjust=False).mean()
-
-    # Volatility 20-day std dev
-    df['Volatility_20D'] = df['Close'].pct_change().rolling(20).std()
-
-    # Volatility Clustering based on thresholds
     low_thresh, high_thresh = vol_thresholds
-    df['Volatility_90D'] = df['Close'].pct_change().rolling(90).std()
-    df['Volatility_Cluster'] = 'mid'
-    df.loc[df['Volatility_90D'] < low_thresh, 'Volatility_Cluster'] = 'low'
-    df.loc[df['Volatility_90D'] > high_thresh, 'Volatility_Cluster'] = 'high'
+    df['Volatility_90D'] = df['Daily_Return'].rolling(90).std()
+    df['Volatility_Cluster'] = pd.cut(df['Volatility_90D'], bins=[-np.inf, low_thresh, high_thresh, np.inf],
+                                      labels=['low', 'mid', 'high'])
 
-    # Triple Barrier labeling (your function)
-    tb_labels = apply_triple_barrier(df['Close'], df['High'], df['Low'], df['ATR_14'], 2.0, 2.5, 15)
-    df['Target_Entry'] = (tb_labels == 1).astype(int)
-    df['Target_Profit_Take'] = (tb_labels == 1).astype(int)
-    df['Target_Cut_Loss'] = (tb_labels == -1).astype(int)
+    tb_labels = apply_triple_barrier(
+        close_prices=df['Close'], high_prices=df['High'], low_prices=df['Low'], atr=df['ATR_14'],
+        profit_take_mult=2.0, stop_loss_mult=2.5, time_limit_days=15,
+        profit_mode=profit_mode, net_profit_target=net_profit_target
+    )
+    # --- FIX: Implement correct, distinct labeling ---
+    # Target_Entry is 1 if the trade is expected to be profitable (hits upper barrier first)
+    df['target_entry'] = (tb_labels == 1).astype(int)
 
-    # Future return based target labels (deprecated, keep for backward compatibility)
-    df['Future_Return'] = df['Close'].pct_change(5).shift(-5)
-    df['Target'] = np.select([df['Future_Return'] > 0.02, df['Future_Return'] < -0.02], [1, -1], default=0)
+    # Target_Profit_Take should ALSO be 1 if it hits the upper barrier.
+    # In this simple model, the entry and take-profit signals are the same.
+    # A more advanced version would detect reversals, but this is a correct starting point.
+    df['target_profit_take'] = (tb_labels == 1).astype(int)
 
-    # Dominant Cycle Period (use your function)
-    df['Dominant_Cycle_126D'] = df['Close'].rolling(126).apply(lambda x: get_dominant_cycle(x),
-                                                               raw=False)
+    # Target_Cut_Loss is 1 if the trade hits the lower barrier first.
+    # This is mutually exclusive with the other two.
+    df['target_cut_loss'] = (tb_labels == -1).astype(int)
 
-    # Fill remaining NaNs extensively to avoid loss of data rows
-    df = df.bfill().ffill()  #
+    df = df.bfill().ffill()
+    df.dropna(inplace=True)
 
-    print("[DEBUG] Columns after feature calculations:")
-    print(df.columns.tolist())
-    print("[DEBUG] Sample rows after feature calculations:")
-    print(df.head(3))
+    # --- Standardize all columns to lowercase before saving ---
+    df.columns = [col.lower() for col in df.columns]
 
-    # Ensure the expected columns are present
     expected_columns = [
-        # Core data
-        'Open', 'High', 'Low', 'Close', 'Volume', 'Datetime',
-        # Gen-2 Features (retained)
-        'Volume_MA_20', 'RSI_14', 'Momentum_5', 'MACD', 'MACD_Signal', 'MACD_Histogram',
-        'BB_Position', 'Volatility_20D', 'ATR_14', 'ADX', 'ADX_pos', 'ADX_neg',
-        'OBV', 'RSI_28', 'Dominant_Cycle_126D',
-        # New Gen-3 Features
-        'Z_Score_20', 'BB_Width', 'Correlation_50D_QQQ', 'Smoothed_Close_5D',
-        'RSI_14_Smoothed', 'BB_Upper', 'BB_Lower', 'BB_Middle', 'Daily_Return',
-        # Gen-3 and Gen-2 Targets/Labels
-        'Volatility_Cluster',
-        'Target_Entry', 'Target_Profit_Take', 'Target_Cut_Loss', 'Target'
+        'open', 'high', 'low', 'close', 'volume', 'volume_ma_20', 'rsi_14', 'momentum_5', 'macd', 'macd_signal',
+        'macd_histogram',
+        'bb_position', 'volatility_20d', 'atr_14', 'adx', 'adx_pos', 'adx_neg', 'obv', 'rsi_28',
+        'z_score_20', 'bb_width', 'correlation_50d_qqq', 'bb_upper', 'bb_lower', 'bb_middle', 'daily_return',
+        'volatility_cluster', 'target_entry', 'target_profit_take', 'target_cut_loss'
     ]
-
-    # Ensure the expected columns are present
-    # df.columns = [c.capitalize() for c in df.columns]  # Capitalize to match the expected schema
-    # Ensure the expected columns are present
-    actual_columns = [col for col in expected_columns if col in df.columns]
-    return df[actual_columns]
+    existing_cols = [col for col in expected_columns if col in df.columns]
+    return df[existing_cols]
 
 
 def extend_date_range_for_features(start_date: pd.Timestamp, lookback_days: int) -> pd.Timestamp:
@@ -429,7 +378,7 @@ def get_enhanced_stock_data(symbol: str, user_start_date: pd.Timestamp, user_end
     return featured_df
 
 
-def process_ticker_list(tickers, output_dir, vol_thresholds, data_source_manager):
+def process_ticker_list(tickers, output_dir, vol_thresholds, data_source_manager, qqq_data, profit_mode, net_profit_target):
     """
     Process a list of tickers by extracting features and saving them as parquet files.
 
@@ -448,6 +397,9 @@ def process_ticker_list(tickers, output_dir, vol_thresholds, data_source_manager
             # Fetch raw stock data
             df = data_source_manager.get_stock_data(symbol)
 
+            # Normalize the DataFrame columns immediately after fetching
+            df = normalize_dataframe_columns(df)
+
             # Check if data exists and is not empty
             if df is None or df.empty:
                 skipped_count += 1
@@ -455,7 +407,9 @@ def process_ticker_list(tickers, output_dir, vol_thresholds, data_source_manager
                 continue
 
             # Generate features using the feature engineering function
-            featured_df = add_technical_indicators_and_features(df.copy(), vol_thresholds)
+            featured_df = add_technical_indicators_and_features(
+                df.copy(), vol_thresholds, qqq_data, profit_mode, net_profit_target
+            )
 
             # Skip if feature extraction resulted in empty dataframe
             if featured_df.empty:
@@ -486,77 +440,82 @@ def process_ticker_list(tickers, output_dir, vol_thresholds, data_source_manager
         logger.info(f"Detailed skipped tickers log saved at: {log_filepath}")
 
 
-# def main():
-#     """Main function to orchestrate the data processing pipeline."""
-#     parser = argparse.ArgumentParser(description='StockWise NASDAQ Data Processor - Gen 3')
-#     parser.add_argument('--max-stocks', type=int, help='Maximum number of stocks to process')
-#     args = parser.parse_args()
-#
-#     logger.info("✨ Initializing DataSourceManager for the entire session...")
-#     data_source_manager = DataSourceManager()
-#     logger.info("✅ DataSourceManager initialized.")
-#
-#     train_file = os.path.join(LOG_DIR, "nasdaq_train_comprehensive.txt")
-#     test_file = os.path.join(LOG_DIR, "nasdaq_test_comprehensive.txt")
-#
-#     # --- CHANGE THIS SECTION FOR A SMALL, QUICK TEST ---
-#     # Overwrite the generated lists with a very small, fixed set of tickers
-#     train_tickers = ['AAPL', 'MSFT', 'GOOGL']
-#     test_tickers = ['AMZN', 'NVDA']
-#     logger.info(f"Using a small test set: Training {train_tickers}, Testing {test_tickers}")
-#     # --- END OF TEST CHANGE ---
-#
-#     train_tickers, test_tickers = generate_comprehensive_nasdaq_ticker_lists(train_file, test_file, args.max_stocks)
-#
-#     global_vol_thresholds = calculate_global_volatility_thresholds(train_tickers, data_source_manager)
-#
-#     if train_tickers:
-#         logger.info(f"\n🚀 Processing {len(train_tickers)} training tickers...")
-#         process_ticker_list(train_tickers, TRAIN_FEATURES_DIR, global_vol_thresholds, data_source_manager)
-#
-#     if test_tickers:
-#         logger.info(f"\n🚀 Processing {len(test_tickers)} testing tickers...")
-#         process_ticker_list(test_tickers, TEST_FEATURES_DIR, global_vol_thresholds, data_source_manager)
-#
-#     # No need to disconnect explicitly from yfinance in this version
-#     logger.info("\n🎉 Gen-3 feature file generation pipeline finished.")
-
 def main():
-    """Main function to orchestrate the data processing pipeline."""
+    """Main function to orchestrate the data processing pipeline for multiple strategies."""
     parser = argparse.ArgumentParser(description='StockWise NASDAQ Data Processor - Gen 3')
     parser.add_argument('--max-stocks', type=int, help='Maximum number of stocks to process')
-    # Add a new boolean argument for the small test mode
     parser.add_argument('--small-test', action='store_true', help='Run on a small, hardcoded test set.')
+    # NEW: Add arguments to control the strategy from the command line
+    parser.add_argument('--profit-mode', type=str, default='all', choices=['dynamic', 'fixed_net', 'all'],
+                        help='Profit target mode to generate data for.')
+    parser.add_argument('--net-profit-target', type=float,
+                        help='Single net profit target for fixed_net mode (e.g., 0.03).')
     args = parser.parse_args()
 
-    logger.info("✨ Initializing DataSourceManager for the entire session...")
-    data_source_manager = DataSourceManager()
-    logger.info("✅ DataSourceManager initialized.")
+    # In main()
+    logger.info("🔌 Initializing Professional IBKR Manager for data collection...")
+    ibkr_manager = ProfessionalIBKRManager(debug=False)  # Set debug=True for more verbose output
+    if not ibkr_manager.connect_with_fallback():
+        logger.critical("❌ Failed to connect to IBKR. Please ensure TWS or Gateway is running.")
+        sys.exit(1)  # Exit if we can't connect
 
-    train_file = os.path.join(LOG_DIR, "nasdaq_train_comprehensive.txt")
-    test_file = os.path.join(LOG_DIR, "nasdaq_test_comprehensive.txt")
+    # NEW: Fetch QQQ Data ONCE at the start
+    logger.info("📅 Fetching QQQ data for correlation calculations...")
+    try:
+        qqq_df = yf.download("QQQ", period="max", progress=False, auto_adjust=True)
+        qqq_close = qqq_df['Close']
+    except Exception as e:
+        logger.error(f"❌ Could not download QQQ data. Correlation feature will be disabled. Error: {e}")
+        qqq_close = pd.Series()
 
-    # --- NEW LOGIC: Use an if/else block to select the ticker list ---
+    # Get ticker lists
     if args.small_test:
-        train_tickers = ['AAPL', 'MSFT', 'GOOGL']
-        test_tickers = ['AMZN', 'NVDA']
-        logger.info(f"Using a small test set: Training {train_tickers}, Testing {test_tickers}")
+        train_tickers, test_tickers = ['AAPL', 'MSFT', 'GOOGL'], ['AMZN', 'NVDA']
     else:
-        # This is the original logic for running a full or limited run
+        train_file = os.path.join(LOG_DIR, "nasdaq_train_comprehensive.txt")
+        test_file = os.path.join(LOG_DIR, "nasdaq_test_comprehensive.txt")
         train_tickers, test_tickers = generate_comprehensive_nasdaq_ticker_lists(train_file, test_file, args.max_stocks)
-    # --- END OF NEW LOGIC ---
 
-    global_vol_thresholds = calculate_global_volatility_thresholds(train_tickers, data_source_manager)
+    global_vol_thresholds = calculate_global_volatility_thresholds(train_tickers, ibkr_manager)
 
-    if train_tickers:
-        logger.info(f"\n🚀 Processing {len(train_tickers)} training tickers...")
-        process_ticker_list(train_tickers, TRAIN_FEATURES_DIR, global_vol_thresholds, data_source_manager)
+    # NEW: Define strategies to run
+    strategies = []
+    if args.profit_mode in ['dynamic', 'all']:
+        strategies.append({'mode': 'dynamic', 'target': 0})  # Target is unused in dynamic mode
+    if args.profit_mode in ['fixed_net', 'all']:
+        if args.net_profit_target:  # If a single target is specified
+            strategies.append({'mode': 'fixed_net', 'target': args.net_profit_target})
+        else:  # Default to the 2, 3, 4 percent set
+            for target in [0.02, 0.03, 0.04]:
+                strategies.append({'mode': 'fixed_net', 'target': target})
 
-    if test_tickers:
-        logger.info(f"\n🚀 Processing {len(test_tickers)} testing tickers...")
-        process_ticker_list(test_tickers, TEST_FEATURES_DIR, global_vol_thresholds, data_source_manager)
+    # NEW: Loop through the defined strategies
+    for strategy in strategies:
+        mode = strategy['mode']
+        target = strategy['target']
 
-    logger.info("\n🎉 Gen-3 feature file generation pipeline finished.")
+        if mode == 'dynamic':
+            subdir_name = "dynamic_profit"
+        else:  # fixed_net
+            subdir_name = f"{int(target * 100)}per_profit"
+
+        logger.info(f"\n{'=' * 80}\n🚀 GENERATING DATA FOR STRATEGY: {subdir_name.upper()}\n{'=' * 80}")
+
+        train_output_dir = os.path.join(TRAIN_FEATURES_DIR, subdir_name)
+        test_output_dir = os.path.join(TEST_FEATURES_DIR, subdir_name)
+        os.makedirs(train_output_dir, exist_ok=True)
+        os.makedirs(test_output_dir, exist_ok=True)
+
+        if train_tickers:
+            process_ticker_list(train_tickers, train_output_dir, global_vol_thresholds, ibkr_manager, qqq_close,
+                                mode, target)
+        if test_tickers:
+            process_ticker_list(test_tickers, test_output_dir, global_vol_thresholds, ibkr_manager, qqq_close,
+                                mode, target)
+
+    logger.info("\n🎉 Disconnecting from IBKR.")
+    ibkr_manager.disconnect()
+    logger.info("🎉 All data generation pipelines finished successfully.")
 
 
 if __name__ == "__main__":
