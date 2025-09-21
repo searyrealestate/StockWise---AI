@@ -2,7 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import ta
+import pandas_ta as ta
 import joblib
 import json
 import os
@@ -21,6 +21,17 @@ st.set_page_config(
     page_icon="🏢",
     layout="wide"
 )
+
+# Add this helper function to your script
+
+def normalize_dataframe_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Normalizes a multi-indexed DataFrame from yfinance to a simple single-level index.
+    """
+    if isinstance(df.columns, pd.MultiIndex):
+        # Flatten the multi-level column index
+        df.columns = df.columns.droplevel(0)
+    return df
 
 
 # --- Feature Engineering Pipeline (for Gen-3 Model) ---
@@ -44,62 +55,84 @@ class FeatureCalculator:
 
     def calculate_all_features(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
-        if df.empty or len(df) < 50:
+        if df.empty or len(df) < 90:
             return pd.DataFrame()
-        close, high, low, volume = df['Close'].squeeze(), df['High'].squeeze(), df['Low'].squeeze(), df[
-            'Volume'].squeeze()
 
-        # --- Existing and New Gen-3 Feature Calculations ---
-        df['Daily_Return'] = close.pct_change()
-        df['ATR_14'] = ta.volatility.AverageTrueRange(high=high, low=low, close=close, window=14).average_true_range()
-        df['Volume_MA_20'] = ta.trend.sma_indicator(volume, window=20)
-        df['RSI_14'] = ta.momentum.rsi(close, window=14)
-        df['Momentum_5'] = close.diff(5)
-        macd = ta.trend.MACD(close=close)
-        df['MACD'], df['MACD_Signal'], df['MACD_Histogram'] = macd.macd(), macd.macd_signal(), macd.macd_diff()
-        bb = ta.volatility.BollingerBands(close=close, window=20, window_dev=2)
-        df['BB_Upper'], df['BB_Lower'], df[
-            'BB_Middle'] = bb.bollinger_hband(), bb.bollinger_lband(), bb.bollinger_mavg()
-        df['BB_Position'] = bb.bollinger_pband()
-        df['Volatility_20D'] = df['Daily_Return'].rolling(window=20).std()
-        adx_indicator = ta.trend.ADXIndicator(high=high, low=low, close=close, window=14)
-        df['ADX'], df['ADX_pos'], df['ADX_neg'] = adx_indicator.adx(), adx_indicator.adx_pos(), adx_indicator.adx_neg()
-        df['OBV'] = ta.volume.OnBalanceVolumeIndicator(close=close, volume=volume).on_balance_volume()
-        df['RSI_28'] = ta.momentum.rsi(close, window=28)
-        df['Dominant_Cycle_126D'] = close.rolling(window=126, min_periods=50).apply(self.get_dominant_cycle, raw=False)
+        # --- DEBUG PRINTS ---
+        print("\n--- STARTING DEBUG FOR FeatureCalculator ---")
+        print(f"1. Initial columns: {df.columns.tolist()}")
 
-        # New Statistical Features
-        df['Z_Score_20'] = (df['Close'] - df['BB_Middle']) / df['Close'].rolling(20).std()
-        df['BB_Width'] = (df['BB_Upper'] - df['BB_Lower']) / df['BB_Middle']
+        # MODIFIED: Standardize column names to lowercase for pandas-ta compatibility
+        df.columns = [col.lower() for col in df.columns]
+        print(f"2. Columns after converting to lowercase: {df.columns.tolist()}")
 
-        # New Contextual Feature
         try:
-            qqq_df = yf.download("QQQ", start=df.index.min(), end=df.index.max(), progress=False, auto_adjust=True)
-            qqq_close = qqq_df['Close'].reindex(df.index, method='ffill')
-            df['Correlation_50D_QQQ'] = df['Close'].rolling(50).corr(qqq_close)
-        except Exception:
-            df['Correlation_50D_QQQ'] = np.nan
 
-        # Smoothed Features
-        df['Smoothed_Close_5D'] = df['Close'].ewm(span=5, adjust=False).mean()
-        df['RSI_14_Smoothed'] = df['RSI_14'].ewm(span=5, adjust=False).mean()
+            # Use pandas-ta for all indicators to match the training pipeline
+            df.ta.bbands(length=20, append=True, col_names=("bb_lower", "bb_middle", "bb_upper", "bb_width", "bb_position"))
+            df.ta.atr(length=14, append=True, col_names="atr_14")
+            df.ta.rsi(length=14, append=True, col_names="rsi_14")
+            df.ta.rsi(length=28, append=True, col_names="rsi_28")
+            df.ta.macd(append=True, col_names=("macd", "macd_histogram", "macd_signal"))
+            df.ta.adx(length=14, append=True, col_names=("adx", "adx_pos", "adx_neg"))
+            df.ta.mom(length=5, append=True, col_names="Momentum_5")
+            df.ta.obv(append=True)
+            print(f"3. Columns after all pandas-ta indicators: {df.columns.tolist()}")
+        except Exception as e:
+            print(f"--- ERROR during pandas-ta calculations ---")
+            print(e)
+            print("--- END DEBUG ---")
+            return pd.DataFrame()
 
-        # Volatility Clustering (NOTE: This is done globally in data pipeline, mocking here for live analysis)
-        df['Volatility_90D'] = df['Daily_Return'].rolling(90).std()
-        # Mocking the cluster labels for live prediction; real system would load this from data.
-        df['Volatility_Cluster'] = pd.cut(df['Volatility_90D'], bins=3, labels=['low', 'mid', 'high'])
+        df['daily_return'] = df['close'].pct_change()
+        df['volume_ma_20'] = df['volume'].rolling(20).mean()
+        df['volatility_20d'] = df['daily_return'].rolling(20).std()
+        df['z_score_20'] = (df['close'] - df['bb_middle']) / df['close'].rolling(20).std()
 
-        df.dropna(inplace=True)
+        try:
+            qqq_df = yf.download("QQQ", start=df.index.min() - timedelta(days=70), end=df.index.max(), progress=False,
+                                 auto_adjust=True)
+            if not qqq_df.empty:
+                qqq_df.columns = [col.lower() for col in qqq_df.columns]  # Also standardize QQQ columns
+                qqq_close = qqq_df['close'].reindex(df.index, method='ffill')
+                df['correlation_50d_qqq'] = df['close'].rolling(50).corr(qqq_close)
+
+            else:
+                print("qqq_df.empty in calculate_all_features")
+                df['correlation_50d_qqq'] = 0.0
+        except Exception as e:
+            print(f"--- ERROR qqq_df.empty ---")
+            print(e)
+            df['correlation_50d_qqq'] = 0.0
+
+        # Mocking the cluster labels for live prediction
+        df['volatility_90d'] = df['daily_return'].rolling(90).std()
+        # In a real system, thresholds would be loaded, but for the UI we can use dynamic quantiles.
+        low_thresh, high_thresh = df['volatility_90d'].quantile([0.33, 0.66])
+        df['volatility_cluster'] = pd.cut(df['volatility_90d'], bins=[-np.inf, low_thresh, high_thresh, np.inf],
+                                          labels=['low', 'mid', 'high'])
+
+        # # Rename the core columns back to TitleCase before returning the DataFrame
+        # df.rename(columns={
+        #     'open': 'Open', 'high': 'High', 'low': 'Low',
+        #     'close': 'Close', 'volume': 'Volume'
+        # }, inplace=True)
+
+        df.bfill(inplace=True)
+        df.ffill(inplace=True)
         return df
 
 
 # --- Main Application Class (with Gen-3 Architecture) ---
 class ProfessionalStockAdvisor:
-    def __init__(self, debug=False, download_log=False, data_source_manager=None, testing_mode=False):
+    def __init__(self, model_dir: str, data_source_manager=None, debug=False, testing_mode=False, download_log=False):
         self.log_entries = []
-        self.debug = debug
-        self.download_log = download_log
+        self.debug = debug  # Use the passed value
+        self.model_dir = model_dir
+        self.download_log = download_log # Use the passed value
+
         self.testing_mode = testing_mode
+
         if data_source_manager:
             self.data_source_manager = data_source_manager
         elif self.testing_mode:
@@ -113,10 +146,16 @@ class ProfessionalStockAdvisor:
         self.tax = 0.25
         self.broker_fee = 0.004
         self.position = {}  # New: Tracks the current open position for the state machine
-        self.model_dir = "models/NASDAQ-gen3"
-        self.model_version_info = "Gen-3: Orchestra of Specialists"
+        self.model_version_info = f"Gen-3: {os.path.basename(model_dir)}"
         if self.download_log: self.log_file = self.setup_log_file()
         self.log("Application Initialized.", "INFO")
+        if data_source_manager:
+            self.data_source_manager = data_source_manager
+        elif self.testing_mode:
+            self.data_source_manager = None  # Correctly handle testing mode
+        else:
+            self.data_source_manager = DataSourceManager(use_ibkr=False)
+
 
     def _load_gen3_models(self):
         """
@@ -185,9 +224,9 @@ class ProfessionalStockAdvisor:
                 self.log("Could not download SPY data for market trend analysis.", "WARNING")
                 return True  # Failsafe
 
-            spy_data[f'SMA_{days}'] = ta.trend.sma_indicator(spy_data['Close'], window=days)
-            latest_price = spy_data['Close'].iloc[-1]
-            moving_average = spy_data[f'SMA_{days}'].iloc[-1]
+            spy_data[f'sma_{days}'] = ta.trend.sma_indicator(spy_data['close'], window=days)
+            latest_price = spy_data['close'].iloc[-1]
+            moving_average = spy_data[f'sma_{days}'].iloc[-1]
             return latest_price > moving_average
         except Exception as e:
             self.log(f"Error during market trend analysis: {e}", "WARNING")
@@ -199,13 +238,16 @@ class ProfessionalStockAdvisor:
             # Step 1: The Conductor. Assess overall market health.
             if not self.is_market_in_uptrend():
                 stock_data = self.data_source_manager.get_stock_data(ticker_symbol)
-                price_on_date = stock_data.loc[pd.to_datetime(analysis_date)]['Close'] if pd.to_datetime(
+                price_on_date = stock_data.loc[pd.to_datetime(analysis_date)]['close'] if pd.to_datetime(
                     analysis_date) in stock_data.index else 0
                 return stock_data, {'action': "WAIT / AVOID", 'confidence': 99.9, 'current_price': price_on_date,
                                     'reason': "Market Downtrend", 'buy_date': None, 'agent': "Market Regime Agent"}
 
             full_stock_data = self.data_source_manager.get_stock_data(ticker_symbol)
             if full_stock_data is None or full_stock_data.empty: return None, None
+
+            # Normalize the DataFrame columns immediately after fetching
+            full_stock_data = normalize_dataframe_columns(full_stock_data)
 
             # Step 2: Feature Engineering
             featured_data = self.calculator.calculate_all_features(
@@ -214,7 +256,7 @@ class ProfessionalStockAdvisor:
                                                              'reason': "Insufficient data for analysis."}
 
             latest_row = featured_data.iloc[-1]
-            cluster = latest_row['Volatility_Cluster']
+            cluster = latest_row['volatility_cluster']
 
             # Step 3: State Check (Is there an open position?)
             if self.position.get(ticker_symbol):
@@ -222,7 +264,7 @@ class ProfessionalStockAdvisor:
                 current_position = self.position[ticker_symbol]
 
                 # Dynamic Stop-Loss Check (as a primary exit condition)
-                if latest_row['Close'] <= current_position['stop_loss_price']:
+                if latest_row['close'] <= current_position['stop_loss_price']:
                     del self.position[ticker_symbol]
                     return full_stock_data, {'action': "CUT LOSS", 'reason': "Stop-loss hit."}
 
@@ -271,18 +313,18 @@ class ProfessionalStockAdvisor:
 
                 if entry_pred == 1:
                     # A BUY signal is detected!
-                    stop_loss_price = latest_row['Close'] - (latest_row['ATR_14'] * 2.5)  # Dynamic ATR stop-loss
-                    self.position[ticker_symbol] = {'entry_price': latest_row['Close'],
+                    stop_loss_price = latest_row['close'] - (latest_row['atr_14'] * 2.5)  # Dynamic ATR stop-loss
+                    self.position[ticker_symbol] = {'entry_price': latest_row['close'],
                                                     'stop_loss_price': stop_loss_price}
 
                     return full_stock_data, {'action': "BUY", 'confidence': entry_prob[1] * 100,
-                                             'current_price': float(latest_row['Close']),
+                                             'current_price': float(latest_row['close']),
                                              'buy_date': latest_row.name.date(),
                                              'agent': f"{cluster.capitalize()}-Volatility Entry Agent",
                                              'stop_loss_price': stop_loss_price}
                 else:
                     return full_stock_data, {'action': "WAIT", 'confidence': entry_prob[0] * 100,
-                                             'current_price': float(latest_row['Close']),
+                                             'current_price': float(latest_row['close']),
                                              'agent': f"{cluster.capitalize()}-Volatility Entry Agent"}
 
         except Exception as e:
@@ -316,25 +358,26 @@ class ProfessionalStockAdvisor:
         if stock_data.empty: return None
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.8, 0.2])
         fig.add_trace(
-            go.Candlestick(x=stock_data.index, open=stock_data['Open'], high=stock_data['High'], low=stock_data['Low'],
-                           close=stock_data['Close'], name='Price'), row=1, col=1)
+            go.Candlestick(x=stock_data.index, open=stock_data['open'], high=stock_data['high'], low=stock_data['low'],
+                           close=stock_data['close'], name='Price'), row=1, col=1)
         for period, color in [(5, 'orange'), (20, 'blue'), (50, 'red')]:
             if len(stock_data) >= period:
-                ma = stock_data['Close'].rolling(window=period).mean()
+                ma = stock_data['close'].rolling(window=period).mean()
                 fig.add_trace(go.Scatter(x=stock_data.index, y=ma, mode='lines', name=f'MA{period}',
                                          line=dict(color=color, width=1)), row=1, col=1)
         if len(stock_data) >= 20:
             try:
-                bb = ta.volatility.BollingerBands(stock_data['Close'])
-                fig.add_trace(go.Scatter(x=stock_data.index, y=bb.bollinger_hband(), mode='lines', name='BB Upper',
+                # Create a temporary DataFrame for the calculation
+                bb_df = ta.bbands(close=stock_data['close'], length=20)
+                fig.add_trace(go.Scatter(x=stock_data.index, y=bb_df['BBU_20_2.0'], mode='lines', name='BB Upper',
                                          line=dict(color='gray', dash='dot', width=1), showlegend=False), row=1, col=1)
-                fig.add_trace(go.Scatter(x=stock_data.index, y=bb.bollinger_lband(), mode='lines', name='BB Lower',
+                fig.add_trace(go.Scatter(x=stock_data.index, y=bb_df['BBL_20_2.0'], mode='lines', name='BB Lower',
                                          line=dict(color='gray', dash='dot', width=1), fill='tonexty',
                                          fillcolor='rgba(128,128,128,0.1)', showlegend=False), row=1, col=1)
             except Exception as e:
                 self.log(f"Could not calculate Bollinger Bands: {e}", "WARNING")
         fig.add_trace(
-            go.Bar(x=stock_data.index, y=stock_data['Volume'], name='Volume', marker_color='rgba(100,110,120,0.6)'),
+            go.Bar(x=stock_data.index, y=stock_data['volume'], name='Volume', marker_color='rgba(100,110,120,0.6)'),
             row=2, col=1)
         fig.add_vline(x=analysis_date, line_width=1, line_dash="dash", line_color="white", name="Analysis Date",
                       row=1)
@@ -363,54 +406,62 @@ class ProfessionalStockAdvisor:
         return fig
 
 
-def create_enhanced_interface():
-    # --- Part 1: Setup and Sidebar ---
-    st.title("🏢 StockWise AI Trading Advisor")
-    if 'advisor' not in st.session_state: st.session_state.advisor = ProfessionalStockAdvisor()
-    advisor = st.session_state.advisor
-    if 'analysis_date' not in st.session_state: st.session_state.analysis_date = datetime.now().date()
-    st.markdown(f"### Powered by `{advisor.model_version_info}`")
-    st.markdown("---")
+# In stockwise_simulation.py
 
-    def set_date_to_today():
-        st.session_state.analysis_date = datetime.now().date()
-        st.session_state.advisor.position = {}
+def create_enhanced_interface():
+    st.title("🏢 StockWise AI Trading Advisor")
+
+    AGENT_CONFIGS = {
+        'Dynamic Profit (Recommended)': "models/NASDAQ-gen3-dynamic",
+        '2% Net Profit': "models/NASDAQ-gen3-2pct",
+        '3% Net Profit': "models/NASDAQ-gen3-3pct",
+        '4% Net Profit': "models/NASDAQ-gen3-4pct"
+    }
 
     st.sidebar.header("🎯 Trading Analysis")
+
+    selected_agent_name = st.sidebar.selectbox(
+        "🧠 Select AI Agent",
+        options=list(AGENT_CONFIGS.keys())
+    )
+    selected_model_dir = AGENT_CONFIGS[selected_agent_name]
+
+    if st.session_state.advisor.model_dir != selected_model_dir:
+        with st.spinner(f"Loading '{selected_agent_name}' agent..."):
+            st.session_state.advisor = ProfessionalStockAdvisor(model_dir=selected_model_dir)
+
+    advisor = st.session_state.advisor
+    st.markdown(f"### Now using `{selected_agent_name}` Agent")
+    st.markdown("---")
+
     stock_symbol = st.sidebar.text_input("📊 Stock Symbol", value="NVDA").upper().strip()
-    st.sidebar.date_input("📅 Analysis Date", key='analysis_date')
-    st.sidebar.button("Today", on_click=set_date_to_today, use_container_width=True)
-    investment_amount = st.sidebar.number_input("💰 Investment Amount ($)", min_value=1.0, value=1000.0, step=100.0)
+    analysis_date = st.sidebar.date_input("📅 Analysis Date", value=datetime.now().date())
 
-    if stock_symbol:
-        if 'last_validated_symbol' not in st.session_state or st.session_state.last_validated_symbol != stock_symbol:
-            with st.spinner(f"Validating {stock_symbol}..."):
-                st.session_state.is_valid_symbol = advisor.validate_symbol_professional(stock_symbol)
-                st.session_state.last_validated_symbol = stock_symbol
-        if st.session_state.is_valid_symbol:
-            st.sidebar.success(f"✅ {stock_symbol} is a valid symbol.")
-        else:
-            st.sidebar.error(f"❌ {stock_symbol} is not a valid symbol.")
+    # --- THIS IS THE FIX ---
+    # Define the button only ONCE
     analyze_btn = st.sidebar.button("🚀 Run Professional Analysis", type="primary", use_container_width=True)
+    # --- END FIX ---
 
-    # --- Part 2: Main Display Logic ---
-    if not analyze_btn or not stock_symbol:
+    if not analyze_btn:
         st.info("Enter a stock symbol and date in the sidebar, then click 'Run Analysis' to begin.")
         return
-    if not st.session_state.get('is_valid_symbol', False):
-        st.error(f"Cannot analyze {stock_symbol} as it is not a valid symbol.")
+
+    if not stock_symbol:
+        st.warning("Please enter a stock symbol.")
         return
+
     if not advisor.models:
         st.error("AI models could not be loaded. Please check the logs.")
         return
 
     with st.spinner(f"Running analysis for {stock_symbol}..."):
-        stock_data, result = advisor.run_analysis(stock_symbol, st.session_state.analysis_date)
+        stock_data, result = advisor.run_analysis(stock_symbol, analysis_date)
+
     if not result:
         st.error("Analysis failed. Please check the debug logs for more information.")
         return
 
-    # --- Part 3: Display Successful Results ---
+    # --- Display Successful Results ---
     action = result['action']
     confidence = result.get('confidence', 0)
     current_price = result.get('current_price', 0)
@@ -427,95 +478,53 @@ def create_enhanced_interface():
     with col2:
         st.info(f"🧠 **Agent**: {agent}")
     with col3:
-        if confidence < 55:
-            color = "red"
-        elif 55 <= confidence < 60:
-            color = "yellow"
-        elif 60 <= confidence < 70:
-            color = "orange"
-        elif 70 <= confidence < 80:
-            color = "green"
-        else:
-            color = "blue"
-        st.markdown(f"""<div style="text-align: right;"><span style="font-size: 1em;">Model Confidence</span><br><span 
-        style="font-size: 2.5em; color: {color}; font-weight: bold;">{confidence:.1f}%</span></div>""",
-                    unsafe_allow_html=True)
+        st.metric("Model Confidence", f"{confidence:.1f}%")
 
     st.subheader("💰 Price Information & Analysis")
-    price_col, target_buy_col, target_sell_col, stop_col, profit_col = st.columns(5)
+    price_col, target_buy_col, stop_col = st.columns(3)
     price_col.metric("Current Price", f"${current_price:.2f}")
 
     if "BUY" in action:
         buy_price = result.get('current_price')
-        target_buy_col.metric("🎯 Target Buy", f"${buy_price:.2f}", delta="Signal", delta_color="normal")
+        target_buy_col.metric("🎯 Target Buy", f"${buy_price:.2f}")
         stop_loss_price = result.get('stop_loss_price')
         stop_col.metric("🔴 Stop-Loss", f"${stop_loss_price:.2f}")
-        # Profit target is now dynamic based on a trailing exit, so no fixed value to display
-        target_sell_col.metric("🟢 Target Sell", "Model-Driven", delta="Dynamic")
-    elif "SELL" in action or "CUT LOSS" in action:
-        # For exit signals, we don't have a new entry price, but we can show the last known values
-        # Assume the last open position is tracked for display purposes
-        stop_col.metric("🔴 Stop-Loss", "N/A")
-        target_sell_col.metric("🟢 Target Sell", f"Exit Signal", delta="Action")
 
     st.subheader("📊 Price Chart")
-    fig = advisor.create_chart(stock_symbol, stock_data, result, st.session_state.analysis_date)
+    fig = advisor.create_chart(stock_symbol, stock_data, result, analysis_date)
     if fig:
         st.plotly_chart(fig, use_container_width=True)
-        with st.expander("Chart Legend Explained"):
-            st.markdown("""
-            - **Dashed Vertical Line**: The date you selected for analysis.
-            - **Cyan Circle Marker**: The buying price on the analysis date.
-            - **Green Dashed Horizontal Line**: The target selling price.
-            - **Red Dashed Horizontal Line**: The stop-loss price.
-            - **Colored Lines**: 5-day (Orange), 20-day (Blue), and 50-day (Red) Simple Moving Averages.
-            - **Shaded Area**: Bollinger Bands, indicating market volatility.
-            """)
-    else:
-        st.warning("Could not display chart.")
 
     st.subheader("📝 Action Summary")
     if "BUY" in action and result.get('buy_date'):
-        buy_date_str = result['buy_date'].strftime('%B %d, %Y')
-        stop_loss_price = result.get('stop_loss_price')
-        st.markdown("#### For Those Looking to Buy:")
         st.success(f"""
-        - **Action:** The model recommends **BUYING** {stock_symbol}.
-        - **When:** A high-probability entry point was detected on or around **{buy_date_str}**.
-        - **Price:** The suggested entry price is **${current_price:.2f}**.
-        """)
-        st.markdown("#### For Existing Stock Holders:")
-        st.info(f"""
-        - **Action:** The model recommends **HOLDING** your position.
-        - **Next Action:** The system will monitor for a model-driven `SELL` or `CUT LOSS` signal.
-        - **Stop-Loss:** To manage risk, a dynamic ATR-based stop-loss would be placed at **${stop_loss_price:.2f}**.
+        - **Action:** The model recommends **BUYING** {stock_symbol} at **${current_price:.2f}**.
+        - **Agent:** The decision was made by the `{agent}`.
+        - **Risk Management:** A dynamic stop-loss is suggested at **${result.get('stop_loss_price'):.2f}**.
         """)
     elif "SELL" in action or "CUT LOSS" in action:
-        st.markdown("#### For Existing Stock Holders:")
         st.error(f"""
-        - **Action:** The model recommends **{action}** the position.
-        - **Reason:** An exit signal was triggered by the `{agent}`.
+        - **Action:** The model recommends **{action}** the position in {stock_symbol}.
+        - **Agent:** The exit signal was triggered by the `{agent}`.
         """)
-
     else:
-        st.markdown("#### For Those Looking to Buy:")
         st.warning(f"""
-        - **Action:** The model recommends to **WAIT or AVOID** buying {stock_symbol} at its current price.
-        - **Reason:** The decision was made by the `{agent}`.
-        """)
-        st.markdown("#### For Existing Stock Holders:")
-        st.info(f"""
-        - **Action:** The model recommends **HOLDING** your position.
-        - **Recommendation:** The system will continue to monitor for an exit signal.
+        - **Action:** The model recommends to **WAIT or AVOID** buying {stock_symbol}.
+        - **Agent:** The decision was made by the `{agent}`.
         """)
 
 
 # --- Main Execution ---
 if __name__ == "__main__":
-    if 'advisor' not in st.session_state or st.session_state.advisor.model_version_info == "Gen-2 Optimized Model":
-        st.session_state.advisor = ProfessionalStockAdvisor()
+    # Define the default agent to load on the very first run
+    DEFAULT_AGENT_MODEL_DIR = "models/NASDAQ-gen3-dynamic"
 
+    # Initialize the advisor in the session state ONCE if it doesn't exist
+    if 'advisor' not in st.session_state:
+        st.session_state.advisor = ProfessionalStockAdvisor(model_dir=DEFAULT_AGENT_MODEL_DIR)
+
+    # Check if models were loaded successfully before running the UI
     if st.session_state.advisor.models:
         create_enhanced_interface()
     else:
-        st.error("AI models could not be loaded. The application cannot start.")
+        st.error(f"FATAL: Default models could not be loaded from '{DEFAULT_AGENT_MODEL_DIR}'.")
