@@ -62,14 +62,14 @@ class Gen3ModelEvaluator:
         all_results = []
         clusters = ['low', 'mid', 'high']
         model_specs = {
-            'entry': 'Target_Entry',
-            'profit_take': 'Target_Profit_Take',
-            'cut_loss': 'Target_Cut_Loss'
+            'entry': 'target_entry',
+            'profit_take': 'target_profit_take',
+            'cut_loss': 'target_cut_loss'
         }
 
         for cluster in clusters:
             logger.info(f"\n{'─' * 20} Evaluating models for VOLATILITY CLUSTER: '{cluster.upper()}' {'─' * 20}")
-            cluster_df = test_df[test_df['Volatility_Cluster'] == cluster].copy()
+            cluster_df = test_df[test_df['volatility_cluster'] == cluster].copy()
 
             if cluster_df.empty:
                 logger.warning(f"No test data found for cluster '{cluster}'. Skipping evaluation.")
@@ -153,13 +153,77 @@ class Gen3ModelEvaluator:
         return report
 
 
-if __name__ == "__main__":
-    TEST_FEATURE_DIR = "models/NASDAQ-testing set/features"
-    GEN3_MODEL_DIR = "models/NASDAQ-gen3"
+def run_evaluation_job(model_dir: str, test_data_dir: str):
+    """
+    Helper function to run a single, complete evaluation job for one agent.
+    """
+    logger.info(f"\n{'=' * 80}\n🚀 STARTING EVALUATION FOR: {model_dir}\n{'=' * 80}")
 
-    if not os.path.exists(GEN3_MODEL_DIR):
-        logger.error(f"FATAL: Gen-3 model directory not found at '{GEN3_MODEL_DIR}'. Please run the trainer first.")
+    if not os.path.exists(model_dir):
+        logger.error(f"FATAL: Model directory not found at '{model_dir}'. Please run the trainer for this agent first.")
+        return
+
+    test_data_manager = DataManager(test_data_dir, label="Test")
+    if not test_data_manager.get_available_symbols():
+        logger.error(f"FATAL: No test data found in '{test_data_dir}'. Please run the data generation script.")
+        return
+
+    evaluator = Gen3ModelEvaluator(model_dir=model_dir, test_data_manager=test_data_manager)
+    evaluator.evaluate_all_models()
+
+
+if __name__ == "__main__":
+    # Define the configurations for each agent, mapping them to their models and test data
+    AGENT_CONFIGS = {
+        'dynamic': {
+            'test_data_dir': "models/NASDAQ-testing set/features/dynamic_profit",
+            'model_dir': "models/NASDAQ-gen3-dynamic"
+        },
+        '2pct': {
+            'test_data_dir': "models/NASDAQ-testing set/features/2per_profit",
+            'model_dir': "models/NASDAQ-gen3-2pct"
+        },
+        '3pct': {
+            'test_data_dir': "models/NASDAQ-testing set/features/3per_profit",
+            'model_dir': "models/NASDAQ-gen3-3pct"
+        },
+        '4pct': {
+            'test_data_dir': "models/NASDAQ-testing set/features/4per_profit",
+            'model_dir': "models/NASDAQ-gen3-4pct"
+        }
+    }
+
+    # --- Interactive Menu ---
+    print("Which agent's models would you like to evaluate?")
+    print("1. Dynamic Profit Agent")
+    print("2. 2% Net Profit Agent")
+    print("3. 3% Net Profit Agent")
+    print("4. 4% Net Profit Agent")
+    print("5. All Agents")
+
+    choice = input("Please enter your selection (1-5): ")
+
+    agents_to_evaluate = []
+    if choice == '1':
+        agents_to_evaluate.append('dynamic')
+    elif choice == '2':
+        agents_to_evaluate.append('2pct')
+    elif choice == '3':
+        agents_to_evaluate.append('3pct')
+    elif choice == '4':
+        agents_to_evaluate.append('4pct')
+    elif choice == '5':
+        agents_to_evaluate = list(AGENT_CONFIGS.keys())
     else:
-        test_data_manager = DataManager(TEST_FEATURE_DIR, label="Test")
-        evaluator = Gen3ModelEvaluator(model_dir=GEN3_MODEL_DIR, test_data_manager=test_data_manager)
-        evaluator.evaluate_all_models()
+        print("❌ Invalid selection. Please run the script again and choose a number between 1 and 5.")
+        exit()
+
+    # Loop through the selected agents and run the evaluation job for each
+    for agent_name in agents_to_evaluate:
+        config = AGENT_CONFIGS[agent_name]
+        run_evaluation_job(
+            model_dir=config['model_dir'],
+            test_data_dir=config['test_data_dir']
+        )
+
+    logger.info("\n🎉 All selected model evaluations have finished.")
