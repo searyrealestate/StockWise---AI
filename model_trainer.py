@@ -4,6 +4,7 @@ import joblib
 import logging
 import pandas as pd
 import lightgbm as lgb
+import argparse
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, classification_report
 from sklearn.model_selection import train_test_split
 from data_manager import DataManager
@@ -110,26 +111,25 @@ class Gen3ModelTrainer:
         # --- Define the full feature set for Gen-3 ---
         # Note: 'Volatility_Cluster' is used for filtering, NOT as a feature itself.
         gen3_feature_cols = [
-            'Volume_MA_20', 'RSI_14', 'Momentum_5', 'MACD', 'MACD_Signal',
-            'MACD_Histogram', 'BB_Upper', 'BB_Lower', 'BB_Middle',
-            'BB_Position', 'Daily_Return', 'Volatility_20D', 'ATR_14',
-            'ADX', 'ADX_pos', 'ADX_neg', 'OBV', 'RSI_28', 'Dominant_Cycle_126D',
-            "Smoothed_Close_5D", "RSI_14_Smoothed",
-            'Z_Score_20', 'BB_Width', 'Correlation_50D_QQQ'
+            'volume_ma_20', 'rsi_14', 'momentum_5', 'macd', 'macd_signal',
+            'macd_histogram', 'bb_position', 'volatility_20d', 'atr_14',
+            'adx', 'adx_pos', 'adx_neg', 'obv', 'rsi_28',
+            'z_score_20', 'bb_width', 'correlation_50d_qqq',
+            'bb_upper', 'bb_lower', 'bb_middle', 'daily_return'
         ]
 
         # Define the clusters and the models to be trained for each
         clusters = ['low', 'mid', 'high']
         model_specs = {
-            'entry': 'Target_Entry',
-            'profit_take': 'Target_Profit_Take',
-            'cut_loss': 'Target_Cut_Loss'
+            'entry': 'target_entry',
+            'profit_take': 'target_profit_take',
+            'cut_loss': 'target_cut_loss'
         }
 
         for cluster in clusters:
             logger.info(f"\n{'─' * 20} Training models for VOLATILITY CLUSTER: '{cluster.upper()}' {'─' * 20}")
 
-            cluster_df = df[df['Volatility_Cluster'] == cluster].copy()
+            cluster_df = df[df['volatility_cluster'] == cluster].copy()
 
             if cluster_df.empty:
                 logger.warning(f"No data found for cluster '{cluster}'. Skipping training for this cluster.")
@@ -147,10 +147,75 @@ class Gen3ModelTrainer:
         logger.info("\n🎉 Gen-3 Model Training Pipeline Finished Successfully!")
 
 
+# In model_trainer.py
+# (The Gen3ModelTrainer class and other functions at the top of the file remain the same)
+
+def run_training_job(data_dir: str, model_dir: str, params: dict):
+    """
+    Helper function to run a single, complete training job for one agent.
+    """
+    logger.info(f"\n{'=' * 80}\n🚀 STARTING TRAINING JOB FOR: {model_dir}\n{'=' * 80}")
+
+    # Load and combine training data from the specified directory
+    train_data_manager = DataManager(data_dir, label="Train")
+    symbols = train_data_manager.get_available_symbols()
+    combined_df = train_data_manager.combine_feature_files(symbols)
+
+    if combined_df.empty:
+        logger.error(f"❌ Combined training DataFrame is empty from {data_dir}. Cannot train models.")
+        return
+
+    # Initialize and run the Gen-3 trainer, saving models to the specified directory
+    trainer = Gen3ModelTrainer(model_dir=model_dir, custom_params=params)
+    trainer.train_specialist_models(combined_df)
+
+
 if __name__ == "__main__":
-    # Define directories for training data and where models will be saved
-    TRAIN_FEATURE_DIR = "models/NASDAQ-training set/features"
-    GEN3_MODEL_DIR = "models/NASDAQ-gen3"  # New dedicated directory for Gen-3 models
+    # Define the configurations for each agent
+    AGENT_CONFIGS = {
+        '2pct': {
+            'data_dir': "models/NASDAQ-training set/features/2per_profit",
+            'model_dir': "models/NASDAQ-gen3-2pct"
+        },
+        '3pct': {
+            'data_dir': "models/NASDAQ-training set/features/3per_profit",
+            'model_dir': "models/NASDAQ-gen3-3pct"
+        },
+        '4pct': {
+            'data_dir': "models/NASDAQ-training set/features/4per_profit",
+            'model_dir': "models/NASDAQ-gen3-4pct"
+        },
+        'dynamic': {
+            'data_dir': "models/NASDAQ-training set/features/dynamic_profit",
+            'model_dir': "models/NASDAQ-gen3-dynamic"
+        }
+    }
+
+    # --- NEW: Interactive Menu ---
+    print("How do you prefer to run the script?")
+    print("1. 2% profit model")
+    print("2. 3% profit model")
+    print("3. 4% profit model")
+    print("4. dynamic profit model")
+    print("5. All models")
+
+    choice = input("Please enter your selection (1-5): ")
+
+    agents_to_train = []
+    if choice == '1':
+        agents_to_train.append('2pct')
+    elif choice == '2':
+        agents_to_train.append('3pct')
+    elif choice == '3':
+        agents_to_train.append('4pct')
+    elif choice == '4':
+        agents_to_train.append('dynamic')
+    elif choice == '5':
+        agents_to_train = list(AGENT_CONFIGS.keys())
+    else:
+        print("❌ Invalid selection. Please run the script again and choose a number between 1 and 5.")
+        exit()
+    # --- END NEW ---
 
     # Path to the optimized hyperparameters from a tuning process
     PARAMS_PATH = "models/best_lgbm_params.json"
@@ -164,15 +229,14 @@ if __name__ == "__main__":
         logger.error(f"❌ Best parameter file not found at {PARAMS_PATH}. Cannot proceed.")
         best_params = None
 
-    if best_params:
-        # Load and combine all training data
-        train_data_manager = DataManager(TRAIN_FEATURE_DIR, label="Train")
-        symbols = train_data_manager.get_available_symbols()
-        combined_df = train_data_manager.combine_feature_files(symbols)
+    if best_params and agents_to_train:
+        # Loop through the selected agents and run the training job for each
+        for agent_name in agents_to_train:
+            config = AGENT_CONFIGS[agent_name]
+            run_training_job(
+                data_dir=config['data_dir'],
+                model_dir=config['model_dir'],
+                params=best_params
+            )
 
-        if combined_df.empty:
-            logger.error("❌ Combined training DataFrame is empty. Cannot train models.")
-        else:
-            # Initialize and run the Gen-3 trainer
-            trainer = Gen3ModelTrainer(model_dir=GEN3_MODEL_DIR, custom_params=best_params)
-            trainer.train_specialist_models(combined_df)
+    logger.info("\n🎉 All selected training pipelines have finished.")
