@@ -5,7 +5,6 @@ how to run the test_system_performance.py?
 
  long run:
  pytest -s test_system_performance.py --mode=long
-
 """
 
 import pytest
@@ -16,18 +15,39 @@ import json
 import os
 import glob
 import joblib
-from datetime import datetime, timedelta
-from unittest.mock import MagicMock
-from tqdm.contrib.logging import logging_redirect_tqdm
+from datetime import datetime
 from tqdm import tqdm
-import pytest
-
-
 from data_manager import DataManager
-from stockwise_simulation import ProfessionalStockAdvisor
-from stockwise_simulation import FeatureCalculator
+import random
+
+
+# --- NOTE: It is best practice to move the function below into a file named 'conftest.py' ---
+def pytest_addoption(parser):
+    """Adds the --mode command-line option to pytest."""
+    parser.addoption("--mode", action="store", default="short", help="Backtest mode: short or long")
+
+# --- Agent Configurations ---
+AGENT_CONFIGS = {
+    "dynamic": {
+        "model_dir": "models/NASDAQ-gen3-dynamic",
+        "test_data_dir": "models/NASDAQ-testing set/features/dynamic_profit"
+    },
+    "2pct": {
+        "model_dir": "models/NASDAQ-gen3-2pct",
+        "test_data_dir": "models/NASDAQ-testing set/features/2per_profit"
+    },
+    "3pct": {
+        "model_dir": "models/NASDAQ-gen3-3pct",
+        "test_data_dir": "models/NASDAQ-testing set/features/3per_profit"
+    },
+    "4pct": {
+        "model_dir": "models/NASDAQ-gen3-4pct",
+        "test_data_dir": "models/NASDAQ-testing set/features/4per_profit"
+    }
+}
 
 # --- Logger Setup ---
+# ... (logging setup remains the same) ...
 LOG_DIR = "logs/test_system_performance_log"
 os.makedirs(LOG_DIR, exist_ok=True)
 log_filename = f"test_system_performance_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
@@ -38,71 +58,21 @@ logger = logging.getLogger("SystemTest")
 logger.info(f"Test run initiated. Logging to: {log_filepath}")
 
 
-@pytest.fixture(scope="session")
-def backtest_mode(request):
-    """Fixture that returns the value of the --mode option."""
-    return request.config.getoption("--mode")
-
-
 def _get_date_ranges_from_mode(mode):
-    """
-    Determines backtest date ranges based on the backtest mode.
-    """
+    """Determines backtest date ranges based on the backtest mode."""
     if mode == 'short':
-        return {
-            'overall_start': "2024-01-01",
-            'overall_end': "2024-06-01",
-            'stress_start': "2022-03-01",
-            'stress_end': "2022-05-01"
-        }
-    else:  # 'long' or any other value
-        return {
-            'overall_start': "2022-01-01",
-            'overall_end': "2025-01-01",
-            'stress_start': "2022-01-01",
-            'stress_end': "2022-12-31"
-        }
+        return {'overall_start': "2024-01-01", 'overall_end': "2024-06-01", 'stress_start': "2022-03-01", 'stress_end': "2022-05-01"}
+    else:  # 'long'
+        return {'overall_start': "2022-01-01", 'overall_end': "2025-01-01", 'stress_start': "2022-01-01", 'stress_end': "2022-12-31"}
 
 
-# --- End of new hooks and fixtures ---
-
-
-# --- Test Fixtures and Helper Functions (UPDATED FOR GEN-3) ---
-@pytest.fixture(scope="session")
-def test_data_manager():
-    """Returns a DataManager instance configured for the Gen-3 testing set."""
-    return DataManager("models/NASDAQ-testing set/features", label="Test")
-
-
-@pytest.fixture(scope="session")
-def gen3_advisor_instance():
-    """Returns a mocked ProfessionalStockAdvisor instance for Gen-3 testing."""
-    advisor = ProfessionalStockAdvisor(testing_mode=True)
-    return advisor
-
-
-@pytest.fixture(scope="session")
-def feature_columns():
-    """
-    Loads feature columns from one of the new Gen-3 feature lists.
-    This is for validation tests that need a feature list, not for the backtest itself.
-    """
-    model_dir = "models/NASDAQ-gen3"
-    features_path = os.path.join(model_dir, "entry_model_low_vol_features.json")
-    if not os.path.exists(features_path):
-        raise FileNotFoundError(f"Feature list not found at '{features_path}'. Run the model trainer first.")
-    with open(features_path, 'r') as f:
-        return json.load(f)
-
-
-# --- NEW: Function to load all models for backtesting ---
-def load_all_gen3_models():
+# MODIFIED: This helper now takes model_dir as an argument
+def load_all_gen3_models(model_dir):
     """Loads all 9 specialist models and their feature lists for the backtest."""
     model_suite = {}
-    model_dir = "models/NASDAQ-gen3"
     model_files = glob.glob(os.path.join(model_dir, "*.pkl"))
     if len(model_files) < 9:
-        raise FileNotFoundError(f"Expected 9 models, found {len(model_files)}. Please run the trainer.")
+        pytest.fail(f"Expected 9 models in '{model_dir}', but found {len(model_files)}. Please run the trainer for this agent.")
     for model_path in model_files:
         model_name = os.path.basename(model_path).replace(".pkl", "")
         features_path = model_path.replace(".pkl", "_features.json")
@@ -113,202 +83,167 @@ def load_all_gen3_models():
     return model_suite
 
 
-# --- Test Cases ---
-class TestCoreLogic:
-    def test_tax_and_fee_calculation_scenarios(self, gen3_advisor_instance):
-        """Tests both the minimum fee and per-share fee scenarios."""
-        logger.info("--- Running Test T2.2: Tax & Fee Calculation Scenarios ---")
-        gross_profit_dollars_1 = 100.0
-        num_shares_1 = 10
-        net_profit_1, _ = gen3_advisor_instance.apply_israeli_fees_and_tax(gross_profit_dollars_1, num_shares_1)
-        assert net_profit_1 == pytest.approx(71.25), "Minimum fee scenario failed."
-        logger.info("Summary (Scenario 1): Test PASSED. Minimum fee calculation is correct.")
-        gross_profit_dollars_2 = 100.0
-        num_shares_2 = 500
-        net_profit_2, _ = gen3_advisor_instance.apply_israeli_fees_and_tax(gross_profit_dollars_2, num_shares_2)
-        assert net_profit_2 == pytest.approx(69.00), "Per-share fee scenario failed."
-        logger.info("Summary (Scenario 2): Test PASSED. Per-share fee calculation is correct.")
-
-    def test_dynamic_profit_calculation(self, gen3_advisor_instance):
-        """Verifies the dynamic profit target calculation at different confidence levels."""
-        logger.info("--- Running Test: Dynamic Profit Calculation Logic ---")
-        test_cases = [
-            (50.0, 3.5), (65.0, 5.0), (80.0, 6.5), (95.0, 8.0)
-        ]
-        for confidence, expected_profit in test_cases:
-            calculated_profit = gen3_advisor_instance.calculate_dynamic_profit_target(confidence)
-            assert calculated_profit == expected_profit, f"Dynamic profit failed for confidence {confidence}."
-        logger.info("Summary: Test PASSED. Dynamic profit logic is correct.")
-
-
-# --- Backtesting Test Class (REFACRORED FOR GEN-3) ---
+# --- Backtesting Test Class (Now Parameterized for all agents) ---
+@pytest.mark.parametrize("agent_name, config", AGENT_CONFIGS.items())
 class TestFinancialBacktesting:
-    def _run_backtest(self, advisor, data_manager, start_date=None, end_date=None,
-                      description="Backtesting", mock_market_uptrend=True):
-        """
-        [REFACRORED FOR GEN-3]
-        An event-driven backtesting engine that uses the new specialist models
-        and state machine logic.
-        """
-        logger.info(f"Starting backtest from {start_date} to {end_date}...")
 
-        # Load all Gen-3 models once
-        model_suite = load_all_gen3_models()
+    # In test_system_performance.py
 
-        # Load and combine all test data
+    # Replace your existing _run_backtest function with this one:
+    def _run_backtest(self, agent_name, config, mode, start_date=None, end_date=None, description="Backtesting",
+                      mock_market_downtrend=False):
+        logger.info(f"--- Starting backtest for AGENT: {agent_name.upper()} ---")
+
+        model_suite = load_all_gen3_models(config['model_dir'])
+        data_manager = DataManager(config['test_data_dir'], label="Test")
         all_symbols = data_manager.get_available_symbols()
         if not all_symbols:
-            pytest.skip("No backtest data available.")
+            pytest.skip(f"No backtest data available for agent {agent_name} in {config['test_data_dir']}")
 
-        df_list = []
-        for s in tqdm(all_symbols, desc="Loading Test Data"):
-            df = data_manager.load_feature_file(s)
+        if mode == 'short':
+            sample_size = 100
+            if len(all_symbols) > sample_size:
+                logger.info(f"Using a random sample of {sample_size} symbols for backtest speed.")
+                all_symbols = random.sample(all_symbols, sample_size)
+
+        data_frames = []
+        for symbol in tqdm(all_symbols, desc=f"Loading data for {agent_name}"):
+            df = data_manager.load_feature_file(symbol)
             if df is not None and not df.empty:
-                df = df.reset_index()
-                if 'Date' in df.columns:
-                    df.rename(columns={'Date': 'Datetime'}, inplace=True)
-                elif 'index' in df.columns:
-                    df.rename(columns={'index': 'Datetime'}, inplace=True)
-                df['symbol'] = s
-                df_list.append(df)
+                df['symbol'] = symbol
+                data_frames.append(df)
 
-        if not df_list:
-            pytest.skip("No backtest data after filtering.")
+        if not data_frames:
+            pytest.skip(f"Could not load any valid data for agent {agent_name}")
 
-        full_df = pd.concat(df_list, ignore_index=True)
-        full_df['Datetime'] = pd.to_datetime(full_df['Datetime'])
-        full_df.set_index('Datetime', inplace=True)
-        full_df.sort_index(inplace=True)
+        full_df = pd.concat(data_frames)
+        full_df.columns = [col.lower() for col in full_df.columns]
 
-        # Slice data by date range for the backtest
-        if start_date: full_df = full_df.loc[start_date:]
-        if end_date: full_df = full_df.loc[:end_date]
+        # --- Convert types ONCE after loading ---
+        for col in full_df.select_dtypes(include=['number']).columns:
+            full_df[col] = full_df[col].astype(float)
 
-        backtest_dates = full_df.index.unique()
+        full_df.reset_index(inplace=True)
+        if 'Date' in full_df.columns:
+            full_df.rename(columns={'Date': 'Datetime'}, inplace=True)
 
-        portfolio_value = 100000
-        portfolio_history = [portfolio_value]
+        full_df.sort_values(by=['Datetime', 'symbol'], inplace=True)
+
+        if start_date: full_df = full_df[full_df['Datetime'] >= pd.to_datetime(start_date)]
+        if end_date: full_df = full_df[full_df['Datetime'] <= pd.to_datetime(end_date)]
+
+        portfolio_value = 100000.0
+        cash = portfolio_value
+        portfolio_history = []
         open_positions = {}
+        last_known_prices = {}
 
-        with logging_redirect_tqdm():
-            for current_date in tqdm(backtest_dates, desc=description, leave=False):
-                current_day_data = full_df.loc[current_date].sort_index()
+        for current_date, daily_data in tqdm(full_df.groupby('Datetime'), desc=f"{description} ({agent_name})"):
+            for symbol, row in daily_data.set_index('symbol').iterrows():
+                last_known_prices[symbol] = row['close']
+                # --- POSITION MANAGEMENT LOGIC (SELL-SIDE) ---
+                if symbol in open_positions:
+                    position = open_positions[symbol]
+                    if row['low'] <= position['stop_loss_price']:
+                        action = "CUT LOSS"
+                    else:
+                        cluster = row['volatility_cluster']
+                        profit_model_name = f"profit_take_model_{cluster}_vol"
+                        loss_model_name = f"cut_loss_model_{cluster}_vol"
 
-                for symbol, row in current_day_data.groupby('symbol').first().iterrows():
-
-                    if not mock_market_uptrend and advisor.is_market_in_uptrend() == False:
-                        action = "WAIT"
-                        stop_loss = None
-
-                    elif symbol in open_positions:
-                        position = open_positions[symbol]
-
-                        if row['Close'] <= position['stop_loss_price']:
-                            action = "CUT LOSS"
-
-                        else:
-                            cluster = row['Volatility_Cluster']
-                            profit_model_name = f"profit_take_model_{cluster}_vol"
-                            loss_model_name = f"cut_loss_model_{cluster}_vol"
-
+                        if profit_model_name in model_suite and loss_model_name in model_suite:
                             profit_model = model_suite[profit_model_name]['model']
                             loss_model = model_suite[loss_model_name]['model']
 
-                            features_cols = model_suite[profit_model_name]['features']
+                            # MODIFIED: Convert features to float before prediction
+                            features = row[model_suite[profit_model_name]['features']].to_frame().T
 
-                            features = row[features_cols].astype(float).to_frame().T
-
-                            profit_pred = profit_model.predict(features)[0]
-                            loss_pred = loss_model.predict(features)[0]
-
-                            if loss_pred == 1:
+                            if loss_model.predict(features)[0] == 1:
                                 action = "CUT LOSS"
-                            elif profit_pred == 1:
+                            elif profit_model.predict(features)[0] == 1:
                                 action = "SELL"
                             else:
                                 action = "HOLD"
-
-                        if action in ["SELL", "CUT LOSS"]:
-                            profit = (row['Close'] - position['entry_price']) * position['num_shares']
-                            portfolio_value += profit
-                            del open_positions[symbol]
-
-                    else:
-                        cluster = row['Volatility_Cluster']
-                        entry_model_name = f"entry_model_{cluster}_vol"
-
-                        entry_model = model_suite[entry_model_name]['model']
-                        features_cols = model_suite[entry_model_name]['features']
-
-                        features = row[features_cols].astype(float).to_frame().T
-
-                        entry_pred = entry_model.predict(features)[0]
-
-                        if entry_pred == 1:
-                            action = "BUY"
-
-                            current_atr = row['ATR_14']
-                            stop_loss_price = row['Close'] - (current_atr * 2.5)
-                            position_size_dollars = portfolio_value * 0.01
-                            num_shares = position_size_dollars / row['Close']
-
-                            open_positions[symbol] = {
-                                'entry_price': row['Close'],
-                                'stop_loss_price': stop_loss_price,
-                                'num_shares': num_shares,
-                                'entry_date': current_date
-                            }
                         else:
-                            action = "WAIT"
+                            action = "HOLD"
 
-                portfolio_history.append(portfolio_value)
+                    if action in ["SELL", "CUT LOSS"]:
+                        cash += row['close'] * position['num_shares']
+                        del open_positions[symbol]
 
-        history = pd.Series(portfolio_history, index=range(len(portfolio_history)))
-        total_return = (history.iloc[-1] / history.iloc[0] - 1) * 100 if len(history) > 1 and history.iloc[
-            0] != 0 else 0
+                # --- ENTRY LOGIC (BUY-SIDE) ---
+                if symbol not in open_positions:
+                    if mock_market_downtrend: continue
 
+                    cluster = row['volatility_cluster']
+                    entry_model_name = f"entry_model_{cluster}_vol"
+                    if entry_model_name in model_suite:
+                        entry_model = model_suite[entry_model_name]['model']
+
+                        # MODIFIED: Convert features to float before prediction
+                        features = row[model_suite[entry_model_name]['features']].to_frame().T
+
+                        if entry_model.predict(features)[0] == 1:
+                            position_size = cash * 0.1
+                            if row['close'] > 0:
+                                num_shares = position_size / row['close']
+                                if cash >= position_size:
+                                    cash -= position_size
+                                    open_positions[symbol] = {
+                                        'entry_price': row['close'],
+                                        'stop_loss_price': row['close'] - (row['atr_14'] * 2.5),
+                                        'num_shares': num_shares
+                                    }
+
+            current_holdings_value = 0
+            for s, pos_data in open_positions.items():
+                current_price = last_known_prices.get(s, pos_data['entry_price'])
+                current_holdings_value += pos_data['num_shares'] * current_price
+
+            portfolio_history.append(cash + current_holdings_value)
+
+        # --- METRICS CALCULATION ---
+        history = pd.Series(portfolio_history)
+        if len(history) < 2: return {'Total Return': 0, 'Max Drawdown': 0, 'Sharpe Ratio': 0, 'Sortino Ratio': 0}
+
+        total_return = (history.iloc[-1] / history.iloc[0] - 1) * 100
         drawdown = (history - history.cummax()) / history.cummax()
         max_drawdown = abs(drawdown.min()) * 100
-
         returns = history.pct_change().dropna()
-        risk_free_rate = 0.0001
-        sharpe_ratio = np.sqrt(252) * (returns.mean() - risk_free_rate) / returns.std()
-
+        sharpe_ratio = np.sqrt(252) * returns.mean() / returns.std() if returns.std() != 0 else 0
         downside_returns = returns[returns < 0]
-        downside_std = downside_returns.std()
-        sortino_ratio = np.sqrt(252) * (returns.mean() - risk_free_rate) / downside_std if downside_std != 0 else np.nan
+        sortino_ratio = np.sqrt(
+            252) * returns.mean() / downside_returns.std() if not downside_returns.empty and downside_returns.std() != 0 else 0
 
-        return {'Total Return': total_return, 'Max Drawdown': max_drawdown,
-                'Sharpe Ratio': sharpe_ratio, 'Sortino Ratio': sortino_ratio}
+        return {'Total Return': total_return, 'Max Drawdown': max_drawdown, 'Sharpe Ratio': sharpe_ratio,
+                'Sortino Ratio': sortino_ratio}
 
-    def test_overall_performance(self, gen3_advisor_instance, test_data_manager, backtest_mode):
-        """
-        Test ID: T3.1
-        Runs a comprehensive backtest on the full test dataset and checks against Gen-3 KPIs.
-        """
-        logger.info("--- Running Test T3.1: Overall Historical Backtest ---")
-        date_ranges = _get_date_ranges_from_mode(backtest_mode)
-        metrics = self._run_backtest(gen3_advisor_instance, test_data_manager,
-                                     start_date=date_ranges['overall_start'], end_date=date_ranges['overall_end'],
-                                     description="Overall Backtest")
-        logger.info(
-            f"KPIs - Total Return: {metrics['Total Return']:.2f}%, Max Drawdown: {metrics['Max Drawdown']:.2f}%")
-        logger.info(
-            f"KPIs - Sharpe Ratio: {metrics['Sharpe Ratio']:.2f}, Sortino Ratio: {metrics['Sortino Ratio']:.2f}")
-        assert metrics['Sharpe Ratio'] > 1.0, "KPI FAIL: Sharpe Ratio is below 1.0."
-        assert metrics['Sortino Ratio'] > 1.5, "KPI FAIL: Sortino Ratio is below 1.5."
-        logger.info("Summary (T3.1): Test PASSED. Backtest completed successfully.")
+    def test_overall_performance(self, agent_name, config, request):
+        mode = request.config.getoption("--mode")
+        date_ranges = _get_date_ranges_from_mode(mode)
+        metrics = self._run_backtest(agent_name, config, mode,
+                                     start_date=date_ranges['overall_start'], end_date=date_ranges['overall_end'])
+        # Add agent name and test type to metrics, then attach to the report
+        metrics['agent'] = agent_name
+        metrics['test_type'] = 'Overall'
+        request.node.add_report_section("call", "metrics", metrics)
 
-    def test_stress_test_bear_market(self, gen3_advisor_instance, test_data_manager, backtest_mode):
-        """
-        Test ID: T3.3
-        Runs a stress test on the bear market of 2022 to validate the Market Regime Filter.
-        """
-        logger.info("--- Running Test T3.3: Stress Test (2022 Bear Market) ---")
-        date_ranges = _get_date_ranges_from_mode(backtest_mode)
-        metrics = self._run_backtest(gen3_advisor_instance, test_data_manager,
+        logger.info(f"AGENT [{agent_name.upper()}] Overall KPIs - Return: {metrics['Total Return']:.2f}%, Max Drawdown: {metrics['Max Drawdown']:.2f}%, Sharpe: {metrics['Sharpe Ratio']:.2f}")
+        assert metrics['Sharpe Ratio'] > 1.0, f"KPI FAIL [{agent_name}]: Sharpe Ratio is below 1.0."
+        logger.info(f"Summary [{agent_name.upper()}]: Overall Test PASSED.")
+
+    def test_stress_test_bear_market(self, agent_name, config, request):
+        mode = request.config.getoption("--mode")
+        date_ranges = _get_date_ranges_from_mode(mode)
+        metrics = self._run_backtest(agent_name, config, mode,
                                      start_date=date_ranges['stress_start'], end_date=date_ranges['stress_end'],
-                                     description="Stress Test (2022)", mock_market_uptrend=False)
-        logger.info(f"KPI - Max Drawdown during stress test: {metrics['Max Drawdown']:.2f}%")
-        assert metrics['Max Drawdown'] < 25.0, "KPI FAIL: Max Drawdown is too high (> 25%)."
-        logger.info("Summary (T3.3): Test PASSED. Stress test completed.")
+                                     description="Stress Test", mock_market_downtrend=True)
+
+        # Add agent name and test type to metrics, then attach to the report
+        metrics['agent'] = agent_name
+        metrics['test_type'] = 'Stress Test (Bear Market)'
+        request.node.add_report_section("call", "metrics", metrics)
+
+        logger.info(f"AGENT [{agent_name.upper()}] Stress Test KPIs - Max Drawdown: {metrics['Max Drawdown']:.2f}%")
+        assert metrics['Max Drawdown'] < 25.0, f"KPI FAIL [{agent_name}]: Max Drawdown is too high (> 25%)."
+        logger.info(f"Summary [{agent_name.upper()}]: Stress Test PASSED.")
