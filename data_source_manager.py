@@ -50,7 +50,8 @@ class DataSourceManager:
     """
 
     def __init__(self, use_ibkr=True, debug=False,
-                 yfinance_max_retries=10, yfinance_retry_delay=1):
+                 yfinance_max_retries=10, yfinance_retry_delay=1,
+                 conid_map_path="nasdaq_stocks.csv"):
         """
         Initializes the DataSourceManager.
 
@@ -69,6 +70,9 @@ class DataSourceManager:
         self.session = requests.Session()
         self.ibkr_connected = False
 
+        # --- Load the conid map from the CSV file ---
+        self.conid_map = self._load_conid_map(conid_map_path)
+
     def log(self, message, level="INFO"):
         """Logs a message to the console."""
         if level == "INFO":
@@ -82,6 +86,21 @@ class DataSourceManager:
         else:
             logger.debug(message)
 
+        # --- NEW: A function to load your CSV file ---
+    def _load_conid_map(self, file_path):
+        """Loads the symbol-to-conid mapping from the provided CSV file."""
+        if not os.path.exists(file_path):
+            self.log(f"conID mapping file not found at '{file_path}'. IBKR lookups will fail.", "ERROR")
+            return {}
+        try:
+            df = pd.read_csv(file_path)
+            # Assuming the CSV has 'Symbol' and 'Conid' columns. Adjust if names are different.
+            # Set the symbol as the index for fast lookups.
+            return df.set_index('Symbol')['Conid'].to_dict()
+        except Exception as e:
+            self.log(f"Failed to load or parse conID map from '{file_path}': {e}", "ERROR")
+            return {}
+
     def connect_to_ibkr(self):
         """Checks the session status for the Client Portal API."""
         if self.ibkr_connected:
@@ -89,7 +108,8 @@ class DataSourceManager:
 
         self.log("Checking IBKR Client Portal session status...")
         try:
-            response = self.session.get(SESSION_STATUS_URL, verify=True, timeout=20)
+            response = self.session.get(SESSION_STATUS_URL, timeout=20)
+            response = self.session.get(HISTORICAL_DATA_URL, params=params, timeout=60)
 
             # Print the raw response text for debugging
             print("Raw response from IBKR auth status check:")
@@ -154,6 +174,12 @@ class DataSourceManager:
 
     def _download_from_ibkr(self, symbol, retries=3):
         """Internal method to download data from Client Portal API with a retry mechanism."""
+
+        """Internal method to download data from Client Portal API."""
+        conid = self._get_conid(symbol)
+        if conid is None:
+            return pd.DataFrame()  # Can't proceed without a conid
+
         for attempt in range(retries):
             self.log(f"Downloading {symbol} from IBKR (attempt {attempt + 1}/{retries})", "INFO")
             try:
@@ -162,7 +188,7 @@ class DataSourceManager:
                     "period": "5y",
                     "bar": "1d"
                 }
-                response = self.session.get(HISTORICAL_DATA_URL, params=params, verify=True, timeout=60)
+                response = self.session.get(HISTORICAL_DATA_URL, params=params, verify=False, timeout=60)
 
                 # Print the raw response text for debugging
                 print("Raw response from IBKR historical data check:")
@@ -197,9 +223,10 @@ class DataSourceManager:
     def _get_conid(self, symbol):
         """Dummy method to get a ConID from a symbol. Needs implementation."""
         # This is a placeholder. A real implementation would require another API call.
-        # For testing, we'll return a known ConID or a dummy value.
-        conids = {"AAPL": "265598", "MSFT": "272093", "GOOGL": "17385956"}
-        return conids.get(symbol, "265598") # Fallback to AAPL if not found
+        conid = self.conid_map.get(symbol)
+        if conid is None:
+            self.log(f"ConID for symbol '{symbol}' not found in the mapping file.", "WARNING")
+        return conid
 
     def _download_from_yfinance(self, symbol, days_back):
         """Internal method to download data from yfinance with a robust retry mechanism."""
