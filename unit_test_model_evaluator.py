@@ -11,12 +11,10 @@ from data_manager import DataManager  # ADDED: Missing import
 
 
 # --- Test Fixtures ---
-
 @pytest.fixture
 def synthetic_test_data():
     """
-    Creates a small, controlled synthetic DataFrame for testing the evaluator.
-    It includes all necessary columns to simulate a real-world test set.
+    Creates a small, controlled synthetic DataFrame with the CORRECTED Gen-3 feature set.
     """
     num_rows = 150
     clusters = ['low', 'mid', 'high']
@@ -26,14 +24,14 @@ def synthetic_test_data():
         'Target_Profit_Take': np.random.choice([0, 1], num_rows, p=[0.7, 0.3]),
         'Target_Cut_Loss': np.random.choice([0, 1], num_rows, p=[0.9, 0.1]),
     }
-    # Create a list of all necessary feature columns
+
+    # --- CORRECTED Gen-3 Feature Columns ---
     feature_columns = [
         'Volume_MA_20', 'RSI_14', 'Momentum_5', 'MACD', 'MACD_Signal',
-        'MACD_Histogram', 'BB_Upper', 'BB_Lower', 'BB_Middle',
-        'BB_Position', 'Daily_Return', 'Volatility_20D', 'ATR_14',
-        'ADX', 'ADX_pos', 'ADX_neg', 'OBV', 'RSI_28', 'Dominant_Cycle_126D',
-        'Smoothed_Close_5D', 'RSI_14_Smoothed',
-        'Z_Score_20', 'BB_Width', 'Correlation_50D_QQQ'
+        'MACD_Histogram', 'BB_Position', 'Volatility_20D', 'ATR_14',
+        'ADX', 'ADX_pos', 'ADX_neg', 'OBV', 'RSI_28',
+        'Z_Score_20', 'BB_Width', 'Correlation_50D_QQQ',
+        'BB_Upper', 'BB_Lower', 'BB_Middle', 'Daily_Return'
     ]
     # Add random data for all feature columns
     for col in feature_columns:
@@ -41,7 +39,6 @@ def synthetic_test_data():
             data[col] = np.random.rand(num_rows)
 
     return pd.DataFrame(data)
-
 
 @pytest.fixture
 def mock_data_manager(synthetic_test_data):
