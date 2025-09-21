@@ -1,23 +1,30 @@
+# how to run the analyze_model.py?
+# python analyze_model.py --model-dir "models/NASDAQ-gen3-2pct"
+# python analyze_model.py --model-dir "models/NASDAQ-gen3-3pct"
+# python analyze_model.py --model-dir "models/NASDAQ-gen3-4pct"
+# python analyze_model.py --model-dir "models/NASDAQ-gen3-dynamic"
+
 import pandas as pd
 import joblib
 import json
 import os
 import glob
+import argparse  # NEW: Import argparse
 from tqdm import tqdm
 
 # --- Configuration for Gen-3 ---
-MODEL_DIR = "models/NASDAQ-gen3"
+# MODIFIED: OUTPUT_FILE is now defined here, MODEL_DIR is removed
 OUTPUT_FILE = "gen3_feature_importance_summary.csv"
 
 
 def analyze_all_feature_importances(model_dir: str):
     """
-    Loads all Gen-3 specialist models, analyzes their feature importances,
-    and consolidates the results into a single DataFrame and CSV file.
+    Loads all Gen-3 specialist models from a specified directory,
+    analyzes their feature importances, and consolidates the results.
     """
     all_importances = []
 
-    # 1. Find all model files in the dedicated Gen-3 directory
+    # 1. Find all model files in the specified directory
     model_files = glob.glob(os.path.join(model_dir, "*.pkl"))
     if not model_files:
         print(f"❌ Error: No model files found in '{model_dir}'. Please run the model trainer first.")
@@ -37,7 +44,6 @@ def analyze_all_feature_importances(model_dir: str):
 
             importances = model.feature_importances_
 
-            # Create a temporary DataFrame for this model's data
             df_temp = pd.DataFrame({
                 'model_name': model_name,
                 'feature_name': feature_names,
@@ -47,10 +53,8 @@ def analyze_all_feature_importances(model_dir: str):
 
         except FileNotFoundError:
             print(f"⚠️ Warning: Missing features file for {model_name}. Skipping.")
-            continue
         except Exception as e:
             print(f"❌ Error analyzing model {model_name}: {e}. Skipping.")
-            continue
 
     if not all_importances:
         print("❌ No feature importance data could be extracted.")
@@ -58,20 +62,17 @@ def analyze_all_feature_importances(model_dir: str):
 
     # 3. Consolidate and rank the data
     combined_df = pd.concat(all_importances, ignore_index=True)
-
-    # Calculate the average importance for each feature across all models
     average_importance = combined_df.groupby('feature_name')['importance'].mean().reset_index()
     average_importance.rename(columns={'importance': 'average_importance'}, inplace=True)
     average_importance.sort_values(by='average_importance', ascending=False, inplace=True)
-
-    # Add a global rank
     average_importance['global_rank'] = range(1, len(average_importance) + 1)
 
     print("\n## 💡 Consolidated Feature Importance Analysis")
-    print("\nThis table shows the average importance of each feature across all 9 specialist models.")
+    print(f"\nThis table shows the average importance of each feature across all models in '{model_dir}'.")
 
-    # 4. Save the report to a CSV file
-    output_path = os.path.join(MODEL_DIR, OUTPUT_FILE)
+    # 4. Save the report to a CSV file inside the specified model directory
+    # MODIFIED: Use the dynamic 'model_dir' for the output path
+    output_path = os.path.join(model_dir, OUTPUT_FILE)
     average_importance.to_csv(output_path, index=False)
     print(f"\n✅ Detailed feature importance report saved to: {output_path}")
 
@@ -81,4 +82,15 @@ def analyze_all_feature_importances(model_dir: str):
 
 
 if __name__ == "__main__":
-    analyze_all_feature_importances(MODEL_DIR)
+    # NEW: Use argparse to get the model directory from the user
+    parser = argparse.ArgumentParser(description="Analyze feature importance for a set of Gen-3 models.")
+    parser.add_argument(
+        '--model-dir',
+        required=True,
+        type=str,
+        help='Directory path where the trained models are saved (e.g., "models/NASDAQ-gen3-2pct").'
+    )
+    args = parser.parse_args()
+
+    # Call the main function with the user-provided directory
+    analyze_all_feature_importances(args.model_dir)
