@@ -162,6 +162,10 @@ def run_evaluation_job(model_dir: str, test_data_dir: str):
     if not os.path.exists(model_dir):
         logger.error(f"FATAL: Model directory not found at '{model_dir}'. Please run the trainer for this agent first.")
         return
+    # check if there are files in the directory
+    if not os.listdir(model_dir):
+        logger.error(f"FATAL: Model directory '{model_dir}' is empty. Please run the trainer for this agent first.")
+        return
 
     test_data_manager = DataManager(test_data_dir, label="Test")
     if not test_data_manager.get_available_symbols():
@@ -179,6 +183,10 @@ if __name__ == "__main__":
             'test_data_dir': "models/NASDAQ-testing set/features/dynamic_profit",
             'model_dir': "models/NASDAQ-gen3-dynamic"
         },
+        '1pct': {
+            'test_data_dir': "models/NASDAQ-testing set/features/1per_profit",
+            'model_dir': "models/NASDAQ-gen3-1pct"
+        },
         '2pct': {
             'test_data_dir': "models/NASDAQ-testing set/features/2per_profit",
             'model_dir': "models/NASDAQ-gen3-2pct"
@@ -195,17 +203,19 @@ if __name__ == "__main__":
 
     # --- Interactive Menu ---
     print("Which agent's models would you like to evaluate?")
-    print("1. Dynamic Profit Agent")
+    print("1. 1% Net Profit Agent")
     print("2. 2% Net Profit Agent")
     print("3. 3% Net Profit Agent")
     print("4. 4% Net Profit Agent")
-    print("5. All Agents")
+    print("5. Dynamic Profit Agent")
+    print("6. All Agents")
 
-    choice = input("Please enter your selection (1-5): ")
+    choice = input("Please enter your selection (1-6): ")
 
     agents_to_evaluate = []
+
     if choice == '1':
-        agents_to_evaluate.append('dynamic')
+        agents_to_evaluate.append('1pct')
     elif choice == '2':
         agents_to_evaluate.append('2pct')
     elif choice == '3':
@@ -213,9 +223,11 @@ if __name__ == "__main__":
     elif choice == '4':
         agents_to_evaluate.append('4pct')
     elif choice == '5':
+        agents_to_evaluate.append('dynamic')
+    elif choice == '6':
         agents_to_evaluate = list(AGENT_CONFIGS.keys())
     else:
-        print("❌ Invalid selection. Please run the script again and choose a number between 1 and 5.")
+        print("❌ Invalid selection. Please run the script again and choose a number between 1 and 6.")
         exit()
 
     # Loop through the selected agents and run the evaluation job for each
