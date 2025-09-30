@@ -5,6 +5,11 @@ how to run the test_system_performance.py?
 
  long run:
  pytest -s test_system_performance.py --mode=long
+
+ for debug mode:
+ pytest -s test_system_performance.py --mode=short --debug-agent=dynamic
+
+
 """
 
 import pytest
@@ -25,6 +30,8 @@ import random
 def pytest_addoption(parser):
     """Adds the --mode command-line option to pytest."""
     parser.addoption("--mode", action="store", default="short", help="Backtest mode: short or long")
+    parser.addoption("--debug-agent", action="store", default=None, help="Agent to run in debug log mode (e.g., 'dynamic').")
+
 
 # --- Agent Configurations ---
 AGENT_CONFIGS = {
@@ -91,7 +98,8 @@ class TestFinancialBacktesting:
 
     # Replace your existing _run_backtest function with this one:
     def _run_backtest(self, agent_name, config, mode, start_date=None, end_date=None, description="Backtesting",
-                      mock_market_downtrend=False):
+                      mock_market_downtrend=False, is_debug_mode: bool = False):
+
         logger.info(f"--- Starting backtest for AGENT: {agent_name.upper()} ---")
 
         model_suite = load_all_gen3_models(config['model_dir'])
@@ -136,14 +144,21 @@ class TestFinancialBacktesting:
         cash = portfolio_value
         portfolio_history = []
         open_positions = {}
+        trade_log = []
         last_known_prices = {}
 
+        # In _run_backtest function
+        # --- Replace the entire loop with this corrected version ---
         for current_date, daily_data in tqdm(full_df.groupby('Datetime'), desc=f"{description} ({agent_name})"):
-            for symbol, row in daily_data.set_index('symbol').iterrows():
-                last_known_prices[symbol] = row['close']
-                # --- POSITION MANAGEMENT LOGIC (SELL-SIDE) ---
-                if symbol in open_positions:
-                    position = open_positions[symbol]
+            # --- POSITION MANAGEMENT LOGIC (SELL-SIDE) ---
+            # First, handle all potential sells based on the day's data
+            positions_to_close = []
+            for symbol, position in open_positions.items():
+                if symbol in daily_data['symbol'].values:
+                    row = daily_data[daily_data['symbol'] == symbol].iloc[0]
+                    last_known_prices[symbol] = row['close']
+
+                    action = "HOLD"  # Default action
                     if row['low'] <= position['stop_loss_price']:
                         action = "CUT LOSS"
                     else:
@@ -154,47 +169,63 @@ class TestFinancialBacktesting:
                         if profit_model_name in model_suite and loss_model_name in model_suite:
                             profit_model = model_suite[profit_model_name]['model']
                             loss_model = model_suite[loss_model_name]['model']
-
-                            # MODIFIED: Convert features to float before prediction
-                            features = row[model_suite[profit_model_name]['features']].to_frame().T
+                            features = row[model_suite[profit_model_name]['features']].astype(float).to_frame().T
 
                             if loss_model.predict(features)[0] == 1:
                                 action = "CUT LOSS"
                             elif profit_model.predict(features)[0] == 1:
                                 action = "SELL"
-                            else:
-                                action = "HOLD"
-                        else:
-                            action = "HOLD"
 
                     if action in ["SELL", "CUT LOSS"]:
+                        if is_debug_mode:
+                            logger.debug(f"[{current_date.date()}] {action} signal for {symbol} @ {row['close']:.2f}")
+
+                        trade_log.append({'symbol': symbol, 'action': action, 'entry_date': position['entry_date'],
+                                          'exit_date': current_date.date(), 'entry_price': position['entry_price'],
+                                          'exit_price': row['close'], 'shares': position['num_shares']})
                         cash += row['close'] * position['num_shares']
-                        del open_positions[symbol]
+                        positions_to_close.append(symbol)
 
-                # --- ENTRY LOGIC (BUY-SIDE) ---
-                if symbol not in open_positions:
-                    if mock_market_downtrend: continue
+            for symbol in positions_to_close:
+                del open_positions[symbol]
 
-                    cluster = row['volatility_cluster']
-                    entry_model_name = f"entry_model_{cluster}_vol"
-                    if entry_model_name in model_suite:
-                        entry_model = model_suite[entry_model_name]['model']
+            # --- ENTRY LOGIC (BUY-SIDE) ---
+            # Now, check for new entry opportunities for stocks we do not currently hold
+            if not mock_market_downtrend:
+                for symbol, row in daily_data.set_index('symbol').iterrows():
+                    last_known_prices[symbol] = row['close']
+                    if symbol not in open_positions:
+                        cluster = row['volatility_cluster']
+                        entry_model_name = f"entry_model_{cluster}_vol"
 
-                        # MODIFIED: Convert features to float before prediction
-                        features = row[model_suite[entry_model_name]['features']].to_frame().T
+                        if entry_model_name in model_suite:
+                            entry_model = model_suite[entry_model_name]['model']
+                            features = row[model_suite[entry_model_name]['features']].astype(float).to_frame().T
 
-                        if entry_model.predict(features)[0] == 1:
-                            position_size = cash * 0.1
-                            if row['close'] > 0:
-                                num_shares = position_size / row['close']
-                                if cash >= position_size:
-                                    cash -= position_size
-                                    open_positions[symbol] = {
-                                        'entry_price': row['close'],
-                                        'stop_loss_price': row['close'] - (row['atr_14'] * 2.5),
-                                        'num_shares': num_shares
-                                    }
+                            if entry_model.predict(features)[0] == 1:
+                                if is_debug_mode:
+                                    if is_debug_mode:
+                                        logger.debug(
+                                            f"[{current_date.date()}] BUY signal for {symbol} @ {row['close']:.2f} "
+                                            f"| Stop: {row['close'] - (row['atr_14'] * 2.5):.2f}")
 
+                                position_size = cash * 0.1
+                                if row['close'] > 0:
+                                    num_shares = position_size / row['close']
+                                    if cash >= position_size:
+                                        cash -= position_size
+                                        open_positions[symbol] = {
+                                            'entry_date': current_date.date(),
+                                            'entry_price': row['close'],
+                                            'stop_loss_price': row['close'] - (row['atr_14'] * 2.5),
+                                            'num_shares': num_shares
+                                        }
+                                    trade_log.append(
+                                        {'symbol': symbol, 'action': 'BUY', 'entry_date': current_date.date(),
+                                         'exit_date': None, 'entry_price': row['close'], 'exit_price': None,
+                                         'shares': num_shares})
+
+            # --- Daily Portfolio Value Calculation ---
             current_holdings_value = 0
             for s, pos_data in open_positions.items():
                 current_price = last_known_prices.get(s, pos_data['entry_price'])
@@ -203,8 +234,15 @@ class TestFinancialBacktesting:
             portfolio_history.append(cash + current_holdings_value)
 
         # --- METRICS CALCULATION ---
-        history = pd.Series(portfolio_history)
+        history = pd.Series(portfolio_history, index=pd.to_datetime(full_df['Datetime'].unique()))
         if len(history) < 2: return {'Total Return': 0, 'Max Drawdown': 0, 'Sharpe Ratio': 0, 'Sortino Ratio': 0}
+
+        # --- Save the equity curve to a CSV file ---
+        results_dir = os.path.join("reports", "backtest_results")
+        os.makedirs(results_dir, exist_ok=True)
+        equity_curve_path = os.path.join(results_dir, f"equity_curve_{agent_name}_{description.replace(' ', '_')}.csv")
+        history.rename("portfolio_value").to_csv(equity_curve_path)
+        logger.info(f"Equity curve for '{agent_name}' saved to {equity_curve_path}")
 
         total_return = (history.iloc[-1] / history.iloc[0] - 1) * 100
         drawdown = (history - history.cummax()) / history.cummax()
@@ -215,29 +253,50 @@ class TestFinancialBacktesting:
         sortino_ratio = np.sqrt(
             252) * returns.mean() / downside_returns.std() if not downside_returns.empty and downside_returns.std() != 0 else 0
 
+        # --- Save the trade log ---
+        if trade_log:
+            trade_log_df = pd.DataFrame(trade_log)
+            trade_log_path = os.path.join(results_dir, f"trade_log_{agent_name}_{description.replace(' ', '_')}.csv")
+            trade_log_df.to_csv(trade_log_path, index=False)
+            logger.info(f"Trade log for '{agent_name}' saved to {trade_log_path}")
+
         return {'Total Return': total_return, 'Max Drawdown': max_drawdown, 'Sharpe Ratio': sharpe_ratio,
                 'Sortino Ratio': sortino_ratio}
 
     def test_overall_performance(self, agent_name, config, request):
         mode = request.config.getoption("--mode")
+        # MODIFIED: Get the debug flag here
+        debug_agent = request.config.getoption("--debug-agent")
+        is_debug_mode = (agent_name == debug_agent)
+
         date_ranges = _get_date_ranges_from_mode(mode)
         metrics = self._run_backtest(agent_name, config, mode,
-                                     start_date=date_ranges['overall_start'], end_date=date_ranges['overall_end'])
-        # Add agent name and test type to metrics, then attach to the report
+                                     start_date=date_ranges['overall_start'],
+                                     end_date=date_ranges['overall_end'],
+                                     is_debug_mode=is_debug_mode)
+
         metrics['agent'] = agent_name
         metrics['test_type'] = 'Overall'
         request.node.add_report_section("call", "metrics", metrics)
 
-        logger.info(f"AGENT [{agent_name.upper()}] Overall KPIs - Return: {metrics['Total Return']:.2f}%, Max Drawdown: {metrics['Max Drawdown']:.2f}%, Sharpe: {metrics['Sharpe Ratio']:.2f}")
+        logger.info(
+            f"AGENT [{agent_name.upper()}] Overall KPIs - Return: {metrics['Total Return']:.2f}%, Max Drawdown: {metrics['Max Drawdown']:.2f}%, Sharpe: {metrics['Sharpe Ratio']:.2f}")
         assert metrics['Sharpe Ratio'] > 1.0, f"KPI FAIL [{agent_name}]: Sharpe Ratio is below 1.0."
         logger.info(f"Summary [{agent_name.upper()}]: Overall Test PASSED.")
 
     def test_stress_test_bear_market(self, agent_name, config, request):
         mode = request.config.getoption("--mode")
+        # Get the debug flag here
+        debug_agent = request.config.getoption("--debug-agent")
+        is_debug_mode = (agent_name == debug_agent)
+
         date_ranges = _get_date_ranges_from_mode(mode)
         metrics = self._run_backtest(agent_name, config, mode,
-                                     start_date=date_ranges['stress_start'], end_date=date_ranges['stress_end'],
-                                     description="Stress Test", mock_market_downtrend=True)
+                                     start_date=date_ranges['stress_start'],
+                                     end_date=date_ranges['stress_end'],
+                                     description="Stress Test",
+                                     mock_market_downtrend=True,
+                                     is_debug_mode=is_debug_mode)
 
         # Add agent name and test type to metrics, then attach to the report
         metrics['agent'] = agent_name
