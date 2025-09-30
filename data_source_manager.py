@@ -9,245 +9,198 @@ It still falls back to yfinance if IBKR is unavailable.
 """
 
 import pandas as pd
-import numpy as np
+import yfinance as yf
+import logging
 import time
 import threading
-import os
-import sys
-import logging
-from datetime import datetime, timedelta
-import requests
-import yfinance as yf
-import json
-
-# Setup logging for this specific module
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(levelname)s | %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-logger = logging.getLogger("DataSourceManager")
-
-# Suppress noisy loggers from imported libraries
-logging.getLogger('yfinance').setLevel(logging.WARNING)
-logging.getLogger('urllib3').setLevel(logging.WARNING)
-logging.getLogger('requests').setLevel(logging.WARNING)
-
-# Constants for Client Portal API
-# The correct host and API endpoints for the Client Portal API
-# Constants for Client Portal API
-# CORRECTED: Use the local endpoint for the Client Portal Gateway.
-CLIENT_PORTAL_HOST = "https://localhost:7497"
-SESSION_STATUS_URL = f"{CLIENT_PORTAL_HOST}/v1/api/iserver/auth/status"
-HISTORICAL_DATA_URL = f"{CLIENT_PORTAL_HOST}/iserver/marketdata/history"
+from ibapi.client import EClient
+from ibapi.wrapper import EWrapper
+from ibapi.contract import Contract
+import datetime
 
 
-class DataSourceManager:
+class Stock(Contract):
+    """A simplified Contract class for requesting stock data."""
+
+    def __init__(self, symbol, exchange='SMART', currency='USD'):
+        Contract.__init__(self)
+        self.symbol = symbol
+        self.secType = 'STK'
+        self.exchange = exchange
+        self.currency = currency
+
+
+class DataSourceManager(EWrapper, EClient):
     """
-    Manages connections and data retrieval from IBKR Client Portal API or yfinance.
+    Manages data retrieval using the direct TWS API (ibapi),
+    with a fallback to yfinance. This version uses the proven connection logic.
     """
 
-    def __init__(self, use_ibkr=True, debug=False,
-                 yfinance_max_retries=10, yfinance_retry_delay=1,
-                 conid_map_path="nasdaq_stocks.csv"):
-        """
-        Initializes the DataSourceManager.
-
-        Args:
-            use_ibkr (bool): If True, attempts to use IBKR as the primary data source.
-            debug (bool): If True, enables more verbose logging.
-            yfinance_max_retries (int): The number of times to retry fetching data from yfinance upon failure.
-            yfinance_retry_delay (int): The delay in seconds between yfinance retry attempts.
-        """
+    def __init__(self, use_ibkr=True, host='127.0.0.1', port=7497, client_id=None):
+        EClient.__init__(self, self)
         self.use_ibkr = use_ibkr
-        self.debug = debug
-        self.yfinance_max_retries = yfinance_max_retries
-        self.yfinance_retry_delay = yfinance_retry_delay
+        self.host = host
+        self.port = port
+        self.client_id = client_id
 
-        # Session for the Client Portal API
-        self.session = requests.Session()
-        self.ibkr_connected = False
+        # FIX: Use a unique, random client ID for each instance to prevent connection conflicts.
+        self.client_id = client_id if client_id is not None else int(time.time() % 1000)
 
-        # --- Load the conid map from the CSV file ---
-        self.conid_map = self._load_conid_map(conid_map_path)
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | (%(name)s) %(message)s')
+        self.logger = logging.getLogger("DataSourceManager")
+
+        # Threading events for managing async API calls
+        self.connection_event = threading.Event()
+        self.data_event = threading.Event()
+        self.error_occurred = False
+        self.error_message = ""
+        self.historical_data = []
+        self.next_req_id = int(time.time())
 
     def log(self, message, level="INFO"):
         """Logs a message to the console."""
-        if level == "INFO":
-            logger.info(message)
-        elif level == "SUCCESS":
-            logger.info(f"✅ {message}")
-        elif level == "ERROR":
-            logger.error(f"❌ {message}")
-        elif level == "WARNING":
-            logger.warning(f"⚠️ {message}")
-        else:
-            logger.debug(message)
-
-        # --- NEW: A function to load your CSV file ---
-    def _load_conid_map(self, file_path):
-        """Loads the symbol-to-conid mapping from the provided CSV file."""
-        if not os.path.exists(file_path):
-            self.log(f"conID mapping file not found at '{file_path}'. IBKR lookups will fail.", "ERROR")
-            return {}
-        try:
-            df = pd.read_csv(file_path)
-            # Assuming the CSV has 'Symbol' and 'Conid' columns. Adjust if names are different.
-            # Set the symbol as the index for fast lookups.
-            return df.set_index('Symbol')['Conid'].to_dict()
-        except Exception as e:
-            self.log(f"Failed to load or parse conID map from '{file_path}': {e}", "ERROR")
-            return {}
+        if level.upper() == "INFO":
+            self.logger.info(message)
+        elif level.upper() == "WARNING":
+            self.logger.warning(message)
+        elif level.upper() == "ERROR":
+            self.logger.error(message)
+        elif level.upper() == "SUCCESS":
+            self.logger.info(f"✅ {message}")
 
     def connect_to_ibkr(self):
-        """Checks the session status for the Client Portal API."""
-        if self.ibkr_connected:
+        """Connects to a running TWS or Gateway instance using ibapi."""
+        if self.isConnected():
             return True
-
-        self.log("Checking IBKR Client Portal session status...")
+        self.log(f"Connecting to TWS on {self.host}:{self.port}...")
         try:
-            response = self.session.get(SESSION_STATUS_URL, timeout=20)
-            response = self.session.get(HISTORICAL_DATA_URL, params=params, timeout=60)
+            self.connect(self.host, self.port, self.client_id)
+            api_thread = threading.Thread(target=self.run, daemon=True)
+            api_thread.start()
 
-            # Print the raw response text for debugging
-            print("Raw response from IBKR auth status check:")
-            print(response.text)
-
-            # Try to parse the JSON response
-            try:
-                status = response.json()
-            except ValueError:
-                self.log("IBKR Client Portal connection error: Failed to decode JSON.", "ERROR")
-                self.ibkr_connected = False
-                return False
-
-            if status.get("authenticated") and status.get("connected"):
-
-                self.log("IBKR Client Portal session is active and connected.", "SUCCESS")
-                self.ibkr_connected = True
+            self.log("Waiting for connection handshake...")
+            if self.connection_event.wait(timeout=20):
+                self.log("Connection to TWS is active.", "SUCCESS")
                 return True
             else:
-                # Print the raw response text for debugging
-                print("Raw response from IBKR auth status check:")
-                print(response.text)
-
-                self.log(f"IBKR Client Portal session not authenticated or connected. Status: {status}", "ERROR")
-                self.ibkr_connected = False
+                self.log("Connection to TWS timed out.", "ERROR")
+                self.disconnect()
                 return False
-        except requests.exceptions.RequestException as e:
-            self.log(f"IBKR Client Portal connection error: {e}", "ERROR")
-            self.ibkr_connected = False
+        except Exception as e:
+            self.log(f"Could not connect to TWS: {e}", "ERROR")
             return False
 
-    def get_stock_data(self, symbol: str, start_date=None, end_date=None, period="5y", fetch_buffer=40):
-        """
-        Fetch stock data prioritizing IBKR Client Portal; fallback to yfinance.
-        """
-        df = pd.DataFrame()
+    def nextValidId(self, orderId: int):
+        """EWrapper callback that confirms the connection is ready."""
+        super().nextValidId(orderId)
+        self.log("Connection handshake confirmed by TWS.")
+        self.connection_event.set()
 
+    def error(self, reqId, errorCode, errorString, advancedOrderRejectJson=""):
+        """EWrapper callback for handling errors."""
+        super().error(reqId, errorCode, errorString, advancedOrderRejectJson)
+        if errorCode < 2000 and errorCode not in [2104, 2106, 2158]:
+            self.log(f"TWS API Error {errorCode}: {errorString}", "ERROR")
+            self.error_occurred = True
+            self.error_message = errorString
+            self.data_event.set()
+
+    def disconnect(self):
+        """Disconnects from TWS."""
+        if self.isConnected():
+            self.log("Disconnecting from TWS...")
+            super().disconnect()
+
+    def get_stock_data(self, symbol: str, days_back=1825):
+        """Main method to get data, prioritizing IBKR."""
         if self.use_ibkr:
-            connected = self.connect_to_ibkr()
-            if connected:
-                df = self._download_from_ibkr(symbol)
+            if not self.isConnected():
+                self.connect_to_ibkr()
+
+            if self.isConnected():
+                df = self._download_from_ibkr(symbol, days_back)
                 if not df.empty:
-                    self.log(f"Successfully retrieved {len(df)} bars for {symbol} from IBKR", "SUCCESS")
                     return df
                 else:
-                    self.log(f"IBKR data retrieval failed or returned no data for {symbol}, falling back to yfinance",
-                             "WARNING")
-            else:
-                self.log("IBKR connection unavailable, falling back to yfinance", "WARNING")
+                    self.log(f"IBKR data retrieval failed for {symbol}, falling back to yfinance.", "WARNING")
 
-        # Fallback: use yfinance
-        if df.empty:
-            df = self._download_from_yfinance(symbol, days_back=5 * 365)
-            if not df.empty:
-                df.index = pd.to_datetime(df.index)
-                self.log(f"Successfully retrieved {len(df)} bars for {symbol} from yfinance", "SUCCESS")
+        return self._download_from_yfinance(symbol, days_back)
+
+    def historicalData(self, reqId, bar):
+        """EWrapper callback that receives each bar of historical data."""
+        self.historical_data.append({
+            'Date': bar.date, 'Open': bar.open, 'High': bar.high,
+            'Low': bar.low, 'Close': bar.close, 'Volume': bar.volume
+        })
+
+    def historicalDataEnd(self, reqId, start, end):
+        """EWrapper callback that signals the end of a historical data request."""
+        super().historicalDataEnd(reqId, start, end)
+        self.data_event.set()
+
+    def _download_from_ibkr(self, symbol: str, days_back: int):
+        """Internal method for downloading data from TWS using ibapi."""
+        # print("--- DEBUG:RUNNING v2 of _download_from_ibkr ---")
+        self.log(f"Requesting historical data for {symbol} from TWS...")
+        try:
+            # Create a specific contract for the VIX Index, and a general one for stocks/ETFs.
+            if symbol == '^VIX':
+                contract = Contract()
+                contract.symbol = 'VIX'
+                contract.secType = 'IND'
+                contract.exchange = 'CBOE'
+                contract.currency = 'USD'
+            else:
+                contract = Stock(symbol, 'SMART', 'USD')
+
+            if days_back > 365:
+                duration = f'{round(days_back / 365)} Y'
+            else:
+                duration = f'{days_back} D'
+            self.log(f"Requesting duration: {duration}")
+
+            self.historical_data = []
+            self.data_event.clear()
+            self.error_occurred = False
+
+            req_id = self.next_req_id
+            self.next_req_id += 1
+
+            self.reqHistoricalData(
+                reqId=req_id, contract=contract, endDateTime="",
+                durationStr=duration, barSizeSetting="1 day", whatToShow="TRADES",
+                useRTH=1, formatDate=1, keepUpToDate=False, chartOptions=[]
+            )
+
+            if self.data_event.wait(timeout=60):
+                if self.error_occurred:
+                    self.log(f"Failed to get data for {symbol}: {self.error_message}", "ERROR")
+                    return pd.DataFrame()
+
+                df = pd.DataFrame(self.historical_data)
+                df['Date'] = pd.to_datetime(df['Date'])
+                df.set_index('Date', inplace=True)
+                self.log(f"Successfully retrieved {len(df)} bars for {symbol} from IBKR.", "SUCCESS")
                 return df
             else:
-                self.log(f"Failed to retrieve data for {symbol} from yfinance after retries", "ERROR")
+                self.log(f"Data request for {symbol} timed out.", "ERROR")
+                self.cancelHistoricalData(req_id)
+                return pd.DataFrame()
+        except Exception as e:
+            self.log(f"Exception during IBKR download for {symbol}: {e}", "ERROR")
+            return pd.DataFrame()
 
-        return df
-
-    def _download_from_ibkr(self, symbol, retries=3):
-        """Internal method to download data from Client Portal API with a retry mechanism."""
-
-        """Internal method to download data from Client Portal API."""
-        conid = self._get_conid(symbol)
-        if conid is None:
-            return pd.DataFrame()  # Can't proceed without a conid
-
-        for attempt in range(retries):
-            self.log(f"Downloading {symbol} from IBKR (attempt {attempt + 1}/{retries})", "INFO")
+    def _download_from_yfinance(self, symbol, days_back, retries=3, delay=5):
+        """Internal method to download data from yfinance."""
+        self.log(f"Downloading {symbol} from yfinance...")
+        for i in range(retries):
             try:
-                params = {
-                    "conid": self._get_conid(symbol),
-                    "period": "5y",
-                    "bar": "1d"
-                }
-                response = self.session.get(HISTORICAL_DATA_URL, params=params, verify=False, timeout=60)
-
-                # Print the raw response text for debugging
-                print("Raw response from IBKR historical data check:")
-                print(response.text)
-
-                # Try to parse the JSON response
-                try:
-                    data = response.json()
-                except ValueError:
-                    self.log("IBKR: Failed to decode JSON response for historical data.", "ERROR")
-                    return pd.DataFrame()
-
-                if "data" in data:
-                    rows = [{'Date': pd.to_datetime(d['t'], unit='ms'), 'Open': d['o'], 'High': d['h'],
-                             'Low': d['l'], 'Close': d['c'], 'Volume': d['v']} for d in data['data']]
-                    df = pd.DataFrame(rows).set_index('Date').sort_index()
-                    if not df.empty:
-                        return df
-                else:
-                    self.log(f"IBKR: No data or error for {symbol}. Response: {data}", "WARNING")
-                    return pd.DataFrame()
-
-            except requests.exceptions.RequestException as e:
-                # Print the raw response text for debugging
-                print("Raw response from IBKR historical data check:")
-                print(response.text)
-
-                self.log(f"IBKR: Exception for {symbol}: {e}", "ERROR")
-
-        return pd.DataFrame()
-
-    def _get_conid(self, symbol):
-        """Dummy method to get a ConID from a symbol. Needs implementation."""
-        # This is a placeholder. A real implementation would require another API call.
-        conid = self.conid_map.get(symbol)
-        if conid is None:
-            self.log(f"ConID for symbol '{symbol}' not found in the mapping file.", "WARNING")
-        return conid
-
-    def _download_from_yfinance(self, symbol, days_back):
-        """Internal method to download data from yfinance with a robust retry mechanism."""
-        for attempt in range(self.yfinance_max_retries):
-            try:
-                self.log(f"Downloading {symbol} from yfinance (attempt {attempt + 1}/{self.yfinance_max_retries})",
-                         "INFO")
-                end_date = datetime.now()
-                start_date = end_date - timedelta(days=days_back)
-                data = yf.download(symbol, start=start_date, end=end_date, progress=False, auto_adjust=True)
-
-                if not data.empty:
-                    data.index.name = 'Date'
-                    return data[['Open', 'High', 'Low', 'Close', 'Volume']]
-                else:
-                    self.log(f"yfinance: No data found for {symbol}.", "WARNING")
-                    return pd.DataFrame()  # No need to retry if yfinance returns empty
+                df = yf.download(symbol, period=f"{days_back}d", auto_adjust=True, progress=False)
+                if not df.empty:
+                    self.log(f"Successfully retrieved {len(df)} bars for {symbol} from yfinance.", "SUCCESS")
+                    return df
             except Exception as e:
-                self.log(f"yfinance: Error downloading {symbol}: {e}", "ERROR")
-
-            if attempt < self.yfinance_max_retries - 1:
-                time.sleep(self.yfinance_retry_delay)
-
+                self.log(f"yfinance download attempt {i+1}/{retries} for {symbol} failed: {e}", "WARNING")
+                time.sleep(delay)
+        self.log(f"All yfinance download attempts failed for {symbol}.", "ERROR")
         return pd.DataFrame()
