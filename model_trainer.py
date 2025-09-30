@@ -22,14 +22,14 @@ class Gen3ModelTrainer:
     distinct binary models for each: Entry, Profit-Taking, and Risk Management.
     """
 
-    def __init__(self, model_dir: str, custom_params: dict):
+    def __init__(self, model_dir: str, agent_name: str):
         self.model_dir = model_dir
-        self.params = custom_params
-        # Ensure the output directory for Gen-3 models exists
+        self.agent_name = agent_name
         os.makedirs(self.model_dir, exist_ok=True)
-        logger.info(f"Gen-3 Model Trainer initialized. Models will be saved to: {self.model_dir}")
+        logger.info(f"Gen3-Model Trainer initialized. Models will be saved to: {self.model_dir}")
 
-    def _train_single_model(self, df: pd.DataFrame, feature_cols: list, label_col: str, model_name: str) -> dict:
+    def _train_single_model(self, df: pd.DataFrame, feature_cols: list, label_col: str, model_name: str,
+                            custom_params: dict) -> dict:
         """
         Internal helper function to train one specialist binary model.
         """
@@ -58,7 +58,7 @@ class Gen3ModelTrainer:
         logger.info(f"Training {model_name} with {len(X_train)} samples. Target: '{label_col}'.")
 
         # --- Use more advanced model parameters ---
-        model_params = self.params.copy()
+        model_params = custom_params.copy()
         model_params.update({
             'objective': 'binary',  # Critical change: each model is a simple binary classifier
             'n_estimators': 10000,
@@ -109,13 +109,14 @@ class Gen3ModelTrainer:
         logger.info("🚀 Starting Gen-3 'Orchestra' Model Training Pipeline...")
 
         # --- Define the full feature set for Gen-3 ---
-        # Note: 'Volatility_Cluster' is used for filtering, NOT as a feature itself.
+        # Feature list now includes the new Gen-3 features
         gen3_feature_cols = [
             'volume_ma_20', 'rsi_14', 'momentum_5', 'macd', 'macd_signal',
             'macd_histogram', 'bb_position', 'volatility_20d', 'atr_14',
             'adx', 'adx_pos', 'adx_neg', 'obv', 'rsi_28',
-            'z_score_20', 'bb_width', 'correlation_50d_qqq',
-            'bb_upper', 'bb_lower', 'bb_middle', 'daily_return'
+            'z_score_20', 'bb_width', 'correlation_50d_qqq', 'vix_close','corr_tlt', 'cmf',
+            'bb_upper', 'bb_lower', 'bb_middle', 'daily_return',
+            'kama_10', 'stoch_k', 'stoch_d', 'dominant_cycle'
         ]
 
         # Define the clusters and the models to be trained for each
@@ -137,42 +138,49 @@ class Gen3ModelTrainer:
 
             for model_type, target_col in model_specs.items():
                 model_filename = f"{model_type}_model_{cluster}_vol.pkl"
+                params_path = f"models/best_params_{self.agent_name}_{model_type}_{cluster}.json"
+                try:
+                    with open(params_path, 'r') as f:
+                        custom_params = json.load(f)
+                    logger.info(f"Loaded specific params for {model_filename} from {params_path}")
+                except FileNotFoundError:
+                    logger.warning(f"⚠️ No specific parameter file found at {params_path}. Using default settings.")
+                    custom_params = {}  # Use default LGBM settings if no file is found
+
                 self._train_single_model(
                     df=cluster_df,
                     feature_cols=gen3_feature_cols,
                     label_col=target_col,
-                    model_name=model_filename
+                    model_name=model_filename,
+                    custom_params=custom_params
                 )
 
         logger.info("\n🎉 Gen-3 Model Training Pipeline Finished Successfully!")
 
 
-# In model_trainer.py
-# (The Gen3ModelTrainer class and other functions at the top of the file remain the same)
-
-def run_training_job(data_dir: str, model_dir: str, params: dict):
+def run_training_job(agent_name: str, data_dir: str, model_dir: str): # <-- Updated signature
     """
     Helper function to run a single, complete training job for one agent.
     """
     logger.info(f"\n{'=' * 80}\n🚀 STARTING TRAINING JOB FOR: {model_dir}\n{'=' * 80}")
-
-    # Load and combine training data from the specified directory
     train_data_manager = DataManager(data_dir, label="Train")
     symbols = train_data_manager.get_available_symbols()
     combined_df = train_data_manager.combine_feature_files(symbols)
-
     if combined_df.empty:
         logger.error(f"❌ Combined training DataFrame is empty from {data_dir}. Cannot train models.")
         return
-
-    # Initialize and run the Gen-3 trainer, saving models to the specified directory
-    trainer = Gen3ModelTrainer(model_dir=model_dir, custom_params=params)
+    # The trainer now handles its own parameter loading
+    trainer = Gen3ModelTrainer(model_dir=model_dir, agent_name=agent_name)
     trainer.train_specialist_models(combined_df)
 
 
 if __name__ == "__main__":
     # Define the configurations for each agent
     AGENT_CONFIGS = {
+        '1pct': {
+            'data_dir': "models/NASDAQ-training set/features/1per_profit",
+            'model_dir': "models/NASDAQ-gen3-1pct"
+        },
         '2pct': {
             'data_dir': "models/NASDAQ-training set/features/2per_profit",
             'model_dir': "models/NASDAQ-gen3-2pct"
@@ -193,50 +201,51 @@ if __name__ == "__main__":
 
     # --- NEW: Interactive Menu ---
     print("How do you prefer to run the script?")
-    print("1. 2% profit model")
-    print("2. 3% profit model")
-    print("3. 4% profit model")
-    print("4. dynamic profit model")
-    print("5. All models")
+    print("1. 1% profit model")
+    print("2. 2% profit model")
+    print("3. 3% profit model")
+    print("4. 4% profit model")
+    print("5. dynamic profit model")
+    print("6. All models")
 
-    choice = input("Please enter your selection (1-5): ")
+    choice = input("Please enter your selection (1-6): ")
 
     agents_to_train = []
     if choice == '1':
+        agents_to_train.append('1pct')
+    if choice == '2':
         agents_to_train.append('2pct')
-    elif choice == '2':
-        agents_to_train.append('3pct')
     elif choice == '3':
-        agents_to_train.append('4pct')
+        agents_to_train.append('3pct')
     elif choice == '4':
-        agents_to_train.append('dynamic')
+        agents_to_train.append('4pct')
     elif choice == '5':
+        agents_to_train.append('dynamic')
+    elif choice == '6':
         agents_to_train = list(AGENT_CONFIGS.keys())
     else:
-        print("❌ Invalid selection. Please run the script again and choose a number between 1 and 5.")
+        print("❌ Invalid selection. Please run the script again and choose a number between 1 and 6.")
         exit()
     # --- END NEW ---
 
-    # Path to the optimized hyperparameters from a tuning process
-    PARAMS_PATH = "models/best_lgbm_params.json"
+    # # Path to the optimized hyperparameters from a tuning process
+    # PARAMS_PATH = "models/best_lgbm_params.json"
+    #
+    # # Load the best hyperparameters
+    # try:
+    #     with open(PARAMS_PATH, 'r') as f:
+    #         best_params = json.load(f)
+    #     logger.info(f"✅ Successfully loaded best parameters from {PARAMS_PATH}")
+    # except FileNotFoundError:
+    #     logger.error(f"❌ Best parameter file not found at {PARAMS_PATH}. Cannot proceed.")
+    #     best_params = None
 
-    # Load the best hyperparameters
-    try:
-        with open(PARAMS_PATH, 'r') as f:
-            best_params = json.load(f)
-        logger.info(f"✅ Successfully loaded best parameters from {PARAMS_PATH}")
-    except FileNotFoundError:
-        logger.error(f"❌ Best parameter file not found at {PARAMS_PATH}. Cannot proceed.")
-        best_params = None
-
-    if best_params and agents_to_train:
-        # Loop through the selected agents and run the training job for each
-        for agent_name in agents_to_train:
-            config = AGENT_CONFIGS[agent_name]
-            run_training_job(
-                data_dir=config['data_dir'],
-                model_dir=config['model_dir'],
-                params=best_params
-            )
+    for agent_name in agents_to_train:
+        config = AGENT_CONFIGS[agent_name]
+        run_training_job(
+            agent_name=agent_name,
+            data_dir=config['data_dir'],
+            model_dir=config['model_dir']
+        )
 
     logger.info("\n🎉 All selected training pipelines have finished.")
