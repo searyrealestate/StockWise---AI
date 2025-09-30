@@ -19,19 +19,20 @@ def synthetic_test_data():
     num_rows = 150
     clusters = ['low', 'mid', 'high']
     data = {
-        'Volatility_Cluster': np.random.choice(clusters, num_rows),
-        'Target_Entry': np.random.choice([0, 1], num_rows, p=[0.7, 0.3]),
-        'Target_Profit_Take': np.random.choice([0, 1], num_rows, p=[0.7, 0.3]),
-        'Target_Cut_Loss': np.random.choice([0, 1], num_rows, p=[0.9, 0.1]),
+        'volatility_cluster': np.random.choice(clusters, num_rows),
+        'target_entry': np.random.choice([0, 1], num_rows, p=[0.7, 0.3]),
+        'target_profit_take': np.random.choice([0, 1], num_rows, p=[0.7, 0.3]),
+        'target_cut_loss': np.random.choice([0, 1], num_rows, p=[0.9, 0.1]),
+        'vix_close': np.random.uniform(10, 30, num_rows)
     }
 
     # --- CORRECTED Gen-3 Feature Columns ---
     feature_columns = [
-        'Volume_MA_20', 'RSI_14', 'Momentum_5', 'MACD', 'MACD_Signal',
-        'MACD_Histogram', 'BB_Position', 'Volatility_20D', 'ATR_14',
-        'ADX', 'ADX_pos', 'ADX_neg', 'OBV', 'RSI_28',
-        'Z_Score_20', 'BB_Width', 'Correlation_50D_QQQ',
-        'BB_Upper', 'BB_Lower', 'BB_Middle', 'Daily_Return'
+        'volume_ma_20', 'rsi_14', 'momentum_5', 'macd', 'macd_signal',
+        'macd_histogram', 'bb_position', 'volatility_20d', 'atr_14',
+        'adx', 'adx_pos', 'adx_neg', 'obv', 'rsi_28',
+        'z_score_20', 'bb_width', 'correlation_50d_qqq', 'vix_close', 'cmf', 'corr_tlt',
+        'bb_upper', 'bb_lower', 'bb_middle', 'daily_return'
     ]
     # Add random data for all feature columns
     for col in feature_columns:
@@ -85,7 +86,7 @@ def test_evaluation_orchestration(mock_path_exists, synthetic_test_data, mock_da
 
     evaluator.models = {f"{mtype}_model_{c}_vol": MagicMock() for c in ['low', 'mid', 'high'] for mtype in
                         ['entry', 'profit_take', 'cut_loss']}
-    evaluator.feature_cols = {name: ['Z_Score_20'] for name in evaluator.models.keys()}
+    evaluator.feature_cols = {name: ['z_score_20'] for name in evaluator.models.keys()}
 
     mock_report = {
         '0': {'precision': 0.9, 'recall': 0.9, 'f1-score': 0.9, 'support': 90},
@@ -101,7 +102,7 @@ def test_evaluation_orchestration(mock_path_exists, synthetic_test_data, mock_da
 
         low_entry_call = next(c for c in mock_helper.call_args_list if c.kwargs['model_name'] == 'entry_model_low_vol')
         call_df = low_entry_call.kwargs['df']
-        assert all(call_df['Volatility_Cluster'] == 'low'), "Data for low-vol model was not filtered correctly."
+        assert all(call_df['volatility_cluster'] == 'low'), "Data for low-vol model was not filtered correctly."
 
 
 def test_evaluator_handles_missing_cluster_data(synthetic_test_data, mock_data_manager, caplog):
@@ -110,7 +111,7 @@ def test_evaluator_handles_missing_cluster_data(synthetic_test_data, mock_data_m
     is missing a specific volatility cluster.
     """
     # Arrange
-    data_without_high_vol = synthetic_test_data[synthetic_test_data['Volatility_Cluster'] != 'high']
+    data_without_high_vol = synthetic_test_data[synthetic_test_data['volatility_cluster'] != 'high']
     mock_data_manager.combine_feature_files.return_value = data_without_high_vol
 
     evaluator = Gen3ModelEvaluator(model_dir="/fake/dir", test_data_manager=mock_data_manager)
