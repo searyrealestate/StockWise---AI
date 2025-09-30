@@ -1,3 +1,49 @@
+"""
+StockWise AI Trading Advisor - Gen-3 Streamlit Application
+=========================================================
+
+This script creates a sophisticated, interactive web application using Streamlit
+that serves as the front-end for the Gen-3 multi-agent AI trading system.
+
+It allows users to select a stock, a date, and a specific AI trading agent to
+receive a real-time trading recommendation based on a complex, event-driven
+state machine.
+
+Key Architectural Features:
+---------------------------
+-   **Multi-Agent System**: Users can choose from several AI agents (e.g.,
+    'Dynamic Profit', '2% Net Profit'), each with its own suite of nine
+    specialist models trained for different market volatility regimes and
+    trading actions.
+-   **State Machine Logic**: The application maintains a state for each stock
+    (i.e., whether a position is currently "open"). This allows it to provide
+    context-aware recommendations:
+    -   If no position is open, it uses the "entry" models to look for a BUY signal.
+    -   If a position is open, it uses the "profit-take" and "cut-loss" models
+        to look for a SELL or CUT LOSS signal.
+-   **Live Feature Engineering**: It calculates all required Gen-3 technical
+    indicators on the fly using the `pandas-ta` library, ensuring consistency
+    with the model training pipeline.
+-   **Market Regime Filter**: As a top-level risk management rule, the system
+    first checks the broader market trend (SPY vs. its 200-day SMA) and will
+    avoid issuing BUY signals during a market downtrend.
+
+UI and Outputs:
+---------------
+-   **Interactive Sidebar**: Allows for the selection of the AI agent, stock
+    symbol, and analysis date.
+-   **Clear Recommendations**: Provides a single, clear recommendation (BUY, SELL,
+    HOLD, WAIT, CUT LOSS) with the confidence level and the specific agent
+    that made the decision.
+-   **Detailed Financial Metrics**: For a BUY signal, it displays the current price,
+    a dynamic ATR-based stop-loss, a profit target, and a hypothetical net
+    profit calculation.
+-   **Interactive Charting**: Generates a Plotly candlestick chart showing the
+    price action, moving averages, Bollinger Bands, and key trade levels like
+    the entry point, stop-loss, and profit target.
+
+"""
+
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -22,21 +68,64 @@ st.set_page_config(
     layout="wide"
 )
 
-# Add this helper function to your script
 
-def normalize_dataframe_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Normalizes a multi-indexed DataFrame from yfinance to a simple single-level index.
-    """
+def clean_raw_data(df: pd.DataFrame) -> pd.DataFrame:
+    """A single, robust function to clean raw data immediately after fetching."""
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    # This handles the case of multi-ticker downloads from yfinance
     if isinstance(df.columns, pd.MultiIndex):
-        # Flatten the multi-level column index
-        df.columns = df.columns.droplevel(0)
+        # The ticker symbol is level 1 of the MultiIndex. Drop it, keep level 0.
+        df.columns = df.columns.droplevel(1)
+
+    df.columns = [col.lower() for col in df.columns]
+
+    # Ensure standard OHLCV columns are numeric, coercing errors
+    standard_cols = ['open', 'high', 'low', 'close', 'volume']
+    for col in standard_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    # Only drop NaNs from the columns that actually exist in the DataFrame.
+    existing_cols = [col for col in standard_cols if col in df.columns]
+    if existing_cols:
+        df.dropna(subset=existing_cols, inplace=True)
+
     return df
+
+
+def calculate_kama(close, window=10, pow1=2, pow2=30):
+    """Calculates Kaufman's Adaptive Moving Average (KAMA) manually."""
+    diff = abs(close.diff(1))
+    rolling_sum_diff = diff.rolling(window).sum()
+    er = abs(close.diff(window)) / rolling_sum_diff.replace(0, np.nan)
+    er.fillna(0, inplace=True)
+    sc = (er * (2 / (pow1 + 1) - 2 / (pow2 + 1)) + 2 / (pow2 + 1)) ** 2
+    kama = np.zeros_like(close, dtype=float)
+    kama[:window] = close.iloc[:window]
+    for i in range(window, len(close)):
+        if not np.isnan(sc.iloc[i]):
+            kama[i] = kama[i - 1] + sc.iloc[i] * (close.iloc[i] - kama[i - 1])
+        else:
+            kama[i] = kama[i - 1]
+    return pd.Series(kama, index=close.index)
+
+
+def calculate_stochastic(high, low, close, window=14, smooth_window=3):
+    """Calculates the Stochastic Oscillator (%K and %D) manually."""
+    lowest_low = low.rolling(window=window).min()
+    highest_high = high.rolling(window=window).max()
+    percent_k = 100 * ((close - lowest_low) / (highest_high - lowest_low + 1e-10))
+    percent_d = percent_k.rolling(window=smooth_window).mean()
+    return percent_k, percent_d
 
 
 # --- Feature Engineering Pipeline (for Gen-3 Model) ---
 class FeatureCalculator:
     """A dedicated class to handle all feature calculations for the Gen-3 model."""
+    def __init__(self, data_manager):
+        self.data_manager = data_manager
 
     def get_dominant_cycle(self, data, min_period=3, max_period=100) -> float:
         data = pd.Series(data).dropna()
@@ -59,56 +148,102 @@ class FeatureCalculator:
             return pd.DataFrame()
 
         # --- DEBUG PRINTS ---
-        print("\n--- STARTING DEBUG FOR FeatureCalculator ---")
-        print(f"1. Initial columns: {df.columns.tolist()}")
+        # print("\n--- STARTING DEBUG FOR FeatureCalculator ---")
+        # print(f"1. Initial columns: {df.columns.tolist()}")
 
         # MODIFIED: Standardize column names to lowercase for pandas-ta compatibility
         df.columns = [col.lower() for col in df.columns]
-        print(f"2. Columns after converting to lowercase: {df.columns.tolist()}")
+        # print(f"2. Columns after converting to lowercase: {df.columns.tolist()}")
 
         try:
-
-            # Use pandas-ta for all indicators to match the training pipeline
-            df.ta.bbands(length=20, append=True, col_names=("bb_lower", "bb_middle", "bb_upper", "bb_width", "bb_position"))
+            df.ta.bbands(length=20, append=True,
+                         col_names=("bb_lower", "bb_middle", "bb_upper", "bb_width", "bb_position"))
             df.ta.atr(length=14, append=True, col_names="atr_14")
             df.ta.rsi(length=14, append=True, col_names="rsi_14")
             df.ta.rsi(length=28, append=True, col_names="rsi_28")
             df.ta.macd(append=True, col_names=("macd", "macd_histogram", "macd_signal"))
-            df.ta.adx(length=14, append=True, col_names=("adx", "adx_pos", "adx_neg"))
-            df.ta.mom(length=5, append=True, col_names="Momentum_5")
+            # df.ta.adx(length=14, append=True, col_names=("adx", "adx_pos", "adx_neg"))
+            df.ta.adx(length=14, append=True, col_names=("adx", "adx_pos", "adx_neg", "adxr_temp"))
+            df.drop(columns=["adxr_temp"], inplace=True, errors='ignore')
+            # CORRECT: Use a consistent lowercase name for the new column
+            df.ta.mom(length=5, append=True, col_names="momentum_5")
             df.ta.obv(append=True)
-            print(f"3. Columns after all pandas-ta indicators: {df.columns.tolist()}")
+            df.ta.cmf(append=True, col_names="cmf")
+
+            # Add a final lowercase conversion to handle default names like 'OBV'
+            df.columns = [col.lower() for col in df.columns]
+
         except Exception as e:
-            print(f"--- ERROR during pandas-ta calculations ---")
-            print(e)
-            print("--- END DEBUG ---")
+            st.error(f"Error during pandas-ta calculations: {e}")
             return pd.DataFrame()
 
+        # Consistently use lowercase column names ('close', 'volume', etc.)
         df['daily_return'] = df['close'].pct_change()
         df['volume_ma_20'] = df['volume'].rolling(20).mean()
         df['volatility_20d'] = df['daily_return'].rolling(20).std()
         df['z_score_20'] = (df['close'] - df['bb_middle']) / df['close'].rolling(20).std()
 
+        # Add calculations for KAMA, Stochastic, and Dominant Cycle
+        df['kama_10'] = calculate_kama(df['close'], window=10)
+        df['stoch_k'], df['stoch_d'] = calculate_stochastic(df['high'], df['low'], df['close'])
+        df['dominant_cycle'] = df['close'].rolling(window=252, min_periods=90).apply(self.get_dominant_cycle,
+                                                                                         raw=False)
         try:
-            qqq_df = yf.download("QQQ", start=df.index.min() - timedelta(days=70), end=df.index.max(), progress=False,
-                                 auto_adjust=True)
-            if not qqq_df.empty:
-                qqq_df.columns = [col.lower() for col in qqq_df.columns]  # Also standardize QQQ columns
-                qqq_close = qqq_df['close'].reindex(df.index, method='ffill')
-                df['correlation_50d_qqq'] = df['close'].rolling(50).corr(qqq_close)
+            # --- START OF ENHANCED DEBUG BLOCK ---
+            # print("DEBUG: Attempting to download QQQ data...")
+            qqq_data = yf.download("QQQ", start=df.index.min() - timedelta(days=70), end=df.index.max(), progress=False,
+                                   auto_adjust=True)
 
+            # print(f"DEBUG: Type of qqq_data is: {type(qqq_data)}")
+            # print(f"DEBUG: Value of qqq_data is: {qqq_data}")
+
+            # Add a check to ensure yfinance returned a valid DataFrame
+            if isinstance(qqq_data, pd.DataFrame) and not qqq_data.empty:
+                # print("DEBUG: qqq_data is a valid DataFrame. Entering IF block.")
+                if isinstance(qqq_data.columns, pd.MultiIndex):
+                    # The ticker symbol is level 1 of the MultiIndex. Drop it, keep level 0.
+                    # print("DEBUG: qqq_data has a MultiIndex. Dropping level 1 and keeping level 0.")
+                    qqq_data.columns = qqq_data.columns.droplevel(1)
+
+                qqq_data.columns = [col.lower() for col in qqq_data.columns]
+                qqq_close = qqq_data['close'].reindex(df.index, method='ffill')
+                df['correlation_50d_qqq'] = df['close'].rolling(50).corr(qqq_close)
+                # print("DEBUG: IF block completed successfully.")
             else:
-                print("qqq_df.empty in calculate_all_features")
+                # print("DEBUG: qqq_data is NOT a valid DataFrame. Entering ELSE block.")
+                print("WARNING: Could not download or process QQQ data. Correlation feature will be zero.")
                 df['correlation_50d_qqq'] = 0.0
         except Exception as e:
-            print(f"--- ERROR qqq_df.empty ---")
-            print(e)
+            print(f"--- An exception occurred during QQQ data processing: {e} ---")
+            # print(f"DEBUG: Type of qqq_data at time of exception was: {type(qqq_data)}")
             df['correlation_50d_qqq'] = 0.0
+
+        try:
+            # VIX Data
+            vix_raw = self.data_manager.get_stock_data('^VIX')
+            vix_clean = clean_raw_data(vix_raw)
+            if not vix_clean.empty:
+                aligned_vix = vix_clean['close'].reindex(df.index, method='ffill')
+                df['vix_close'] = aligned_vix
+            else:
+                df['vix_close'] = 0.0
+
+            # TLT Data
+            tlt_raw = self.data_manager.get_stock_data('TLT')
+            tlt_clean = clean_raw_data(tlt_raw)
+            if not tlt_clean.empty:
+                aligned_tlt = tlt_clean['close'].reindex(df.index, method='ffill')
+                df['corr_tlt'] = df['close'].rolling(50).corr(aligned_tlt)
+            else:
+                df['corr_tlt'] = 0.0
+        except Exception:
+            df['vix_close'] = 0.0
+            df['corr_tlt'] = 0.0
 
         # Mocking the cluster labels for live prediction
         df['volatility_90d'] = df['daily_return'].rolling(90).std()
-        # In a real system, thresholds would be loaded, but for the UI we can use dynamic quantiles.
-        low_thresh, high_thresh = df['volatility_90d'].quantile([0.33, 0.66])
+        # These values are based on the defaults in the training script.
+        low_thresh, high_thresh = 0.015, 0.030
         df['volatility_cluster'] = pd.cut(df['volatility_90d'], bins=[-np.inf, low_thresh, high_thresh, np.inf],
                                           labels=['low', 'mid', 'high'])
 
@@ -127,10 +262,10 @@ class FeatureCalculator:
 class ProfessionalStockAdvisor:
     def __init__(self, model_dir: str, data_source_manager=None, debug=False, testing_mode=False, download_log=False):
         self.log_entries = []
-        self.debug = debug  # Use the passed value
+        self.debug = debug
         self.model_dir = model_dir
-        self.download_log = download_log # Use the passed value
-
+        self.data_manager = DataSourceManager()
+        self.download_log = download_log
         self.testing_mode = testing_mode
 
         if data_source_manager:
@@ -138,11 +273,14 @@ class ProfessionalStockAdvisor:
         elif self.testing_mode:
             self.data_source_manager = None
         else:
+            # We prioritize IBKR by default now.
             self.data_source_manager = DataSourceManager(use_ibkr=True)
+
+        # FIX: Pass the SINGLE data manager instance to the FeatureCalculator.
+        self.calculator = FeatureCalculator(data_manager=self.data_source_manager)
 
         # --- GEN-3: Load the entire suite of specialist models ---
         self.models, self.feature_names = self._load_gen3_models()
-        self.calculator = FeatureCalculator()
         self.tax = 0.25
         self.broker_fee = 0.004
         self.position = {}  # New: Tracks the current open position for the state machine
@@ -155,7 +293,6 @@ class ProfessionalStockAdvisor:
             self.data_source_manager = None  # Correctly handle testing mode
         else:
             self.data_source_manager = DataSourceManager(use_ibkr=False)
-
 
     def _load_gen3_models(self):
         """
@@ -218,10 +355,16 @@ class ProfessionalStockAdvisor:
         The Conductor: Checks if the general market (SPY) is in an uptrend using the robust data manager.
         """
         try:
-            # FIX: Use the new robust data manager to get SPY data
+            # Use the new robust data manager to get SPY data
             spy_data = self.data_source_manager.get_stock_data("SPY", period=f"{days + 50}d")
             if spy_data is None or spy_data.empty:
                 self.log("Could not download SPY data for market trend analysis.", "WARNING")
+                return True  # Failsafe
+
+            #  Use clean_raw_data to standardize columns to lowercase
+            spy_data = clean_raw_data(spy_data)
+            if spy_data.empty:
+                self.log("SPY data empty after cleaning.", "WARNING")
                 return True  # Failsafe
 
             spy_data[f'sma_{days}'] = ta.trend.sma_indicator(spy_data['close'], window=days)
@@ -235,88 +378,84 @@ class ProfessionalStockAdvisor:
     # --- GEN-3: The core state machine logic for prediction ---
     def run_analysis(self, ticker_symbol, analysis_date):
         try:
+            full_stock_data = self.data_source_manager.get_stock_data(ticker_symbol)
+            if full_stock_data is None or full_stock_data.empty:
+                return None, None
+            full_stock_data = clean_raw_data(full_stock_data)
+
+            # Get the data for the specific date being analyzed
+            data_up_to_date = full_stock_data[full_stock_data.index <= pd.to_datetime(analysis_date)]
+            if data_up_to_date.empty:
+                return full_stock_data, {'action': "WAIT", 'reason': "No data available for this date.",
+                                         'current_price': 0, 'agent': "System"}
+
+            price_on_date = data_up_to_date.iloc[-1]['close']
+
             # Step 1: The Conductor. Assess overall market health.
             if not self.is_market_in_uptrend():
-                stock_data = self.data_source_manager.get_stock_data(ticker_symbol)
-                price_on_date = stock_data.loc[pd.to_datetime(analysis_date)]['close'] if pd.to_datetime(
-                    analysis_date) in stock_data.index else 0
-                return stock_data, {'action': "WAIT / AVOID", 'confidence': 99.9, 'current_price': price_on_date,
-                                    'reason': "Market Downtrend", 'buy_date': None, 'agent': "Market Regime Agent"}
-
-            full_stock_data = self.data_source_manager.get_stock_data(ticker_symbol)
-            if full_stock_data is None or full_stock_data.empty: return None, None
-
-            # Normalize the DataFrame columns immediately after fetching
-            full_stock_data = normalize_dataframe_columns(full_stock_data)
+                return full_stock_data, {'action': "WAIT / AVOID", 'confidence': 99.9, 'current_price': price_on_date,
+                                         'reason': "Market Downtrend", 'buy_date': None, 'agent': "Market Regime Agent"}
 
             # Step 2: Feature Engineering
-            featured_data = self.calculator.calculate_all_features(
-                full_stock_data[full_stock_data.index <= pd.to_datetime(analysis_date)])
-            if featured_data.empty: return full_stock_data, {'action': "WAIT",
-                                                             'reason': "Insufficient data for analysis."}
+            featured_data = self.calculator.calculate_all_features(data_up_to_date)
+            if featured_data.empty:
+                return full_stock_data, {'action': "WAIT", 'reason': "Insufficient data for analysis.",
+                                         'current_price': price_on_date, 'agent': "System"}
 
             latest_row = featured_data.iloc[-1]
             cluster = latest_row['volatility_cluster']
 
             # Step 3: State Check (Is there an open position?)
             if self.position.get(ticker_symbol):
-                # State: Open Position
                 current_position = self.position[ticker_symbol]
-
-                # Dynamic Stop-Loss Check (as a primary exit condition)
                 if latest_row['close'] <= current_position['stop_loss_price']:
                     del self.position[ticker_symbol]
-                    return full_stock_data, {'action': "CUT LOSS", 'reason': "Stop-loss hit."}
+                    return full_stock_data, {'action': "CUT LOSS", 'reason': "Stop-loss hit.",
+                                             'current_price': price_on_date, 'agent': "Risk Manager"}
 
-                # Call the specialized agents (The Players)
                 profit_model_name = f"profit_take_model_{cluster}_vol"
                 loss_model_name = f"cut_loss_model_{cluster}_vol"
-
                 profit_model = self.models.get(profit_model_name)
                 loss_model = self.models.get(loss_model_name)
 
-                # Ensure models exist and get features
                 if not profit_model or not loss_model:
-                    self.log(f"Missing models for cluster {cluster}. Cannot make decision.", "WARNING")
-                    return full_stock_data, {'action': "HOLD", 'reason': "Missing Models."}
+                    return full_stock_data, {'action': "HOLD", 'reason': "Missing Models.",
+                                             'current_price': price_on_date, 'agent': "System"}
 
                 features = latest_row[self.feature_names[profit_model_name]].astype(float).to_frame().T
-
-                profit_pred = profit_model.predict(features)[0]
-                loss_pred = loss_model.predict(features)[0]
+                profit_pred, loss_pred = profit_model.predict(features)[0], loss_model.predict(features)[0]
 
                 if loss_pred == 1:
                     del self.position[ticker_symbol]
                     return full_stock_data, {'action': "CUT LOSS",
                                              'confidence': loss_model.predict_proba(features)[0][1],
-                                             'agent': f"High-Volatility Risk-Management Agent"}
+                                             'current_price': price_on_date,
+                                             'agent': f"{cluster.capitalize()}-Volatility Risk Agent"}
                 elif profit_pred == 1:
                     del self.position[ticker_symbol]
                     return full_stock_data, {'action': "SELL", 'confidence': profit_model.predict_proba(features)[0][1],
-                                             'agent': f"High-Volatility Profit-Taking Agent"}
+                                             'current_price': price_on_date,
+                                             'agent': f"{cluster.capitalize()}-Volatility Profit Agent"}
                 else:
-                    return full_stock_data, {'action': "HOLD", 'reason': "No exit signal."}
+                    return full_stock_data, {'action': "HOLD", 'reason': "No exit signal.",
+                                             'current_price': price_on_date, 'agent': "System"}
 
-            else:
-                # State: No Position
+            else:  # State: No Position
                 entry_model_name = f"entry_model_{cluster}_vol"
                 entry_model = self.models.get(entry_model_name)
 
                 if not entry_model:
-                    self.log(f"Missing Entry model for cluster {cluster}. Cannot make decision.", "WARNING")
-                    return full_stock_data, {'action': "WAIT", 'reason': "Missing Models."}
+                    return full_stock_data, {'action': "WAIT", 'reason': "Missing Models.",
+                                             'current_price': price_on_date, 'agent': "System"}
 
                 features = latest_row[self.feature_names[entry_model_name]].astype(float).to_frame().T
-
                 entry_pred = entry_model.predict(features)[0]
                 entry_prob = entry_model.predict_proba(features)[0]
 
                 if entry_pred == 1:
-                    # A BUY signal is detected!
-                    stop_loss_price = latest_row['close'] - (latest_row['atr_14'] * 2.5)  # Dynamic ATR stop-loss
+                    stop_loss_price = latest_row['close'] - (latest_row['atr_14'] * 2.5)
                     self.position[ticker_symbol] = {'entry_price': latest_row['close'],
                                                     'stop_loss_price': stop_loss_price}
-
                     return full_stock_data, {'action': "BUY", 'confidence': entry_prob[1] * 100,
                                              'current_price': float(latest_row['close']),
                                              'buy_date': latest_row.name.date(),
@@ -382,10 +521,19 @@ class ProfessionalStockAdvisor:
         fig.add_vline(x=analysis_date, line_width=1, line_dash="dash", line_color="white", name="Analysis Date",
                       row=1)
         action = result['action']
-        current_price = result['current_price']
+        # current_price = result['current_price']
+        current_price = result.get('current_price', stock_data['close'].iloc[-1] if not stock_data.empty else 0)
+
         if "BUY" in action:
             buy_date = result['buy_date']
             stop_loss = result.get('stop_loss_price')
+            confidence = result.get('confidence', 0)
+            profit_target_pct = self.calculate_dynamic_profit_target(confidence)
+            profit_target_price = current_price * (1 + profit_target_pct / 100)
+
+            fig.add_hline(y=float(profit_target_price), line_dash="dash", line_color="lightgreen",
+                          name="Profit Target", row=1, annotation_text=f"Profit Target: ${profit_target_price:.2f}",
+                          annotation_position="top right")
             fig.add_trace(go.Scatter(
                 x=[buy_date], y=[current_price], mode='markers',
                 marker=dict(color='cyan', size=12, symbol='circle-open', line=dict(width=2)), name='Target Buy'
@@ -405,8 +553,6 @@ class ProfessionalStockAdvisor:
         fig.update_yaxes(title_text="Volume", row=2, col=1)
         return fig
 
-
-# In stockwise_simulation.py
 
 def create_enhanced_interface():
     st.title("🏢 StockWise AI Trading Advisor")
@@ -437,10 +583,8 @@ def create_enhanced_interface():
     stock_symbol = st.sidebar.text_input("📊 Stock Symbol", value="NVDA").upper().strip()
     analysis_date = st.sidebar.date_input("📅 Analysis Date", value=datetime.now().date())
 
-    # --- THIS IS THE FIX ---
     # Define the button only ONCE
     analyze_btn = st.sidebar.button("🚀 Run Professional Analysis", type="primary", use_container_width=True)
-    # --- END FIX ---
 
     if not analyze_btn:
         st.info("Enter a stock symbol and date in the sidebar, then click 'Run Analysis' to begin.")
@@ -481,7 +625,7 @@ def create_enhanced_interface():
         st.metric("Model Confidence", f"{confidence:.1f}%")
 
     st.subheader("💰 Price Information & Analysis")
-    price_col, target_buy_col, stop_col = st.columns(3)
+    price_col, target_buy_col, profit_col, stop_col = st.columns(4)
     price_col.metric("Current Price", f"${current_price:.2f}")
 
     if "BUY" in action:
@@ -490,6 +634,11 @@ def create_enhanced_interface():
         stop_loss_price = result.get('stop_loss_price')
         stop_col.metric("🔴 Stop-Loss", f"${stop_loss_price:.2f}")
 
+        # Calculate and display the profit target price
+        profit_target_pct = advisor.calculate_dynamic_profit_target(confidence)
+        profit_target_price = buy_price * (1 + profit_target_pct / 100)
+        profit_col.metric("✅ Profit Target", f"${profit_target_price:.2f}", f"+{profit_target_pct:.1f}%")
+
     st.subheader("📊 Price Chart")
     fig = advisor.create_chart(stock_symbol, stock_data, result, analysis_date)
     if fig:
@@ -497,21 +646,34 @@ def create_enhanced_interface():
 
     st.subheader("📝 Action Summary")
     if "BUY" in action and result.get('buy_date'):
-        st.success(f"""
-        - **Action:** The model recommends **BUYING** {stock_symbol} at **${current_price:.2f}**.
-        - **Agent:** The decision was made by the `{agent}`.
-        - **Risk Management:** A dynamic stop-loss is suggested at **${result.get('stop_loss_price'):.2f}**.
-        """)
+        # Calculate hypothetical net profit for the summary
+        hypothetical_investment = 1000  # Assume a $1,000 investment
+        hypothetical_shares = hypothetical_investment / buy_price
+        gross_profit_dollars = (profit_target_price - buy_price) * hypothetical_shares
+        net_profit_dollars, total_deducted = advisor.apply_israeli_fees_and_tax(gross_profit_dollars,
+                                                                                hypothetical_shares)
+
+        summary_text = (
+            f"- **Action:** The model recommends **BUYING** {stock_symbol} at **${current_price:.2f}**.\n"
+            f"- **Agent:** The decision was made by the `{agent}`.\n"
+            f"- **Risk Management:** A dynamic stop-loss is suggested at **${result.get('stop_loss_price'):.2f}**.\n"
+            f"- **Profit Scenario:** Based on a hypothetical **${hypothetical_investment:,}** investment, "
+            f"if the Profit Target of **${profit_target_price:.2f}** is reached, the estimated "
+            f"**Net Profit** (after fees & taxes) would be approximately **${net_profit_dollars:.2f} quel to "
+            f"{profit_target_pct:.1f}%**."
+        )
+        st.success(summary_text)
+
     elif "SELL" in action or "CUT LOSS" in action:
         st.error(f"""
-        - **Action:** The model recommends **{action}** the position in {stock_symbol}.
-        - **Agent:** The exit signal was triggered by the `{agent}`.
-        """)
+            - **Action:** The model recommends **{action}** the position in {stock_symbol}.
+            - **Agent:** The exit signal was triggered by the `{agent}`.
+            """)
     else:
         st.warning(f"""
-        - **Action:** The model recommends to **WAIT or AVOID** buying {stock_symbol}.
-        - **Agent:** The decision was made by the `{agent}`.
-        """)
+            - **Action:** The model recommends to **WAIT or AVOID** buying {stock_symbol}.
+            - **Agent:** The decision was made by the `{agent}`.
+            """)
 
 
 # --- Main Execution ---
