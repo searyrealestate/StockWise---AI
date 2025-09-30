@@ -5,12 +5,45 @@
 This script tests IBKR API connection and downloads sample data.
 Run this first to identify connection issues.
 """
+"""
+IBKR API Connection & Data Download Utility
+===========================================
+
+This script is a comprehensive diagnostic tool designed to help users establish
+and test their connection to the Interactive Brokers (IBKR) TWS or Gateway API.
+
+It serves two primary purposes:
+1.  To automatically detect a user's correct TWS/Gateway connection settings.
+2.  To perform a simple data download to confirm the API is fully functional.
+
+Features:
+---------
+-   Auto-Discovery: The script automatically cycles through the most common IBKR
+    ports (e.g., 7497 for TWS Paper, 4002 for Gateway Paper) to find a working
+    connection, removing guesswork for the user.
+-   Connection & Data Validation: Once a connection is established, it requests
+    a small amount of historical data for AAPL to ensure the API can handle
+    data queries.
+-   Troubleshooting Guidance: If all connection attempts fail, it prints
+    clear, step-by-step instructions on how to configure the API settings
+    within TWS.
+-   Optional Data Download: If a connection is successful, the user is prompted
+    to optionally download 1 year of historical data for a sample list of
+    major NASDAQ stocks, saving them as individual CSV files in a 'data/'
+    directory.
+
+Usage:
+------
+    python <name_of_this_script>.py
+"""
 
 import sys
 import time
 import threading
 import pandas as pd
 from datetime import datetime, timedelta
+from data_source_manager import DataSourceManager
+
 
 # Check if IBKR API is installed
 try:
