@@ -306,3 +306,33 @@ class TestFinancialBacktesting:
         logger.info(f"AGENT [{agent_name.upper()}] Stress Test KPIs - Max Drawdown: {metrics['Max Drawdown']:.2f}%")
         assert metrics['Max Drawdown'] < 25.0, f"KPI FAIL [{agent_name}]: Max Drawdown is too high (> 25%)."
         logger.info(f"Summary [{agent_name.upper()}]: Stress Test PASSED.")
+
+    # Add this function to the end of test_system_performance.py
+    def pytest_sessionfinish(session):
+        """
+        This function is automatically called by pytest after the entire test session finishes.
+        It collects all the metrics we saved and writes them to a single summary file.
+        """
+        all_metrics = []
+        # Loop through all the test items and get the metrics we attached
+        for item in session.items:
+            if hasattr(item, 'user_properties'):
+                for prop in item.user_properties:
+                    if prop[0] == 'metrics':
+                        all_metrics.append(prop[1])
+
+        if not all_metrics:
+            logger.info("No metrics were collected during the test run.")
+            return
+
+        # Convert to a pandas DataFrame for easy saving
+        summary_df = pd.DataFrame(all_metrics)
+
+        # Define the output path for the consolidated summary
+        results_dir = os.path.join("reports", "backtest_results")
+        os.makedirs(results_dir, exist_ok=True)
+        summary_csv_path = os.path.join(results_dir, "latest_summary.csv")
+
+        # Save the summary DataFrame to CSV
+        summary_df.to_csv(summary_csv_path, index=False)
+        logger.info(f"✅ Consolidated backtest summary saved to: {summary_csv_path}")
