@@ -60,6 +60,9 @@ import sys
 import traceback
 from plotly.subplots import make_subplots
 from data_source_manager import DataSourceManager
+import screener
+import urllib.request
+
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -67,6 +70,74 @@ st.set_page_config(
     page_icon="🏢",
     layout="wide"
 )
+
+
+@st.cache_data
+def get_sp500_tickers():
+    """Scrapes and caches the list of S&P 500 tickers from Wikipedia."""
+    try:
+        url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
+
+        # Create a request with a browser User-Agent header to avoid 403 error.
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        req = urllib.request.Request(url, headers=headers)
+
+        with urllib.request.urlopen(req) as response:
+            table = pd.read_html(response)
+
+        sp500_df = table[0]
+        tickers = sp500_df['Symbol'].tolist()
+        # Clean up tickers for yfinance compatibility (e.g., 'BRK.B' -> 'BRK-B')
+        tickers = [ticker.replace('.', '-') for ticker in tickers]
+        st.session_state.sp500_tickers = tickers
+        return tickers
+    except Exception as e:
+        st.error(f"Failed to fetch S&P 500 list: {e}")
+        return []
+
+
+@st.cache_data
+def get_nasdaq100_tickers():
+    """Scrapes and caches the list of NASDAQ 100 tickers from Wikipedia."""
+    try:
+        url = 'https://en.wikipedia.org/wiki/Nasdaq-100'
+        # Create a request with a browser User-Agent header to avoid 403 error.
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        req = urllib.request.Request(url, headers=headers)
+
+        # Manually open the request and pass the response object to pandas.
+        with urllib.request.urlopen(req) as response:
+            table = pd.read_html(response)
+        # The table with tickers is the 4th one on this Wikipedia page
+        nasdaq100_df = table[4]
+        tickers = nasdaq100_df['Ticker'].tolist()
+        st.session_state.nasdaq100_tickers = tickers
+        return tickers
+    except Exception as e:
+        st.error(f"Failed to fetch NASDAQ 100 list: {e}")
+        return []
+
+
+@st.cache_data
+def load_nasdaq_tickers(max_stocks=None):
+    """Loads NASDAQ ticker symbols from a CSV file."""
+    csv_path = "nasdaq_stocks.csv"
+    try:
+        df = pd.read_csv(csv_path)
+        # Standardize column names for robustness
+        df.columns = [col.strip().title() for col in df.columns]
+        if 'Symbol' not in df.columns:
+            # FIX: Use st.error for UI feedback instead of the missing logger
+            st.error(f"FATAL: '{csv_path}' is missing the required 'Symbol' column.")
+            return []
+
+        # Filter out non-stock symbols that can cause errors
+        tickers = df[~df['Symbol'].str.contains(r'\^|\.', na=True)]['Symbol'].dropna().tolist()
+        return tickers
+    except FileNotFoundError:
+        # FIX: Use st.error for UI feedback instead of the missing logger
+        st.error(f"FATAL: '{csv_path}' not found. Please ensure it is in the project's root directory.")
+        return []
 
 
 def clean_raw_data(df: pd.DataFrame) -> pd.DataFrame:
@@ -264,7 +335,6 @@ class ProfessionalStockAdvisor:
         self.log_entries = []
         self.debug = debug
         self.model_dir = model_dir
-        self.data_manager = DataSourceManager()
         self.download_log = download_log
         self.testing_mode = testing_mode
 
@@ -273,26 +343,19 @@ class ProfessionalStockAdvisor:
         elif self.testing_mode:
             self.data_source_manager = None
         else:
-            # We prioritize IBKR by default now.
             self.data_source_manager = DataSourceManager(use_ibkr=True)
 
-        # FIX: Pass the SINGLE data manager instance to the FeatureCalculator.
+        # Pass the SINGLE data manager instance to the FeatureCalculator.
         self.calculator = FeatureCalculator(data_manager=self.data_source_manager)
 
         # --- GEN-3: Load the entire suite of specialist models ---
         self.models, self.feature_names = self._load_gen3_models()
         self.tax = 0.25
         self.broker_fee = 0.004
-        self.position = {}  # New: Tracks the current open position for the state machine
+        self.position = {}
         self.model_version_info = f"Gen-3: {os.path.basename(model_dir)}"
         if self.download_log: self.log_file = self.setup_log_file()
         self.log("Application Initialized.", "INFO")
-        if data_source_manager:
-            self.data_source_manager = data_source_manager
-        elif self.testing_mode:
-            self.data_source_manager = None  # Correctly handle testing mode
-        else:
-            self.data_source_manager = DataSourceManager(use_ibkr=False)
 
     def _load_gen3_models(self):
         """
@@ -350,30 +413,42 @@ class ProfessionalStockAdvisor:
         except Exception:
             return False
 
-    def is_market_in_uptrend(self, days=200):
+    def is_market_in_uptrend(self, analysis_date, days=200):
         """
-        The Conductor: Checks if the general market (SPY) is in an uptrend using the robust data manager.
+        The Conductor: Checks if the general market (SPY) was in an uptrend
+        on a specific historical date.
         """
         try:
-            # Use the new robust data manager to get SPY data
-            spy_data = self.data_source_manager.get_stock_data("SPY", period=f"{days + 50}d")
+            # 1. Fetch the full history for SPY
+            spy_data = self.data_source_manager.get_stock_data("SPY")
             if spy_data is None or spy_data.empty:
                 self.log("Could not download SPY data for market trend analysis.", "WARNING")
-                return True  # Failsafe
+                return False
 
-            #  Use clean_raw_data to standardize columns to lowercase
             spy_data = clean_raw_data(spy_data)
-            if spy_data.empty:
-                self.log("SPY data empty after cleaning.", "WARNING")
-                return True  # Failsafe
 
-            spy_data[f'sma_{days}'] = ta.trend.sma_indicator(spy_data['close'], window=days)
-            latest_price = spy_data['close'].iloc[-1]
-            moving_average = spy_data[f'sma_{days}'].iloc[-1]
+            # 2. Slice the data to only include historical data up to the analysis date
+            spy_data_up_to_date = spy_data[spy_data.index <= pd.to_datetime(analysis_date)]
+
+            if len(spy_data_up_to_date) < days:
+                self.log(f"Not enough SPY data ({len(spy_data_up_to_date)} bars) for {days}-day MA.", "WARNING")
+                return False
+
+            # 3. Calculate the SMA on the historically-sliced data
+            spy_data_up_to_date[f'sma_{days}'] = ta.trend.sma_indicator(spy_data_up_to_date['close'], window=days)
+
+            latest_row = spy_data_up_to_date.iloc[-1]
+            latest_price = latest_row['close']
+            moving_average = latest_row[f'sma_{days}']
+
+            if pd.isna(moving_average):
+                self.log("Could not calculate SMA for SPY (result is NaN).", "WARNING")
+                return False
+
             return latest_price > moving_average
         except Exception as e:
             self.log(f"Error during market trend analysis: {e}", "WARNING")
-            return True  # Failsafe
+            return False
 
     # --- GEN-3: The core state machine logic for prediction ---
     def run_analysis(self, ticker_symbol, analysis_date):
@@ -392,7 +467,8 @@ class ProfessionalStockAdvisor:
             price_on_date = data_up_to_date.iloc[-1]['close']
 
             # Step 1: The Conductor. Assess overall market health.
-            if not self.is_market_in_uptrend():
+            # Pass the analysis_date to the market trend function
+            if not self.is_market_in_uptrend(analysis_date):
                 return full_stock_data, {'action': "WAIT / AVOID", 'confidence': 99.9, 'current_price': price_on_date,
                                          'reason': "Market Downtrend", 'buy_date': None, 'agent': "Market Regime Agent"}
 
@@ -564,116 +640,233 @@ def create_enhanced_interface():
         '4% Net Profit': "models/NASDAQ-gen3-4pct"
     }
 
+    # --- FIX: Define ALL sidebar inputs at the top in the correct order ---
     st.sidebar.header("🎯 Trading Analysis")
+    selected_agent_name = st.sidebar.selectbox("🧠 Select AI Agent", options=list(AGENT_CONFIGS.keys()))
+    stock_symbol = st.sidebar.text_input("📊 Stock Symbol", value="NVDA").upper().strip()
+    analysis_date = st.sidebar.date_input("📅 Analysis Date", value=datetime.now().date())
+    analyze_btn = st.sidebar.button("🚀 Run Professional Analysis", type="primary", use_container_width=True)
 
-    selected_agent_name = st.sidebar.selectbox(
-        "🧠 Select AI Agent",
-        options=list(AGENT_CONFIGS.keys())
+    st.sidebar.markdown("---")
+    st.sidebar.header("📈 Market Screener")
+    # --- Add a dropdown to select the stock universe ---
+    universe_options = {
+        "Full NASDAQ (from file)": load_nasdaq_tickers,
+        "S&P 500": get_sp500_tickers,
+        "NASDAQ 100": get_nasdaq100_tickers
+    }
+    selected_universe_name = st.sidebar.selectbox(
+        "Select universe to scan:",
+        options=list(universe_options.keys()),
+        key="universe_selector"
     )
-    selected_model_dir = AGENT_CONFIGS[selected_agent_name]
+    scan_btn = st.sidebar.button("Scan Universe for Opportunities", use_container_width=True)
 
+    # Load the correct advisor based on the agent selection
+    selected_model_dir = AGENT_CONFIGS[selected_agent_name]
     if st.session_state.advisor.model_dir != selected_model_dir:
         with st.spinner(f"Loading '{selected_agent_name}' agent..."):
             st.session_state.advisor = ProfessionalStockAdvisor(model_dir=selected_model_dir)
-
     advisor = st.session_state.advisor
+
     st.markdown(f"### Now using `{selected_agent_name}` Agent")
     st.markdown("---")
 
-    stock_symbol = st.sidebar.text_input("📊 Stock Symbol", value="NVDA").upper().strip()
-    analysis_date = st.sidebar.date_input("📅 Analysis Date", value=datetime.now().date())
+    # --- Restore the logic for the scan button ---
+    if scan_btn:
+        # Dynamically load the selected stock list
+        load_function = universe_options[selected_universe_name]
+        stock_universe = load_function()
+
+        if not stock_universe:
+            # Error messages are handled within the loading functions
+            return
+
+        st.subheader(f"BULL SCAN | Top BUY Opportunities in: {selected_universe_name}")
+        st.info(f"Scanning {len(stock_universe)} stocks for 'BUY' signals on {analysis_date.strftime('%Y-%m-%d')}...")
+
+        opportunities_df = screener.find_buy_opportunities(advisor, stock_universe, analysis_date)
+
+        if not opportunities_df.empty:
+            st.success(f"Scan complete! Found {len(opportunities_df)} potential opportunities.")
+
+    # Logic for the single-stock analysis button
+    if analyze_btn:
+        if not stock_symbol:
+            st.warning("Please enter a stock symbol.")
+            return
+
+        with st.spinner(f"Running analysis for {stock_symbol}..."):
+            stock_data, result = advisor.run_analysis(stock_symbol, analysis_date)
+
+        if not result:
+            st.error("Analysis failed.");
+            return
+
+        action = result['action']
+        confidence = result.get('confidence', 0)
+        current_price = result.get('current_price', 0)
+        agent = result.get('agent', "Unknown Agent")
+
+        col1, col2, col3 = st.columns([3, 2, 2])
+        with col1:
+            if "BUY" in action:
+                st.success(f"🟢 **RECOMMENDATION: {action}**")
+            elif "SELL" in action or "CUT LOSS" in action:
+                st.error(f"🔴 **RECOMMENDATION: {action}**")
+            else:
+                st.warning(f"🟡 **RECOMMENDATION: {action}**")
+        with col2:
+            st.info(f"🧠 **Agent**: {agent}")
+        with col3:
+            st.metric("Model Confidence", f"{confidence:.1f}%")
+
+        st.subheader("💰 Price Information & Analysis")
+        price_col, target_buy_col, profit_col, stop_col = st.columns(4)
+        price_col.metric("Current Price", f"${current_price:.2f}")
+
+        if "BUY" in action:
+            buy_price = result.get('current_price')
+            target_buy_col.metric("🎯 Target Buy", f"${buy_price:.2f}")
+            stop_loss_price = result.get('stop_loss_price')
+            stop_col.metric("🔴 Stop-Loss", f"${stop_loss_price:.2f}")
+            profit_target_pct = advisor.calculate_dynamic_profit_target(confidence)
+            profit_target_price = buy_price * (1 + profit_target_pct / 100)
+            profit_col.metric("✅ Profit Target", f"${profit_target_price:.2f}", f"+{profit_target_pct:.1f}%")
+
+        st.subheader("📊 Price Chart")
+        fig = advisor.create_chart(stock_symbol, stock_data, result, analysis_date)
+        if fig: st.plotly_chart(fig, use_container_width=True)
+
+        st.subheader("📝 Action Summary")
+        if "BUY" in action and result.get('buy_date'):
+            hypothetical_investment = 1000
+            buy_price = result.get('current_price', 1)
+            profit_target_pct = advisor.calculate_dynamic_profit_target(confidence)
+            profit_target_price = buy_price * (1 + profit_target_pct / 100)
+            hypothetical_shares = hypothetical_investment / buy_price
+            gross_profit_dollars = (profit_target_price - buy_price) * hypothetical_shares
+            net_profit_dollars, total_deducted = advisor.apply_israeli_fees_and_tax(gross_profit_dollars,
+                                                                                    hypothetical_shares)
+            net_profit_percentage = (
+                                                net_profit_dollars / hypothetical_investment) * 100 if hypothetical_investment > 0 else 0
+
+            # Corrected the corrupted and malformed summary text.
+            summary_text = (
+                f"- **Action:** The model recommends **BUYING** {stock_symbol} at **${current_price:.2f}**.\n"
+                f"- **Agent:** The decision was made by the `{agent}`.\n"
+                f"- **Risk Management:** A dynamic stop-loss is suggested at **${result.get('stop_loss_price'):.2f}**.\n"
+                f"- **Profit Scenario:** Based on a hypothetical **${hypothetical_investment:,}** investment, "
+                f"if the Profit Target of **${profit_target_price:.2f}** is reached, the estimated "
+                f"**Net Profit** (after fees & taxes) would be approximately **${net_profit_dollars:.2f}** "
+                f"(a **{net_profit_percentage:.2f}%** net return)."
+            )
+            st.success(summary_text)
+
+        elif "SELL" in action or "CUT LOSS" in action:
+            st.error(f"- **Action:** The model recommends **{action}** the position in {stock_symbol}.\n"
+                     f"- **Agent:** The exit signal was triggered by the `{agent}`.")
+        else:
+            st.warning(f"- **Action:** The model recommends to **WAIT or AVOID** buying {stock_symbol}.\n"
+                       f"- **Agent:** The decision was made by the `{agent}`.")
+    else:
+        st.info("Select an action from the sidebar.")
+
+    # Logic for the single-stock analysis button
+    # stock_symbol = st.sidebar.text_input("📊 Stock Symbol", value="NVDA").upper().strip()
+    # analysis_date = st.sidebar.date_input("📅 Analysis Date", value=datetime.now().date())
 
     # Define the button only ONCE
-    analyze_btn = st.sidebar.button("🚀 Run Professional Analysis", type="primary", use_container_width=True)
+    # analyze_btn = st.sidebar.button("🚀 Run Professional Analysis", type="primary", use_container_width=True)
 
-    if not analyze_btn:
-        st.info("Enter a stock symbol and date in the sidebar, then click 'Run Analysis' to begin.")
-        return
-
-    if not stock_symbol:
-        st.warning("Please enter a stock symbol.")
-        return
-
-    if not advisor.models:
-        st.error("AI models could not be loaded. Please check the logs.")
-        return
-
-    with st.spinner(f"Running analysis for {stock_symbol}..."):
-        stock_data, result = advisor.run_analysis(stock_symbol, analysis_date)
-
-    if not result:
-        st.error("Analysis failed. Please check the debug logs for more information.")
-        return
-
-    # --- Display Successful Results ---
-    action = result['action']
-    confidence = result.get('confidence', 0)
-    current_price = result.get('current_price', 0)
-    agent = result.get('agent', "Unknown Agent")
-
-    col1, col2, col3 = st.columns([3, 2, 2])
-    with col1:
-        if "BUY" in action:
-            st.success(f"🟢 **RECOMMENDATION: {action}**")
-        elif "SELL" in action or "CUT LOSS" in action:
-            st.error(f"🔴 **RECOMMENDATION: {action}**")
-        else:
-            st.warning(f"🟡 **RECOMMENDATION: {action}**")
-    with col2:
-        st.info(f"🧠 **Agent**: {agent}")
-    with col3:
-        st.metric("Model Confidence", f"{confidence:.1f}%")
-
-    st.subheader("💰 Price Information & Analysis")
-    price_col, target_buy_col, profit_col, stop_col = st.columns(4)
-    price_col.metric("Current Price", f"${current_price:.2f}")
-
-    if "BUY" in action:
-        buy_price = result.get('current_price')
-        target_buy_col.metric("🎯 Target Buy", f"${buy_price:.2f}")
-        stop_loss_price = result.get('stop_loss_price')
-        stop_col.metric("🔴 Stop-Loss", f"${stop_loss_price:.2f}")
-
-        # Calculate and display the profit target price
-        profit_target_pct = advisor.calculate_dynamic_profit_target(confidence)
-        profit_target_price = buy_price * (1 + profit_target_pct / 100)
-        profit_col.metric("✅ Profit Target", f"${profit_target_price:.2f}", f"+{profit_target_pct:.1f}%")
-
-    st.subheader("📊 Price Chart")
-    fig = advisor.create_chart(stock_symbol, stock_data, result, analysis_date)
-    if fig:
-        st.plotly_chart(fig, use_container_width=True)
-
-    st.subheader("📝 Action Summary")
-    if "BUY" in action and result.get('buy_date'):
-        # Calculate hypothetical net profit for the summary
-        hypothetical_investment = 1000  # Assume a $1,000 investment
-        hypothetical_shares = hypothetical_investment / buy_price
-        gross_profit_dollars = (profit_target_price - buy_price) * hypothetical_shares
-        net_profit_dollars, total_deducted = advisor.apply_israeli_fees_and_tax(gross_profit_dollars,
-                                                                                hypothetical_shares)
-
-        summary_text = (
-            f"- **Action:** The model recommends **BUYING** {stock_symbol} at **${current_price:.2f}**.\n"
-            f"- **Agent:** The decision was made by the `{agent}`.\n"
-            f"- **Risk Management:** A dynamic stop-loss is suggested at **${result.get('stop_loss_price'):.2f}**.\n"
-            f"- **Profit Scenario:** Based on a hypothetical **${hypothetical_investment:,}** investment, "
-            f"if the Profit Target of **${profit_target_price:.2f}** is reached, the estimated "
-            f"**Net Profit** (after fees & taxes) would be approximately **${net_profit_dollars:.2f} quel to "
-            f"{profit_target_pct:.1f}%**."
-        )
-        st.success(summary_text)
-
-    elif "SELL" in action or "CUT LOSS" in action:
-        st.error(f"""
-            - **Action:** The model recommends **{action}** the position in {stock_symbol}.
-            - **Agent:** The exit signal was triggered by the `{agent}`.
-            """)
-    else:
-        st.warning(f"""
-            - **Action:** The model recommends to **WAIT or AVOID** buying {stock_symbol}.
-            - **Agent:** The decision was made by the `{agent}`.
-            """)
+    # if not analyze_btn:
+    #     st.info("Enter a stock symbol and date in the sidebar, then click 'Run Analysis' to begin.")
+    #     return
+    #
+    # if not stock_symbol:
+    #     st.warning("Please enter a stock symbol.")
+    #     return
+    #
+    # if not advisor.models:
+    #     st.error("AI models could not be loaded. Please check the logs.")
+    #     return
+    #
+    # with st.spinner(f"Running analysis for {stock_symbol}..."):
+    #     stock_data, result = advisor.run_analysis(stock_symbol, analysis_date)
+    #
+    # if not result:
+    #     st.error("Analysis failed. Please check the debug logs for more information.")
+    #     return
+    #
+    # # --- Display Successful Results ---
+    # action = result['action']
+    # confidence = result.get('confidence', 0)
+    # current_price = result.get('current_price', 0)
+    # agent = result.get('agent', "Unknown Agent")
+    #
+    # col1, col2, col3 = st.columns([3, 2, 2])
+    # with col1:
+    #     if "BUY" in action:
+    #         st.success(f"🟢 **RECOMMENDATION: {action}**")
+    #     elif "SELL" in action or "CUT LOSS" in action:
+    #         st.error(f"🔴 **RECOMMENDATION: {action}**")
+    #     else:
+    #         st.warning(f"🟡 **RECOMMENDATION: {action}**")
+    # with col2:
+    #     st.info(f"🧠 **Agent**: {agent}")
+    # with col3:
+    #     st.metric("Model Confidence", f"{confidence:.1f}%")
+    #
+    # st.subheader("💰 Price Information & Analysis")
+    # price_col, target_buy_col, profit_col, stop_col = st.columns(4)
+    # price_col.metric("Current Price", f"${current_price:.2f}")
+    #
+    # if "BUY" in action:
+    #     buy_price = result.get('current_price')
+    #     target_buy_col.metric("🎯 Target Buy", f"${buy_price:.2f}")
+    #     stop_loss_price = result.get('stop_loss_price')
+    #     stop_col.metric("🔴 Stop-Loss", f"${stop_loss_price:.2f}")
+    #
+    #     # Calculate and display the profit target price
+    #     profit_target_pct = advisor.calculate_dynamic_profit_target(confidence)
+    #     profit_target_price = buy_price * (1 + profit_target_pct / 100)
+    #     profit_col.metric("✅ Profit Target", f"${profit_target_price:.2f}", f"+{profit_target_pct:.1f}%")
+    #
+    # st.subheader("📊 Price Chart")
+    # fig = advisor.create_chart(stock_symbol, stock_data, result, analysis_date)
+    # if fig:
+    #     st.plotly_chart(fig, use_container_width=True)
+    #
+    # st.subheader("📝 Action Summary")
+    # if "BUY" in action and result.get('buy_date'):
+    #     # Calculate hypothetical net profit for the summary
+    #     hypothetical_investment = 1000  # Assume a $1,000 investment
+    #     hypothetical_shares = hypothetical_investment / buy_price
+    #     gross_profit_dollars = (profit_target_price - buy_price) * hypothetical_shares
+    #     net_profit_dollars, total_deducted = advisor.apply_israeli_fees_and_tax(gross_profit_dollars,
+    #                                                                             hypothetical_shares)
+    #
+    #     summary_text = (
+    #         f"- **Action:** The model recommends **BUYING** {stock_symbol} at **${current_price:.2f}**.\n"
+    #         f"- **Agent:** The decision was made by the `{agent}`.\n"
+    #         f"- **Risk Management:** A dynamic stop-loss is suggested at **${result.get('stop_loss_price'):.2f}**.\n"
+    #         f"- **Profit Scenario:** Based on a hypothetical **${hypothetical_investment:,}** investment, "
+    #         f"if the Profit Target of **${profit_target_price:.2f}** is reached, the estimated "
+    #         f"**Net Profit** (after fees & taxes) would be approximately **${net_profit_dollars:.2f} quel to "
+    #         f"{profit_target_pct:.1f}%**."
+    #     )
+    #     st.success(summary_text)
+    #
+    # elif "SELL" in action or "CUT LOSS" in action:
+    #     st.error(f"""
+    #         - **Action:** The model recommends **{action}** the position in {stock_symbol}.
+    #         - **Agent:** The exit signal was triggered by the `{agent}`.
+    #         """)
+    # else:
+    #     st.warning(f"""
+    #         - **Action:** The model recommends to **WAIT or AVOID** buying {stock_symbol}.
+    #         - **Agent:** The decision was made by the `{agent}`.
+    #         """)
 
 
 # --- Main Execution ---
