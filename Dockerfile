@@ -4,6 +4,10 @@ FROM python:3.12-slim
 # Set the working directory inside the container
 WORKDIR /app
 
+# Update pip and install the 'wheel' package before other requirements.
+# This helps prevent 'metadata-generation-failed' errors.
+RUN pip install --no-cache-dir --upgrade pip wheel
+
 # Copy the dependencies file first for efficient caching
 COPY requirements.txt .
 
