@@ -1,0 +1,31 @@
+name: Deploy StockWise to Staging
+
+on:
+  push:
+    branches:
+      - master   # This workflow will run on pushes to the 'master' branch
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to Staging VM
+        # This is a pre-made Action from the marketplace that simplifies SSH
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USERNAME }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            # These commands will be executed on your staging-vm
+            echo "--- 1. Navigating to project directory ---"
+            cd ~/StockWise
+            
+            echo "--- 2. Pulling latest code from the master branch ---"
+            git pull origin master
+            
+            echo "--- 3. Rebuilding and restarting the Docker container ---"
+            docker-compose build
+            docker-compose up -d --remove-orphans
+            
+            echo "--- ✅ Deployment successful! ---"

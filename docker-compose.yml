@@ -1,0 +1,10 @@
+version: '3.8'
+
+services:
+  stockwise-app:
+    build: .
+    image: stockwise-app:latest
+    container_name: stockwise_streamlit_app
+    restart: always
+    ports:
+      - "8501:8501"
