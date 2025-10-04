@@ -1,1 +1,32 @@
 /.env
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+script_env/
+
+# IDE & OS files
+.idea/
+.DS_Store
+
+# Data, Models, Logs, and Reports
+# These should be stored on Google Drive, not in Git.
+data/
+models/
+logs/
+reports/
+*.csv
+*.json
+*.txt
+*.xlsx
+*.log
+
+# Temp files created by some editors
+*~
+*.backup_*
+
+# --- Exceptions ---
+# We explicitly want to KEEP these files in Git.
+!requirements.txt
+!nasdaq_stocks.csv
