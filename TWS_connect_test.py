@@ -43,58 +43,62 @@ import time
 from ibapi.client import EClient
 from ibapi.wrapper import EWrapper
 
-
 class TWSConnectionTest(EWrapper, EClient):
     """A minimal client to test the TWS API connection."""
 
     def __init__(self):
         EClient.__init__(self, self)
         self.connection_acknowledged = threading.Event()
+        self.has_critical_error = False
+        self.error_messages = []
 
     def nextValidId(self, orderId: int):
         """This callback is the definitive proof that the connection handshake is complete."""
         super().nextValidId(orderId)
-        print("✅ SUCCESS: Received nextValidId. Connection handshake is complete.")
+        print("SUCCESS: Received nextValidId. Connection handshake is complete.")
         self.connection_acknowledged.set()
 
     def error(self, reqId, errorCode, errorString, advancedOrderRejectJson=""):
         """Handles any errors from the TWS API."""
         super().error(reqId, errorCode, errorString, advancedOrderRejectJson)
-        print(f"❌ TWS API ERROR: Code={errorCode}, Message='{errorString}'")
+        if errorCode not in [2104, 2106, 2158, 2108, 1100, 1102]:
+            self.has_critical_error = True
+            self.error_messages.append(f"TWS API ERROR: Code={errorCode}, Message='{errorString}'")
+            print(f"❌ {self.error_messages[-1]}")
+        else:
+            print(f"   (Info: Code={errorCode}, Message='{errorString}')")
 
 
 def run_test():
     print("--- Starting Minimal TWS Connection Test ---")
     client = TWSConnectionTest()
-
-    # --- Configuration ---
     host = "127.0.0.1"
-    port = 7497  # Default for TWS Paper Trading. Change if your port is different.
-    client_id = 101  # Use a unique ID that is not in use.
+    port = 7497
+    client_id = 101
 
     print(f"[*] Attempting to connect to TWS at {host}:{port} with Client ID {client_id}...")
     client.connect(host, port, client_id)
 
-    # The TWS API runs in a separate thread.
-    api_thread = threading.Thread(target=client.run, daemon=True)
+    # --- Set daemon=False to allow for graceful shutdown ---
+    api_thread = threading.Thread(target=client.run, daemon=False)
     api_thread.start()
     print("[*] API thread started. Waiting for connection acknowledgement...")
 
-    # Wait for the nextValidId callback to be triggered.
-    # This is the most reliable way to confirm a successful connection.
     acknowledged = client.connection_acknowledged.wait(timeout=20)
 
     print("\n--- Test Result ---")
-    if acknowledged:
-        print("🎉 CONNECTION SUCCESSFUL")
+    if acknowledged and not client.has_critical_error:
+        print("CONNECTION SUCCESSFUL")
     else:
-        print("🔥 CONNECTION FAILED: Timed out waiting for handshake acknowledgement from TWS.")
-        print("\n   Troubleshooting:")
-        print("   1. Is TWS running and logged in?")
-        print("   2. Are API settings correct (Enable ActiveX, Trusted IP 127.0.0.1)?")
-        print(f"  3. Is Client ID {client_id} already in use in TWS?")
-        print("   4. Is a firewall or antivirus blocking the connection?")
+        print("CONNECTION FAILED.")
+        if not acknowledged:
+            print("   - Reason: Timed out waiting for handshake from TWS.")
+        critical_errors = [msg for msg in client.error_messages if "Market data farm" not in msg]
+        for msg in critical_errors:
+            print(f"   - Reason: {msg}")
 
+    # --- Give the API thread a moment to process disconnect ---
+    time.sleep(1)
     client.disconnect()
     print("[*] Disconnected.")
 
