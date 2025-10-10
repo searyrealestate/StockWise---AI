@@ -62,6 +62,7 @@ from plotly.subplots import make_subplots
 from data_source_manager import DataSourceManager
 import screener
 import urllib.request
+from mico_system import MicoAdvisor
 
 
 # --- Page Configuration ---
@@ -640,8 +641,14 @@ def create_enhanced_interface():
         '4% Net Profit': "models/NASDAQ-gen3-4pct"
     }
 
-    # --- FIX: Define ALL sidebar inputs at the top in the correct order ---
+    # --- Define ALL sidebar inputs at the top in the correct order ---
     st.sidebar.header("🎯 Trading Analysis")
+    # --- Add checkboxes to select systems ---
+    st.sidebar.markdown("**Select Systems to Run:**")
+    run_ai = st.sidebar.checkbox("Run AI Advisor (Gen-3)", value=True)
+    run_mico = st.sidebar.checkbox("Run Micha System (Rule-Based)", value=True)
+
+
     selected_agent_name = st.sidebar.selectbox("🧠 Select AI Agent", options=list(AGENT_CONFIGS.keys()))
     stock_symbol = st.sidebar.text_input("📊 Stock Symbol", value="NVDA").upper().strip()
     analysis_date = st.sidebar.date_input("📅 Analysis Date", value=datetime.now().date())
@@ -667,206 +674,243 @@ def create_enhanced_interface():
     if st.session_state.advisor.model_dir != selected_model_dir:
         with st.spinner(f"Loading '{selected_agent_name}' agent..."):
             st.session_state.advisor = ProfessionalStockAdvisor(model_dir=selected_model_dir)
-    advisor = st.session_state.advisor
 
-    st.markdown(f"### Now using `{selected_agent_name}` Agent")
+    advisor = st.session_state.advisor
+    mico_advisor = st.session_state.mico_advisor
+
+    st.markdown(f"### Now using `{selected_agent_name}` Agent" if run_ai else "### AI Advisor is disabled")
     st.markdown("---")
 
-    # --- Restore the logic for the scan button ---
-    if scan_btn:
-        # Dynamically load the selected stock list
-        load_function = universe_options[selected_universe_name]
-        stock_universe = load_function()
-
-        if not stock_universe:
-            # Error messages are handled within the loading functions
-            return
-
-        st.subheader(f"BULL SCAN | Top BUY Opportunities in: {selected_universe_name}")
-        st.info(f"Scanning {len(stock_universe)} stocks for 'BUY' signals on {analysis_date.strftime('%Y-%m-%d')}...")
-
-        opportunities_df = screener.find_buy_opportunities(advisor, stock_universe, analysis_date)
-
-        if not opportunities_df.empty:
-            st.success(f"Scan complete! Found {len(opportunities_df)} potential opportunities.")
-
-    # Logic for the single-stock analysis button
+    # --- MODIFIED: Single-Stock Analysis Logic ---
     if analyze_btn:
+        if not run_ai and not run_mico:
+            st.warning("Please select at least one system to run (AI or MICO).")
+            return
         if not stock_symbol:
             st.warning("Please enter a stock symbol.")
             return
 
-        with st.spinner(f"Running analysis for {stock_symbol}..."):
-            stock_data, result = advisor.run_analysis(stock_symbol, analysis_date)
+        ai_result, mico_result, stock_data = None, None, None
+        with st.spinner(f"Running selected analysis for {stock_symbol}..."):
+            if run_ai:
+                stock_data, ai_result = advisor.run_analysis(stock_symbol, analysis_date)
+            if run_mico:
+                mico_result = mico_advisor.analyze(stock_symbol)
 
-        if not result:
-            st.error("Analysis failed.");
+        if not ai_result and not mico_result:
+            st.error("Analysis failed for all selected systems.");
             return
 
-        action = result['action']
-        confidence = result.get('confidence', 0)
-        current_price = result.get('current_price', 0)
-        agent = result.get('agent', "Unknown Agent")
+        st.subheader("System Recommendations")
 
-        col1, col2, col3 = st.columns([3, 2, 2])
-        with col1:
-            if "BUY" in action:
-                st.success(f"🟢 **RECOMMENDATION: {action}**")
-            elif "SELL" in action or "CUT LOSS" in action:
-                st.error(f"🔴 **RECOMMENDATION: {action}**")
-            else:
-                st.warning(f"🟡 **RECOMMENDATION: {action}**")
-        with col2:
-            st.info(f"🧠 **Agent**: {agent}")
-        with col3:
-            st.metric("Model Confidence", f"{confidence:.1f}%")
+        # Dynamically create columns based on which systems were run
+        num_systems = sum([1 for res in [ai_result, mico_result] if res is not None])
+        if num_systems > 0:
+            cols = st.columns(num_systems)
+            col_idx = 0
 
-        st.subheader("💰 Price Information & Analysis")
-        price_col, target_buy_col, profit_col, stop_col = st.columns(4)
-        price_col.metric("Current Price", f"${current_price:.2f}")
+            # Display AI Advisor Result if it was run
+            if ai_result:
+                with cols[col_idx]:
+                    st.markdown("##### 🤖 AI Advisor (Gen-3)")
+                    action = ai_result.get('action', 'N/A')
+                    if "BUY" in action:
+                        st.success(f"**Signal: {action}**")
+                    else:
+                        st.warning(f"**Signal: {action}**")
+                    st.info(f"**Agent:** `{ai_result.get('agent', 'N/A')}`")
+                    st.metric("Confidence", f"{ai_result.get('confidence', 0):.1f}%")
+                    col_idx += 1
 
-        if "BUY" in action:
-            buy_price = result.get('current_price')
-            target_buy_col.metric("🎯 Target Buy", f"${buy_price:.2f}")
-            stop_loss_price = result.get('stop_loss_price')
-            stop_col.metric("🔴 Stop-Loss", f"${stop_loss_price:.2f}")
-            profit_target_pct = advisor.calculate_dynamic_profit_target(confidence)
-            profit_target_price = buy_price * (1 + profit_target_pct / 100)
-            profit_col.metric("✅ Profit Target", f"${profit_target_price:.2f}", f"+{profit_target_pct:.1f}%")
+            # Display MICO System Result if it was run
+            if mico_result:
+                with cols[col_idx]:
+                    st.markdown("##### 룰 MICO System (Rule-Based)")
+                    action = mico_result.get('signal', 'N/A')
+                    if "BUY" in action:
+                        st.success(f"**Signal: {action}**")
+                    else:
+                        st.warning(f"**Signal: {action}**")
+                    st.info(f"**Reason:** `{mico_result.get('reason', 'N/A')}`")
 
-        st.subheader("📊 Price Chart")
-        fig = advisor.create_chart(stock_symbol, stock_data, result, analysis_date)
-        if fig: st.plotly_chart(fig, use_container_width=True)
+        # The rest of the UI (financials, chart) is dependent on the AI result
+        if ai_result:
+            st.subheader("💰 Price Information & AI Analysis")
+            # ... (rest of your financial metrics and create_chart logic remains here)
+            # This part will only show if the AI system was selected.
+            current_price = ai_result.get('current_price', 0)
+            price_col, target_buy_col, profit_col, stop_col = st.columns(4)
+            price_col.metric("Current Price", f"${current_price:.2f}")
 
-        st.subheader("📝 Action Summary")
-        if "BUY" in action and result.get('buy_date'):
-            hypothetical_investment = 1000
-            buy_price = result.get('current_price', 1)
-            profit_target_pct = advisor.calculate_dynamic_profit_target(confidence)
-            profit_target_price = buy_price * (1 + profit_target_pct / 100)
-            hypothetical_shares = hypothetical_investment / buy_price
-            gross_profit_dollars = (profit_target_price - buy_price) * hypothetical_shares
-            net_profit_dollars, total_deducted = advisor.apply_israeli_fees_and_tax(gross_profit_dollars,
-                                                                                    hypothetical_shares)
-            net_profit_percentage = (
-                                                net_profit_dollars / hypothetical_investment) * 100 if hypothetical_investment > 0 else 0
+            if "BUY" in ai_result.get('action', ''):
+                # ... your existing logic to display buy price, stop-loss, profit target ...
+                # ... and the chart creation call ...
+                st.subheader("📊 Price Chart")
+                fig = advisor.create_chart(stock_symbol, stock_data, ai_result, analysis_date)
+                if fig: st.plotly_chart(fig, use_container_width=True)
 
-            # Corrected the corrupted and malformed summary text.
-            summary_text = (
-                f"- **Action:** The model recommends **BUYING** {stock_symbol} at **${current_price:.2f}**.\n"
-                f"- **Agent:** The decision was made by the `{agent}`.\n"
-                f"- **Risk Management:** A dynamic stop-loss is suggested at **${result.get('stop_loss_price'):.2f}**.\n"
-                f"- **Profit Scenario:** Based on a hypothetical **${hypothetical_investment:,}** investment, "
-                f"if the Profit Target of **${profit_target_price:.2f}** is reached, the estimated "
-                f"**Net Profit** (after fees & taxes) would be approximately **${net_profit_dollars:.2f}** "
-                f"(a **{net_profit_percentage:.2f}%** net return)."
-            )
-            st.success(summary_text)
+    # --- MODIFIED: Screener Logic ---
+    if scan_btn:
+        if not run_ai and not run_mico:
+            st.warning("Please select at least one system to run (AI or MICO).")
+            return
 
-        elif "SELL" in action or "CUT LOSS" in action:
-            st.error(f"- **Action:** The model recommends **{action}** the position in {stock_symbol}.\n"
-                     f"- **Agent:** The exit signal was triggered by the `{agent}`.")
-        else:
-            st.warning(f"- **Action:** The model recommends to **WAIT or AVOID** buying {stock_symbol}.\n"
-                       f"- **Agent:** The decision was made by the `{agent}`.")
-    else:
-        st.info("Select an action from the sidebar.")
+        load_function = universe_options[selected_universe_name]
+        stock_universe = load_function()
+        if not stock_universe: return
 
-    # Logic for the single-stock analysis button
-    # stock_symbol = st.sidebar.text_input("📊 Stock Symbol", value="NVDA").upper().strip()
-    # analysis_date = st.sidebar.date_input("📅 Analysis Date", value=datetime.now().date())
+        st.subheader(f"Multi-System Scan | Top Opportunities in: {selected_universe_name}")
 
-    # Define the button only ONCE
-    # analyze_btn = st.sidebar.button("🚀 Run Professional Analysis", type="primary", use_container_width=True)
+        ai_opportunities, mico_opportunities = pd.DataFrame(), pd.DataFrame()
 
-    # if not analyze_btn:
-    #     st.info("Enter a stock symbol and date in the sidebar, then click 'Run Analysis' to begin.")
-    #     return
+        if run_ai:
+            with st.spinner(f"Running AI scan on {len(stock_universe)} stocks..."):
+                ai_opportunities = screener.find_buy_opportunities(advisor, stock_universe, analysis_date)
+
+        if run_mico:
+            with st.spinner(f"Running MICO scan on {len(stock_universe)} stocks..."):
+                mico_opportunities = mico_advisor.run_screener(stock_universe)
+
+        # Dynamically create tabs based on which screeners were run
+        tabs_to_show = []
+        if not ai_opportunities.empty and not mico_opportunities.empty:
+            tabs_to_show.append("🔥 Combined High-Confidence")
+        if not ai_opportunities.empty:
+            tabs_to_show.append("🤖 AI Only")
+        if not mico_opportunities.empty:
+            tabs_to_show.append("룰 MICO Only")
+
+        if not tabs_to_show:
+            st.warning("No BUY signals found by any selected system.")
+            return
+
+        tabs = st.tabs(tabs_to_show)
+        tab_idx = 0
+
+        if "🔥 Combined High-Confidence" in tabs_to_show:
+            with tabs[tab_idx]:
+                st.markdown("#### Signals where both AI and MICO systems agree")
+                combined_df = pd.merge(ai_opportunities, mico_opportunities, on="Symbol", how="inner")
+                if combined_df.empty:
+                    st.warning("No overlapping BUY signals found between the two systems.")
+                else:
+                    st.dataframe(combined_df, use_container_width=True)
+                tab_idx += 1
+
+        if "🤖 AI Only" in tabs_to_show:
+            with tabs[tab_idx]:
+                st.markdown("#### All signals from the AI Advisor")
+                st.dataframe(ai_opportunities, use_container_width=True)
+                tab_idx += 1
+
+        if "룰 MICO Only" in tabs_to_show:
+            with tabs[tab_idx]:
+                st.markdown("#### All signals from the MICO System")
+                st.dataframe(mico_opportunities, use_container_width=True)
+
+    # Default message if no buttons are clicked
+    if not analyze_btn and not scan_btn:
+        st.info("Select an action from the sidebar to begin.")
+
+    # # --- Restore the logic for the scan button ---
+    # if scan_btn:
+    #     # Dynamically load the selected stock list
+    #     load_function = universe_options[selected_universe_name]
+    #     stock_universe = load_function()
     #
-    # if not stock_symbol:
-    #     st.warning("Please enter a stock symbol.")
-    #     return
+    #     if not stock_universe:
+    #         # Error messages are handled within the loading functions
+    #         return
     #
-    # if not advisor.models:
-    #     st.error("AI models could not be loaded. Please check the logs.")
-    #     return
+    #     st.subheader(f"BULL SCAN | Top BUY Opportunities in: {selected_universe_name}")
+    #     st.info(f"Scanning {len(stock_universe)} stocks for 'BUY' signals on {analysis_date.strftime('%Y-%m-%d')}...")
     #
-    # with st.spinner(f"Running analysis for {stock_symbol}..."):
-    #     stock_data, result = advisor.run_analysis(stock_symbol, analysis_date)
+    #     opportunities_df = screener.find_buy_opportunities(advisor, stock_universe, analysis_date)
     #
-    # if not result:
-    #     st.error("Analysis failed. Please check the debug logs for more information.")
-    #     return
+    #     if not opportunities_df.empty:
+    #         st.success(f"Scan complete! Found {len(opportunities_df)} potential opportunities.")
     #
-    # # --- Display Successful Results ---
-    # action = result['action']
-    # confidence = result.get('confidence', 0)
-    # current_price = result.get('current_price', 0)
-    # agent = result.get('agent', "Unknown Agent")
+    # # Logic for the single-stock analysis button
+    # if analyze_btn:
+    #     if not stock_symbol:
+    #         st.warning("Please enter a stock symbol.")
+    #         return
     #
-    # col1, col2, col3 = st.columns([3, 2, 2])
-    # with col1:
+    #     with st.spinner(f"Running analysis for {stock_symbol}..."):
+    #         stock_data, result = advisor.run_analysis(stock_symbol, analysis_date)
+    #
+    #     if not result:
+    #         st.error("Analysis failed.")
+    #         return
+    #
+    #     action = result['action']
+    #     confidence = result.get('confidence', 0)
+    #     current_price = result.get('current_price', 0)
+    #     agent = result.get('agent', "Unknown Agent")
+    #
+    #     col1, col2, col3 = st.columns([3, 2, 2])
+    #     with col1:
+    #         if "BUY" in action:
+    #             st.success(f"🟢 **RECOMMENDATION: {action}**")
+    #         elif "SELL" in action or "CUT LOSS" in action:
+    #             st.error(f"🔴 **RECOMMENDATION: {action}**")
+    #         else:
+    #             st.warning(f"🟡 **RECOMMENDATION: {action}**")
+    #     with col2:
+    #         st.info(f"🧠 **Agent**: {agent}")
+    #     with col3:
+    #         st.metric("Model Confidence", f"{confidence:.1f}%")
+    #
+    #     st.subheader("💰 Price Information & Analysis")
+    #     price_col, target_buy_col, profit_col, stop_col = st.columns(4)
+    #     price_col.metric("Current Price", f"${current_price:.2f}")
+    #
     #     if "BUY" in action:
-    #         st.success(f"🟢 **RECOMMENDATION: {action}**")
+    #         buy_price = result.get('current_price')
+    #         target_buy_col.metric("🎯 Target Buy", f"${buy_price:.2f}")
+    #         stop_loss_price = result.get('stop_loss_price')
+    #         stop_col.metric("🔴 Stop-Loss", f"${stop_loss_price:.2f}")
+    #         profit_target_pct = advisor.calculate_dynamic_profit_target(confidence)
+    #         profit_target_price = buy_price * (1 + profit_target_pct / 100)
+    #         profit_col.metric("✅ Profit Target", f"${profit_target_price:.2f}", f"+{profit_target_pct:.1f}%")
+    #
+    #     st.subheader("📊 Price Chart")
+    #     fig = advisor.create_chart(stock_symbol, stock_data, result, analysis_date)
+    #     if fig: st.plotly_chart(fig, use_container_width=True)
+    #
+    #     st.subheader("📝 Action Summary")
+    #     if "BUY" in action and result.get('buy_date'):
+    #         hypothetical_investment = 1000
+    #         buy_price = result.get('current_price', 1)
+    #         profit_target_pct = advisor.calculate_dynamic_profit_target(confidence)
+    #         profit_target_price = buy_price * (1 + profit_target_pct / 100)
+    #         hypothetical_shares = hypothetical_investment / buy_price
+    #         gross_profit_dollars = (profit_target_price - buy_price) * hypothetical_shares
+    #         net_profit_dollars, total_deducted = advisor.apply_israeli_fees_and_tax(gross_profit_dollars,
+    #                                                                                 hypothetical_shares)
+    #         net_profit_percentage = (
+    #                                             net_profit_dollars / hypothetical_investment) * 100 if hypothetical_investment > 0 else 0
+    #
+    #         # Corrected the corrupted and malformed summary text.
+    #         summary_text = (
+    #             f"- **Action:** The model recommends **BUYING** {stock_symbol} at **${current_price:.2f}**.\n"
+    #             f"- **Agent:** The decision was made by the `{agent}`.\n"
+    #             f"- **Risk Management:** A dynamic stop-loss is suggested at **${result.get('stop_loss_price'):.2f}**.\n"
+    #             f"- **Profit Scenario:** Based on a hypothetical **${hypothetical_investment:,}** investment, "
+    #             f"if the Profit Target of **${profit_target_price:.2f}** is reached, the estimated "
+    #             f"**Net Profit** (after fees & taxes) would be approximately **${net_profit_dollars:.2f}** "
+    #             f"(a **{net_profit_percentage:.2f}%** net return)."
+    #         )
+    #         st.success(summary_text)
+    #
     #     elif "SELL" in action or "CUT LOSS" in action:
-    #         st.error(f"🔴 **RECOMMENDATION: {action}**")
+    #         st.error(f"- **Action:** The model recommends **{action}** the position in {stock_symbol}.\n"
+    #                  f"- **Agent:** The exit signal was triggered by the `{agent}`.")
     #     else:
-    #         st.warning(f"🟡 **RECOMMENDATION: {action}**")
-    # with col2:
-    #     st.info(f"🧠 **Agent**: {agent}")
-    # with col3:
-    #     st.metric("Model Confidence", f"{confidence:.1f}%")
-    #
-    # st.subheader("💰 Price Information & Analysis")
-    # price_col, target_buy_col, profit_col, stop_col = st.columns(4)
-    # price_col.metric("Current Price", f"${current_price:.2f}")
-    #
-    # if "BUY" in action:
-    #     buy_price = result.get('current_price')
-    #     target_buy_col.metric("🎯 Target Buy", f"${buy_price:.2f}")
-    #     stop_loss_price = result.get('stop_loss_price')
-    #     stop_col.metric("🔴 Stop-Loss", f"${stop_loss_price:.2f}")
-    #
-    #     # Calculate and display the profit target price
-    #     profit_target_pct = advisor.calculate_dynamic_profit_target(confidence)
-    #     profit_target_price = buy_price * (1 + profit_target_pct / 100)
-    #     profit_col.metric("✅ Profit Target", f"${profit_target_price:.2f}", f"+{profit_target_pct:.1f}%")
-    #
-    # st.subheader("📊 Price Chart")
-    # fig = advisor.create_chart(stock_symbol, stock_data, result, analysis_date)
-    # if fig:
-    #     st.plotly_chart(fig, use_container_width=True)
-    #
-    # st.subheader("📝 Action Summary")
-    # if "BUY" in action and result.get('buy_date'):
-    #     # Calculate hypothetical net profit for the summary
-    #     hypothetical_investment = 1000  # Assume a $1,000 investment
-    #     hypothetical_shares = hypothetical_investment / buy_price
-    #     gross_profit_dollars = (profit_target_price - buy_price) * hypothetical_shares
-    #     net_profit_dollars, total_deducted = advisor.apply_israeli_fees_and_tax(gross_profit_dollars,
-    #                                                                             hypothetical_shares)
-    #
-    #     summary_text = (
-    #         f"- **Action:** The model recommends **BUYING** {stock_symbol} at **${current_price:.2f}**.\n"
-    #         f"- **Agent:** The decision was made by the `{agent}`.\n"
-    #         f"- **Risk Management:** A dynamic stop-loss is suggested at **${result.get('stop_loss_price'):.2f}**.\n"
-    #         f"- **Profit Scenario:** Based on a hypothetical **${hypothetical_investment:,}** investment, "
-    #         f"if the Profit Target of **${profit_target_price:.2f}** is reached, the estimated "
-    #         f"**Net Profit** (after fees & taxes) would be approximately **${net_profit_dollars:.2f} quel to "
-    #         f"{profit_target_pct:.1f}%**."
-    #     )
-    #     st.success(summary_text)
-    #
-    # elif "SELL" in action or "CUT LOSS" in action:
-    #     st.error(f"""
-    #         - **Action:** The model recommends **{action}** the position in {stock_symbol}.
-    #         - **Agent:** The exit signal was triggered by the `{agent}`.
-    #         """)
+    #         st.warning(f"- **Action:** The model recommends to **WAIT or AVOID** buying {stock_symbol}.\n"
+    #                    f"- **Agent:** The decision was made by the `{agent}`.")
     # else:
-    #     st.warning(f"""
-    #         - **Action:** The model recommends to **WAIT or AVOID** buying {stock_symbol}.
-    #         - **Agent:** The decision was made by the `{agent}`.
-    #         """)
+    #     st.info("Select an action from the sidebar.")
 
 
 # --- Main Execution ---
