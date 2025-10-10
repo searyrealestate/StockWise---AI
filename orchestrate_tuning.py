@@ -47,6 +47,9 @@ import optuna
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import f1_score
 from data_manager import DataManager
+from tqdm import tqdm
+import itertools
+import concurrent.futures
 
 # --- Setup logging ---
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] (%(name)s) %(message)s")
@@ -152,9 +155,6 @@ def get_user_selection(prompt: str, options: list) -> list:
 
 
 if __name__ == "__main__":
-    # Add this import at the top of your script if it's not there
-    from tqdm import tqdm
-    import itertools
 
     # --- Interactive Menu (same as before) ---
     agents = get_user_selection("Which agent do you want to optimize?", list(AGENT_DATA_DIRS.keys()))
@@ -176,12 +176,24 @@ if __name__ == "__main__":
         else:
             agent_data_cache[agent] = full_df
 
-    # --- Wrap the main loop with tqdm for a master progress bar ---
-    for agent, m_type, cluster in tqdm(jobs_to_run, desc="Overall Tuning Progress"):
-        if agent not in agent_data_cache:
-            continue # Skip if data failed to load
+    # --- Parallel Execution using ProcessPoolExecutor ---
+    # Use a number of workers suitable for your machine's CPU cores (e.g., os.cpu_count() - 2)
+    MAX_WORKERS = 6
 
-        full_df = agent_data_cache[agent]
-        run_single_study(full_df, agent, m_type, cluster)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = []
+        for agent, m_type, cluster in jobs_to_run:
+            if agent in agent_data_cache:
+                # Submit each study as a separate job to the process pool
+                future = executor.submit(run_single_study, agent_data_cache[agent], agent, m_type, cluster,
+                                         n_trials=100)
+                futures.append(future)
+
+        # Use tqdm to show progress as jobs are completed
+        for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="Overall Tuning Progress"):
+            try:
+                future.result() # Retrieve result to raise any exceptions that occurred in the process
+            except Exception as e:
+                logger.error(f"A tuning job failed with an error: {e}")
 
     logger.info("\n🎉 All selected tuning studies have finished.")
