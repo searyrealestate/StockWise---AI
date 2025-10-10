@@ -102,18 +102,21 @@ class SimpleIBKRTest(EWrapper, EClient):
 
     def error(self, reqId, errorCode, errorString, advancedOrderRejectJson=""):
         """Handle errors"""
-        if errorCode in [2104, 2106, 2158]:  # Market data warnings
+        # --- Filter messages by code ---
+        if errorCode in [2104, 2106, 2158]:  # Market data farm "OK" messages
             self.log(f"Market data warning {errorCode}: {errorString}", "WARNING")
-        elif errorCode in [502, 503, 504]:  # Connection errors
+        elif errorCode in [502, 503, 504]:  # Critical connection errors
             self.log(f"Connection error {errorCode}: {errorString}", "ERROR")
             self.error_occurred = True
             self.error_message = errorString
+            self.connection_ready.set()  # Also set event to stop waiting
         else:
+            # Treat other messages as potential errors
             self.log(f"Error {errorCode}: {errorString}", "ERROR")
-            if reqId != -1:
+            if reqId != -1:  # reqId of -1 is a system message
                 self.error_occurred = True
                 self.error_message = errorString
-                self.data_ready.set()
+                self.data_ready.set()  # Set data event if it's a data-related error
 
 
 def test_ibkr_connection():
