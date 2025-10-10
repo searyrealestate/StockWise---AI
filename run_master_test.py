@@ -51,14 +51,13 @@ def run_backtest():
 
     command = ["pytest", "-s", BACKTEST_SCRIPT, "--mode=long"]
 
-    # --- FIX: Stream pytest output in real-time ---
+    # --- Stream pytest output in real-time ---
     # Use Popen without redirecting stdout/stderr to see live progress.
     # The output from pytest (including the tqdm progress bars) will now appear in your terminal.
     process = subprocess.Popen(command, text=True, encoding='utf-8')
 
     # Wait for the process to complete while its output is being streamed.
     process.wait()
-    # --- END FIX ---
 
     # Add a newline for cleaner separation after pytest finishes
     print("\n" + "=" * 80)
