@@ -31,7 +31,9 @@ import pandas_ta as ta
 from data_source_manager import DataSourceManager
 # --- Import for multithreading ---
 import concurrent.futures
-
+import queue
+import threading
+import numba
 
 try:
     logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s', stream=sys.stdout)
@@ -161,9 +163,74 @@ def get_dominant_cycle(data: pd.Series, min_period=3, max_period=100) -> float:
     period_mask = (periods >= min_period) & (periods <= max_period)
     if not np.any(period_mask) or np.sum(period_mask) == 0: return 0.0
     dominant_idx = np.argmax(power[pos_mask][period_mask])
-    return periods[period_mask][dominant_idx]
+    return float(periods[period_mask][dominant_idx])
 
 
+@numba.jit(nopython=True)
+def _calculate_labels_numba(close_prices, high_prices, low_prices, atr,
+                            profit_take_mult, stop_loss_mult, time_limit_bars,
+                            profit_mode_is_fixed, net_profit_target):
+    """
+    A Numba-accelerated JIT function to calculate triple-barrier outcomes.
+    This function works with raw NumPy arrays for maximum speed.
+    """
+    n = len(close_prices)
+    outcomes = np.zeros(n, dtype=np.int8)
+
+    for i in range(n - time_limit_bars):
+        entry_price = close_prices[i]
+        current_atr = atr[i]
+
+        if np.isnan(current_atr) or current_atr == 0:
+            continue
+
+        if profit_mode_is_fixed:
+            upper_barrier = entry_price * (1 + (net_profit_target + 0.004) / 0.75)
+        else:
+            upper_barrier = entry_price + (current_atr * profit_take_mult)
+
+        lower_barrier = entry_price - (current_atr * stop_loss_mult)
+
+        for j in range(1, time_limit_bars + 1):
+            if high_prices[i + j] >= upper_barrier:
+                outcomes[i] = 1
+                break
+            if low_prices[i + j] <= lower_barrier:
+                outcomes[i] = -1
+                break
+
+    return outcomes
+
+
+# @numba.jit(nopython=True)
+# def apply_triple_barrier(
+#         close_prices: pd.Series,
+#         high_prices: pd.Series,
+#         low_prices: pd.Series,
+#         atr: pd.Series,
+#         profit_take_mult: float,
+#         stop_loss_mult: float,
+#         time_limit_bars: int,
+#         profit_mode: str = 'dynamic',
+#         net_profit_target: float = 0.03
+# ) -> pd.Series:
+#     """Implements the Triple Barrier Method for labeling financial time series data."""
+#     logger.info(f"Applying Triple Barrier Method in '{profit_mode}' mode...")
+#     outcomes = pd.Series(index=close_prices.index, dtype=np.int8, data=0)
+#     import sys  # Make sure this is imported at the top of the file
+#     for i in tqdm(range(len(close_prices) - time_limit_bars), desc="Labeling events", leave=False, ascii=True,
+#                   file=sys.stdout):
+#     # for i in tqdm(range(len(close_prices) - time_limit_bars), desc="Labeling events", leave=False, ascii=True):
+#         entry_price = close_prices.iloc[i]
+#         current_atr = atr.iloc[i]
+#         if pd.isna(current_atr) or current_atr == 0: continue
+#         upper_barrier = (entry_price * (1 + (net_profit_target + 0.004) / 0.75)) if profit_mode == 'fixed_net' else (entry_price + (current_atr * profit_take_mult))
+#         lower_barrier = entry_price - (current_atr * stop_loss_mult)
+#         for j in range(1, time_limit_bars + 1):
+#             if high_prices.iloc[i + j] >= upper_barrier: outcomes.iloc[i] = 1; break
+#             if low_prices.iloc[i + j] <= lower_barrier: outcomes.iloc[i] = -1; break
+#     logger.info("✅ Triple Barrier labeling complete.")
+#     return outcomes
 def apply_triple_barrier(
         close_prices: pd.Series,
         high_prices: pd.Series,
@@ -171,24 +238,34 @@ def apply_triple_barrier(
         atr: pd.Series,
         profit_take_mult: float,
         stop_loss_mult: float,
-        time_limit_bars: int,  # <-- RENAMED
+        time_limit_bars: int,
         profit_mode: str = 'dynamic',
         net_profit_target: float = 0.03
 ) -> pd.Series:
-    """Implements the Triple Barrier Method for labeling financial time series data."""
-    logger.info(f"Applying Triple Barrier Method in '{profit_mode}' mode...")
-    outcomes = pd.Series(index=close_prices.index, dtype=np.int8, data=0)
-    for i in tqdm(range(len(close_prices) - time_limit_bars), desc="Labeling events", leave=False, ascii=True):
-        entry_price = close_prices.iloc[i]
-        current_atr = atr.iloc[i]
-        if pd.isna(current_atr) or current_atr == 0: continue
-        upper_barrier = (entry_price * (1 + (net_profit_target + 0.004) / 0.75)) if profit_mode == 'fixed_net' else (entry_price + (current_atr * profit_take_mult))
-        lower_barrier = entry_price - (current_atr * stop_loss_mult)
-        for j in range(1, time_limit_bars + 1):
-            if high_prices.iloc[i + j] >= upper_barrier: outcomes.iloc[i] = 1; break
-            if low_prices.iloc[i + j] <= lower_barrier: outcomes.iloc[i] = -1; break
+    """
+    A wrapper for the Numba-accelerated Triple Barrier Method. This function
+    handles the conversion between pandas Series and NumPy arrays.
+    """
+    # The logger and tqdm are kept here for high-level feedback, but the core loop is now in C/machine code.
+    logger.info(f"Applying Numba-accelerated Triple Barrier Method in '{profit_mode}' mode...")
+
+    # Convert pandas Series to NumPy arrays for Numba
+    close_np = close_prices.to_numpy()
+    high_np = high_prices.to_numpy()
+    low_np = low_prices.to_numpy()
+    atr_np = atr.to_numpy()
+
+    # Call the fast, compiled function
+    outcomes_np = _calculate_labels_numba(
+        close_np, high_np, low_np, atr_np,
+        profit_take_mult, stop_loss_mult, time_limit_bars,
+        profit_mode == 'fixed_net', net_profit_target
+    )
+
     logger.info("✅ Triple Barrier labeling complete.")
-    return outcomes
+
+    # Return the result as a pandas Series with the correct index
+    return pd.Series(outcomes_np, index=close_prices.index)
 
 
 def calculate_kama(close, window=10, pow1=2, pow2=30):
@@ -222,12 +299,12 @@ def add_technical_indicators_and_features(df, vol_thresholds, qqq_close, profit_
     if df.empty or len(df) < 252: return pd.DataFrame()
     df.ta.bbands(length=20, append=True, col_names=("bb_lower", "bb_middle", "bb_upper", "bb_width", "bb_position"))
     df.ta.atr(length=14, append=True, col_names="atr_14")
-    df.ta.rsi(length=14, append=True, col_names="rsi_14");
+    df.ta.rsi(length=14, append=True, col_names="rsi_14")
     df.ta.rsi(length=28, append=True, col_names="rsi_28")
     df.ta.macd(append=True, col_names=("macd", "macd_histogram", "macd_signal"))
     df.ta.adx(length=14, append=True, col_names=("adx", "adx_pos", "adx_neg", "adxr_temp"))
     df.ta.mom(length=5, append=True, col_names="momentum_5")
-    df.ta.obv(append=True);
+    df.ta.obv(append=True)
     df.ta.cmf(append=True, col_names="cmf")
     df['daily_return'] = df['close'].pct_change()
     df['volume_ma_20'] = df['volume'].rolling(20).mean()
@@ -261,10 +338,10 @@ def add_technical_indicators_and_features(df, vol_thresholds, qqq_close, profit_
         profit_take_mult=2.0, stop_loss_mult=2.5, time_limit_bars=time_limit_bars,
         profit_mode=profit_mode, net_profit_target=net_profit_target
     )
-    df['target_entry'] = (tb_labels == 1).astype(int)
-    df['target_cut_loss'] = (tb_labels == -1).astype(int)
+    df['target_entry'] = np.where(tb_labels == 1, 1, 0)
+    df['target_cut_loss'] = np.where(tb_labels == -1, 1, 0)
     overbought_condition = df['rsi_14'] > 75
-    df['target_profit_take'] = ((tb_labels == 1) & overbought_condition).astype(int)
+    df['target_profit_take'] = np.where((tb_labels == 1) & (overbought_condition), 1, 0)
     df['target_trailing_stop'] = 0
     profitable_mask = (df['high'] > df['close'].shift(1) * (1 + 0.5 * df['atr_14'] / df['close'].shift(1)))
     trailing_stop_hit = (
@@ -307,7 +384,7 @@ def fetch_volatility_for_stock(symbol):
         if not data_manager.connect_to_ibkr():
             data_manager.use_ibkr = False  # Fallback if connection fails
 
-        df_raw = data_manager.get_stock_data(symbol, days_back=2 * 365, interval="1 day")
+        df_raw = data_manager.get_stock_data(symbol, days_back=3 * 365, interval="1 day")
         df = clean_raw_data(df_raw)
 
         if df is not None and not df.empty and 'close' in df.columns and len(df) > 90:
@@ -345,43 +422,201 @@ def calculate_global_volatility_thresholds(tickers, datamanager):
     low_thresh = combined_vol.quantile(0.33)
     high_thresh = combined_vol.quantile(0.66)
     logger.info(f"✅ Global Volatility Thresholds Calculated: Low < {low_thresh:.3f}, Mid < {high_thresh:.3f}")
-    return {'low_thresh': low_thresh, 'high_thresh': high_thresh}
+    return (low_thresh, high_thresh)
+
+# def process_ticker_list(
+#         tickers: list,
+#         vol_thresholds: tuple,
+#         qqq_data: pd.Series,
+#         vix_data: pd.Series,
+#         tlt_data: pd.Series,
+#         strategies: list,
+#         train_tickers: list,
+#         test_tickers: list,
+#         use_ibkr_flag: bool
+# )-> dict:
+#     """Manages the parallel processing of a list of tickers."""
+#     logger.info(f"Submitting {len(tickers)} tickers for parallel processing...")
+#     MAX_WORKERS = 10
+#     tasks = [(s, vol_thresholds, qqq_data, vix_data, tlt_data, strategies, train_tickers,
+#               test_tickers, use_ibkr_flag) for s in tickers]
+#
+#     processed_count, skipped_tickers = 0, {}
+#     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+#         results = list(tqdm(executor.map(process_single_stock, tasks), total=len(tasks),
+#                             desc="Processing All Stocks"))
+#
+#     for symbol, status in results:
+#         if status == "Success":
+#             processed_count += 1
+#         else:
+#             skipped_tickers[symbol] = status
+#
+#     logger.info(f"Processed {processed_count} stocks successfully.")
+#     if skipped_tickers:
+#         logger.warning(f"Skipped {len(skipped_tickers)} stocks: {list(skipped_tickers.keys())}")
+#
+#         return skipped_tickers
+
+# REPLACE the old process_single_stock function with these two new ones.
+
+def verify_downloaded_data(df: pd.DataFrame, symbol: str, logger) -> bool:
+    """
+    Performs a series of sanity checks on the downloaded DataFrame.
+    Returns True if data is valid, False otherwise.
+    """
+    # Check 1: Ensure the DataFrame is not empty
+    if df.empty:
+        logger.warning(f"[{symbol}] Verification FAILED: No data was downloaded.")
+        return False
+
+    # Check 2: Verify essential columns exist
+    required_cols = {'open', 'high', 'low', 'close', 'volume'}
+    if not required_cols.issubset(df.columns):
+        logger.warning(f"[{symbol}] Verification FAILED: Missing required columns. Found: {list(df.columns)}")
+        return False
+
+    # Check 3: Check for any NaN (Not a Number) values in critical columns
+    if df[['open', 'high', 'low', 'close', 'volume']].isnull().values.any():
+        logger.warning(f"[{symbol}] Verification FAILED: Data contains NaN values in critical columns.")
+        return False
+
+    # Check 4: Check for invalid OHLC data (e.g., Low > High)
+    if (df['low'] > df['high']).any():
+        logger.warning(f"[{symbol}] Verification FAILED: Found rows where Low price is greater than High price.")
+        return False
+
+    # Check 5: Check for significant gaps in the time series (more than 7 days)
+    # This helps detect if the download was partial.
+    gaps = df.index.to_series().diff().dt.days.gt(7).sum()
+    if gaps > 0:
+        logger.warning(f"[{symbol}] Verification WARNING: Found {gaps} significant time gap(s) > 7 days.")
+        # This is a warning, but you could change `return True` to `return False` to be stricter
+
+    logger.info(f"[{symbol}] ✅ Data verification passed successfully.")
+    return True
 
 
-def process_ticker_list(
-        tickers: list,
-        vol_thresholds: tuple,
-        qqq_data: pd.Series,
-        vix_data: pd.Series,
-        tlt_data: pd.Series,
-        strategies: list,
-        train_tickers: list,
-        test_tickers: list,
-        use_ibkr_flag: bool
-)-> dict:
-    """Manages the parallel processing of a list of tickers."""
-    logger.info(f"Submitting {len(tickers)} tickers for parallel processing...")
-    MAX_WORKERS = 10
-    tasks = [(s, vol_thresholds, qqq_data, vix_data, tlt_data, strategies, train_tickers,
-              test_tickers, use_ibkr_flag) for s in tickers]
+def data_worker(q, vol_thresholds, qqq_data, vix_data, tlt_data, strategies, train_tickers, test_tickers, use_ibkr_flag,
+                ibkr_host, ibkr_port, pbar, skipped_tickers_lock, skipped_tickers):
+    """
+    This is the worker function for each thread. It continuously fetches a symbol
+    from the queue and processes it until the queue is empty.
+    """
+    data_manager = DataSourceManager(use_ibkr=use_ibkr_flag, host=ibkr_host, port=ibkr_port, allow_fallback=False)
+    if use_ibkr_flag and not data_manager.connect_to_ibkr():
+        data_manager.use_ibkr = False
 
-    processed_count, skipped_tickers = 0, {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        results = list(tqdm(executor.map(process_single_stock, tasks), total=len(tasks),
-                            desc="Processing All Stocks"))
+    while not q.empty():
+        try:
+            symbol = q.get_nowait()
+            status = "Unknown Error"
 
-    for symbol, status in results:
-        if status == "Success":
-            processed_count += 1
-        else:
-            skipped_tickers[symbol] = status
+            try:
+                # Step A: Download the data from IBKR ONLY
+                df_raw = data_manager.get_stock_data(symbol, days_back=3 * 365, interval="1 day")
+                df = clean_raw_data(df_raw)
 
-    logger.info(f"Processed {processed_count} stocks successfully.")
+                # Step B: Verify the downloaded data
+                if not verify_downloaded_data(df, symbol, logger):
+                    status = "Data Verification Failed"
+                elif len(df) < 252:
+                    status = "Insufficient data after verification"
+                else:
+                    # Step C: If verification passes, proceed with processing
+                    for strategy in strategies:
+                        mode = strategy['mode']
+                        target = strategy['target']
+                        subdir_name = f"{int(target * 100)}per_profit" if mode == 'fixed_net' else "dynamic_profit"
+
+                        if symbol in train_tickers:
+                            output_dir = os.path.join(TRAIN_FEATURES_DIR, subdir_name)
+                        elif symbol in test_tickers:
+                            output_dir = os.path.join(TEST_FEATURES_DIR, subdir_name)
+                        else:
+                            continue
+
+                        featured_df = add_technical_indicators_and_features(df.copy(), vol_thresholds, qqq_data, mode,
+                                                                            target, vix_data, tlt_data)
+
+                        if not featured_df.empty:
+                            os.makedirs(output_dir, exist_ok=True)
+                            output_path = os.path.join(output_dir, f"{symbol}_daily_context.parquet")
+                            featured_df.to_parquet(output_path)
+                    status = "Success"
+
+            except Exception as e:
+                logger.error(f"Failed to process {symbol}: {e}\n{traceback.format_exc()}")
+                status = f"General processing error: {e}"
+
+            if status != "Success":
+                with skipped_tickers_lock:
+                    skipped_tickers[symbol] = status
+
+            pbar.update(1)
+        except queue.Empty:
+            continue
+        finally:
+            q.task_done()
+
+    if data_manager and data_manager.isConnected():
+        data_manager.disconnect()
+
+
+# REPLACE this entire function
+
+def process_ticker_list_producer_consumer(tickers: list, vol_thresholds: tuple, datamanager: DataSourceManager,
+                                          qqq_data: pd.Series, vix_data: pd.Series, tlt_data: pd.Series,
+                                          strategies: list, train_tickers: list, test_tickers: list) -> dict:
+    """
+    Orchestrator using the producer-consumer model with corrected arguments.
+    """
+    logger.info(f"Starting producer-consumer processing for {len(tickers)} tickers...")
+
+    task_queue = queue.Queue()
+    for s in tickers:
+        task_queue.put(s)
+
+    skipped_tickers = {}
+    skipped_tickers_lock = threading.Lock()
+
+    pbar = tqdm(total=len(tickers), desc="Processing All Stocks")
+
+    threads = []
+    MAX_WORKERS = 5
+    for _ in range(MAX_WORKERS):
+        # --- THIS IS THE FULLY CORRECTED ARGUMENT LIST ---
+        thread = threading.Thread(target=data_worker, args=(
+            task_queue,
+            vol_thresholds,
+            qqq_data,
+            vix_data,
+            tlt_data,
+            strategies,
+            train_tickers,
+            test_tickers,
+            datamanager.use_ibkr,
+            datamanager.host,
+            datamanager.port,
+            pbar,
+            skipped_tickers_lock,
+            skipped_tickers
+        ))
+        thread.start()
+        threads.append(thread)
+
+    task_queue.join()
+
+    for thread in threads:
+        thread.join()
+
+    pbar.close()
+
+    logger.info(f"Processed {len(tickers) - len(skipped_tickers)} stocks successfully.")
     if skipped_tickers:
         logger.warning(f"Skipped {len(skipped_tickers)} stocks: {list(skipped_tickers.keys())}")
 
-        return skipped_tickers
-
+    return skipped_tickers
 
 def process_single_stock(args):
     """Processes a single stock for the main data generation task."""
@@ -399,10 +634,12 @@ def process_single_stock(args):
 
         # --- Download Data ONCE ---
         # Use 15 mins interval for the main data processing
-        df_raw = data_manager.get_stock_data(symbol, days_back=2 * 365, interval="15 mins")
+        # df_raw = data_manager.get_stock_data(symbol, days_back=2 * 365, interval="15 mins")
+        df_raw = data_manager.get_stock_data(symbol, days_back=3 * 365, interval="1 day")
         df = clean_raw_data(df_raw)
 
-        if df.empty or len(df) < 252 * 26:  # Require at least a year of 15-min data
+        # if df.empty or len(df) < 252 * 26:  # Require at least a year of 15-min data
+        if df.empty or len(df) < 252:  # Require at least a year of DAILY data
             return symbol, "Insufficient data"
 
         # --- Loop through strategies and process the downloaded data ---
@@ -424,7 +661,8 @@ def process_single_stock(args):
 
             if not featured_df.empty:
                 os.makedirs(output_dir, exist_ok=True)  # Ensure subdir exists
-                output_path = os.path.join(output_dir, f"{symbol}_features.parquet")
+                # output_path = os.path.join(output_dir, f"{symbol}_features.parquet")
+                output_path = os.path.join(output_dir, f"{symbol}_daily_context.parquet")  # New filename
                 featured_df.to_parquet(output_path)
 
         return symbol, "Success"
@@ -549,7 +787,7 @@ def main():
 
     datamanager = None
     try:
-        datamanager = DataSourceManager()
+        datamanager = DataSourceManager(allow_fallback=False)
         logger.info("Attempting to connect to IBKR TWS...")
         if not datamanager.connect_to_ibkr():
             logger.warning("Could not connect to IBKR TWS. Proceeding with yfinance as the data source.")
@@ -622,17 +860,17 @@ def main():
 
         # Process the entire training and test sets in one go
         all_tickers_to_process = train_tickers + test_tickers
-        # MODIFY this call to pass the datamanager's final state
-        skipped_tickers = process_ticker_list(
-            tickers = all_tickers_to_process,
-            vol_thresholds = global_vol_thresholds,
-            qqq_data = qqq_close,
-            vix_data = vix_close,
-            tlt_data = tlt_close,
-            strategies = strategies_to_run,
-            train_tickers = train_tickers,
-            test_tickers = test_tickers,
-            use_ibkr_flag=datamanager.use_ibkr
+
+        skipped_tickers = process_ticker_list_producer_consumer(
+            tickers=all_tickers_to_process,
+            vol_thresholds= global_vol_thresholds,
+            datamanager=datamanager,
+            qqq_data=qqq_close,
+            vix_data=vix_close,
+            tlt_data=tlt_close,
+            strategies=strategies_to_run,
+            train_tickers=train_tickers,
+            test_tickers=test_tickers
         )
 
         # --- Save the skipped tickers to a log file ---
