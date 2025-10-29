@@ -1,12 +1,36 @@
-# """
-# ⚙️ Data Source Manager - Client Portal Web API Version
-# ======================================================
-#
-# A shared utility for fetching historical stock data, now configured to use the
-# Interactive Brokers Client Portal Web API as the primary source.
-# It still falls back to yfinance if IBKR is unavailable.
-#
-# """
+"""
+⚙️ Data Source Manager - Advanced TWS API Version
+===================================================
+
+This script provides a robust, thread-safe, and feature-rich data manager for
+fetching historical stock data. It is designed to use the Interactive Brokers (IBKR)
+Trader Workstation (TWS) API as its primary data source, with a controllable
+fallback to yfinance.
+
+This advanced version is optimized for use in multi-threaded applications and adds
+support for fetching high-frequency intraday data.
+
+Key Features:
+-------------
+-   **Intraday Data Support**: Capable of downloading historical data at various
+    intervals (e.g., '1 day', '15 mins'). For large intraday requests, it
+    automatically handles IBKR API limitations by fetching data in sequential
+    monthly chunks.
+-   **Thread-Safe Architecture**:
+    -   Generates a unique, thread-safe client ID for each instance to prevent
+        connection conflicts with the TWS API.
+    -   Implements a sophisticated logging system where each instance writes to its
+        own dedicated log file, making it easy to debug parallel operations.
+-   **Controllable Fallback**: An `allow_fallback` flag gives the user precise
+    control over whether the system should use `yfinance` if an IBKR connection
+    or data request fails.
+-   **Robust Connection Management**: Automatically connects to the TWS API and
+    reliably handles connection timeouts and errors.
+-   **Smart Error Filtering**: The TWS error handler is configured to ignore common
+    informational messages and warnings, focusing the logs on critical,
+    actionable errors.
+
+"""
 
 
 import pandas as pd
@@ -42,11 +66,12 @@ class DataSourceManager(EWrapper, EClient):
     _client_id_counter = int(time.time() % 1000)
     _client_id_lock = threading.Lock()
 
-    def __init__(self, use_ibkr=True, host='127.0.0.1', port=7497):
+    def __init__(self, use_ibkr=True, host='127.0.0.1', port=7497, allow_fallback=True):
         EClient.__init__(self, self)
         self.use_ibkr = use_ibkr
         self.host = host
         self.port = port
+        self.allow_fallback = allow_fallback
 
         with DataSourceManager._client_id_lock:
             self.client_id = DataSourceManager._client_id_counter
@@ -160,10 +185,7 @@ class DataSourceManager(EWrapper, EClient):
 
     def get_stock_data(self, symbol: str, days_back=1825, interval='1 day'):
         clean_symbol = symbol.upper().strip()
-        if self.use_ibkr:
-            if not self.isConnected() and not self.connect_to_ibkr():
-                self._log("IBKR connection failed, falling back to yfinance.", "WARNING")
-            else:
+        if self.use_ibkr and self.isConnected():
                 # --- VERIFIED IBKR Interval Translation Map ---
                 ibkr_interval_map = {
                     '1d': '1 day',
@@ -176,9 +198,135 @@ class DataSourceManager(EWrapper, EClient):
 
                 df = self._download_from_ibkr(clean_symbol, days_back, ibkr_bar_size)
                 if not df.empty: return df
-                self._log(f"IBKR data retrieval failed for {clean_symbol}, falling back to yfinance.", "WARNING")
 
-        return self._download_from_yfinance(clean_symbol, days_back, interval)
+                if self.allow_fallback:
+                    self._log(f"IBKR data retrieval failed for {clean_symbol}, falling back to yfinance.", "WARNING")
+                else:
+                    self._log(f"IBKR data retrieval failed for {clean_symbol}. Fallback is disabled.", "ERROR")
+                    return pd.DataFrame()  # Return empty if IBKR fails and fallback is off
+
+
+        elif self.use_ibkr and not self.isConnected():
+
+            if self.allow_fallback:
+
+                self._log("IBKR connection is not active. Falling back directly to yfinance.", "WARNING")
+
+            else:
+
+                self._log("IBKR connection is not active. Fallback is disabled.", "ERROR")
+
+                return pd.DataFrame()
+
+        if self.allow_fallback:
+            return self._download_from_yfinance(clean_symbol, days_back, interval)
+
+        return pd.DataFrame()
+
+    # def _download_from_ibkr(self, symbol: str, days_back: int, barSizeSetting: str = "1 day"):
+    #     """
+    #     Final robust version for downloading data from TWS using ibapi.
+    #     Handles chunking for large intraday requests and gracefully manages chunks with no data.
+    #     """
+    #     self._log(f"Requesting {days_back} days of '{barSizeSetting}' data for {symbol} from TWS...")
+    #     try:
+    #         contract = Contract()
+    #         if symbol == '^VIX':
+    #             contract.symbol = 'VIX'
+    #             contract.secType = 'IND'
+    #             contract.exchange = 'CBOE'
+    #             contract.currency = 'USD'
+    #         else:
+    #             contract.symbol = symbol
+    #             contract.secType = 'STK'
+    #             contract.exchange = 'SMART'
+    #             contract.currency = 'USD'
+    #
+    #         is_intraday_request = "min" in barSizeSetting or "hour" in barSizeSetting
+    #
+    #         if is_intraday_request and days_back > 30:
+    #             all_bars = []
+    #             any_chunk_succeeded = False  # Flag to track if we get any data at all
+    #             # Use 'ME' for month-end frequency to avoid FutureWarning
+    #             date_range = pd.date_range(end=datetime.datetime.now(), periods=round(days_back / 30), freq='-1ME')
+    #
+    #             self._log(f"Large intraday request detected. Fetching in {len(date_range)} monthly chunks...")
+    #
+    #             for end_date in reversed(date_range):
+    #                 self.historical_data = []
+    #                 self.data_event.clear()
+    #                 self.error_occurred = False
+    #                 req_id = self.next_req_id
+    #                 self.next_req_id += 1
+    #
+    #                 end_date_str = end_date.strftime('%Y%m%d %H:%M:%S') + " US/Eastern"
+    #                 self._log(f"Fetching chunk for {symbol} ending {end_date_str}...")
+    #
+    #                 self.reqHistoricalData(
+    #                     reqId=req_id, contract=contract, endDateTime=end_date_str,
+    #                     durationStr="1 M", barSizeSetting=barSizeSetting, whatToShow="TRADES",
+    #                     useRTH=1, formatDate=1, keepUpToDate=False, chartOptions=[]
+    #                 )
+    #
+    #                 if self.data_event.wait(timeout=20):
+    #                     if not self.error_occurred and self.historical_data:
+    #                         all_bars.extend(self.historical_data)
+    #                         any_chunk_succeeded = True  # Mark that we found at least one good chunk
+    #                 else:
+    #                     self._log(f"Data chunk request for {symbol} timed out.", "WARNING")
+    #                     self.cancelHistoricalData(req_id)
+    #
+    #                 time.sleep(2.1)
+    #
+    #             if not any_chunk_succeeded:
+    #                 self._log(f"IBKR returned no data for {symbol} across all chunks.", "WARNING")
+    #                 return pd.DataFrame()
+    #
+    #             self.historical_data = all_bars
+    #
+    #         else:
+    #             duration = f'{round(days_back / 365)} Y' if days_back > 365 else f'{days_back} D'
+    #             self.historical_data = []
+    #             self.data_event.clear()
+    #             self.error_occurred = False
+    #             req_id = self.next_req_id
+    #             self.next_req_id += 1
+    #
+    #             self.reqHistoricalData(
+    #                 reqId=req_id, contract=contract, endDateTime="",
+    #                 durationStr=duration, barSizeSetting=barSizeSetting, whatToShow="TRADES",
+    #                 useRTH=1, formatDate=1, keepUpToDate=False, chartOptions=[]
+    #             )
+    #
+    #             if not self.data_event.wait(timeout=60):
+    #                 self._log(f"Data request for {symbol} timed out.", "ERROR")
+    #                 self.cancelHistoricalData(req_id)
+    #                 return pd.DataFrame()
+    #
+    #         if self.error_occurred:
+    #             self._log(f"Failed to get data for {symbol}: {self.error_message}", "ERROR")
+    #             return pd.DataFrame()
+    #
+    #         if not self.historical_data:
+    #             self._log(f"No historical data received for {symbol} from IBKR.", "WARNING")
+    #             return pd.DataFrame()
+    #
+    #         df = pd.DataFrame(self.historical_data)
+    #         df.drop_duplicates(subset=['Date'], inplace=True)
+    #
+    #         try:
+    #             df['Date'] = pd.to_datetime(pd.to_numeric(df['Date']), unit='s')
+    #         except (ValueError, TypeError):
+    #             df['Date'] = pd.to_datetime(df['Date'].str.split(' ').str[:2].str.join(' '), format='%Y%m%d %H:%M:%S')
+    #
+    #         df.set_index('Date', inplace=True)
+    #         self._log(f"Successfully retrieved {len(df)} bars for {symbol} from IBKR.", "SUCCESS")
+    #         return df
+    #
+    #     except Exception as e:
+    #         error_message = f"Exception during IBKR download for {symbol}: {e}\n{traceback.format_exc()}"
+    #         self._log(error_message, "ERROR")
+    #         return pd.DataFrame()
 
     def _download_from_ibkr(self, symbol: str, days_back: int, barSizeSetting: str = "1 day"):
         """
@@ -189,24 +337,23 @@ class DataSourceManager(EWrapper, EClient):
         try:
             contract = Contract()
             if symbol == '^VIX':
-                contract.symbol = 'VIX';
-                contract.secType = 'IND';
-                contract.exchange = 'CBOE';
+                contract.symbol = 'VIX'
+                contract.secType = 'IND'
+                contract.exchange = 'CBOE'
                 contract.currency = 'USD'
             else:
-                contract.symbol = symbol;
-                contract.secType = 'STK';
-                contract.exchange = 'SMART';
+                contract.symbol = symbol
+                contract.secType = 'STK'
+                contract.exchange = 'SMART'
                 contract.currency = 'USD'
 
             is_intraday_request = "min" in barSizeSetting or "hour" in barSizeSetting
 
             if is_intraday_request and days_back > 30:
                 all_bars = []
-                any_chunk_succeeded = False  # Flag to track if we get any data at all
+                any_chunk_succeeded = False
                 # Use 'ME' for month-end frequency to avoid FutureWarning
                 date_range = pd.date_range(end=datetime.datetime.now(), periods=round(days_back / 30), freq='-1ME')
-
                 self._log(f"Large intraday request detected. Fetching in {len(date_range)} monthly chunks...")
 
                 for end_date in reversed(date_range):
@@ -215,45 +362,38 @@ class DataSourceManager(EWrapper, EClient):
                     self.error_occurred = False
                     req_id = self.next_req_id
                     self.next_req_id += 1
-
+                    # FIX: Explicitly add the required timezone to the request string
                     end_date_str = end_date.strftime('%Y%m%d %H:%M:%S') + " US/Eastern"
                     self._log(f"Fetching chunk for {symbol} ending {end_date_str}...")
 
-                    self.reqHistoricalData(
-                        reqId=req_id, contract=contract, endDateTime=end_date_str,
-                        durationStr="1 M", barSizeSetting=barSizeSetting, whatToShow="TRADES",
-                        useRTH=1, formatDate=1, keepUpToDate=False, chartOptions=[]
-                    )
+                    self.reqHistoricalData(reqId=req_id, contract=contract, endDateTime=end_date_str, durationStr="1 M",
+                                           barSizeSetting=barSizeSetting, whatToShow="TRADES", useRTH=1, formatDate=1,
+                                           keepUpToDate=False, chartOptions=[])
 
                     if self.data_event.wait(timeout=20):
                         if not self.error_occurred and self.historical_data:
                             all_bars.extend(self.historical_data)
-                            any_chunk_succeeded = True  # Mark that we found at least one good chunk
+                            any_chunk_succeeded = True
                     else:
                         self._log(f"Data chunk request for {symbol} timed out.", "WARNING")
                         self.cancelHistoricalData(req_id)
-
-                    time.sleep(2.1)
+                    time.sleep(2.1)  # Adhere to API pacing requirements
 
                 if not any_chunk_succeeded:
                     self._log(f"IBKR returned no data for {symbol} across all chunks.", "WARNING")
                     return pd.DataFrame()
-
                 self.historical_data = all_bars
-
             else:
                 duration = f'{round(days_back / 365)} Y' if days_back > 365 else f'{days_back} D'
                 self.historical_data = []
-                self.data_event.clear()
+                self.data_event.clear();
                 self.error_occurred = False
                 req_id = self.next_req_id
                 self.next_req_id += 1
 
-                self.reqHistoricalData(
-                    reqId=req_id, contract=contract, endDateTime="",
-                    durationStr=duration, barSizeSetting=barSizeSetting, whatToShow="TRADES",
-                    useRTH=1, formatDate=1, keepUpToDate=False, chartOptions=[]
-                )
+                self.reqHistoricalData(reqId=req_id, contract=contract, endDateTime="", durationStr=duration,
+                                       barSizeSetting=barSizeSetting, whatToShow="TRADES", useRTH=1, formatDate=1,
+                                       keepUpToDate=False, chartOptions=[])
 
                 if not self.data_event.wait(timeout=60):
                     self._log(f"Data request for {symbol} timed out.", "ERROR")
@@ -270,17 +410,13 @@ class DataSourceManager(EWrapper, EClient):
 
             df = pd.DataFrame(self.historical_data)
             df.drop_duplicates(subset=['Date'], inplace=True)
-
-            try:
-                df['Date'] = pd.to_datetime(pd.to_numeric(df['Date']), unit='s')
-            except (ValueError, TypeError):
-                df['Date'] = pd.to_datetime(df['Date'].str.split(' ').str[:2].str.join(' '), format='%Y%m%d %H:%M:%S')
-
+            # FIX: Correctly parse the Unix timestamp returned by the API
+            df['Date'] = pd.to_datetime(pd.to_numeric(df['Date']), unit='s')
             df.set_index('Date', inplace=True)
             self._log(f"Successfully retrieved {len(df)} bars for {symbol} from IBKR.", "SUCCESS")
             return df
-
         except Exception as e:
+            # FIX: Ensure the full traceback is logged for easier debugging
             error_message = f"Exception during IBKR download for {symbol}: {e}\n{traceback.format_exc()}"
             self._log(error_message, "ERROR")
             return pd.DataFrame()
