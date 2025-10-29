@@ -24,7 +24,7 @@ class DataManager:
         symbols = []
         for f in files:
             if f.endswith(".parquet"):
-                match = re.match(r"([A-Z]+)_features.*\.parquet", f)
+                match = re.match(r"([A-Z]+)_daily_context.*\.parquet", f)
                 if match:
                     symbols.append(match.group(1))
         return sorted(list(set(symbols)))
@@ -33,7 +33,7 @@ class DataManager:
         """Loads the most recent Parquet feature file for a single symbol without altering it."""
         candidates = [
             f for f in os.listdir(self.feature_dir)
-            if f.startswith(f"{symbol}_features") and f.endswith(".parquet")
+            if f.startswith(f"{symbol}_daily_context") and f.endswith(".parquet")
         ]
         if not candidates:
             return None
