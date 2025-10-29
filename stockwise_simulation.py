@@ -63,6 +63,8 @@ from data_source_manager import DataSourceManager
 import screener
 import urllib.request
 from mico_system import MicoAdvisor
+import shap
+import matplotlib.pyplot as plt
 
 
 # --- Page Configuration ---
@@ -414,134 +416,236 @@ class ProfessionalStockAdvisor:
         except Exception:
             return False
 
-    def is_market_in_uptrend(self, analysis_date, days=200):
+    # def is_market_in_uptrend(self, analysis_date, days=200):
+    #     """
+    #     The Conductor: Checks if the general market (SPY) was in an uptrend
+    #     on a specific historical date.
+    #     """
+    #     try:
+    #         # 1. Fetch the full history for SPY
+    #         spy_data = self.data_source_manager.get_stock_data("SPY")
+    #         if spy_data is None or spy_data.empty:
+    #             self.log("Could not download SPY data for market trend analysis.", "WARNING")
+    #             return False
+    #
+    #         spy_data = clean_raw_data(spy_data)
+    #
+    #         # 2. Slice the data to only include historical data up to the analysis date
+    #         spy_data_up_to_date = spy_data[spy_data.index <= pd.to_datetime(analysis_date)]
+    #
+    #         if len(spy_data_up_to_date) < days:
+    #             self.log(f"Not enough SPY data ({len(spy_data_up_to_date)} bars) for {days}-day MA.", "WARNING")
+    #             return False
+    #
+    #         # 3. Calculate the SMA on the historically-sliced data
+    #         spy_data_up_to_date[f'sma_{days}'] = ta.trend.sma_indicator(spy_data_up_to_date['close'], window=days)
+    #
+    #         latest_row = spy_data_up_to_date.iloc[-1]
+    #         latest_price = latest_row['close']
+    #         moving_average = latest_row[f'sma_{days}']
+    #
+    #         if pd.isna(moving_average):
+    #             self.log("Could not calculate SMA for SPY (result is NaN).", "WARNING")
+    #             return False
+    #
+    #         return latest_price > moving_average
+    #     except Exception as e:
+    #         self.log(f"Error during market trend analysis: {e}", "WARNING")
+    #         return False
+    def get_market_health_index(self, analysis_date):
         """
-        The Conductor: Checks if the general market (SPY) was in an uptrend
-        on a specific historical date.
+        Calculates a Market Health Index (0-4) based on SPY, VIX, and trend indicators.
+        A score of 3 or higher is considered a 'risk-on' environment.
         """
+        health_score = 0
+        reasons = []
         try:
-            # 1. Fetch the full history for SPY
-            spy_data = self.data_source_manager.get_stock_data("SPY")
-            if spy_data is None or spy_data.empty:
-                self.log("Could not download SPY data for market trend analysis.", "WARNING")
-                return False
+            spy_data_raw = self.data_source_manager.get_stock_data("SPY", days_back=300)
+            spy_data = clean_raw_data(spy_data_raw)
+            spy_data_slice = spy_data[spy_data.index <= pd.to_datetime(analysis_date)]
+            if len(spy_data_slice) < 200: return 0, ["Not enough SPY data."]
 
-            spy_data = clean_raw_data(spy_data)
+            spy_data_slice.ta.sma(length=50, append=True, col_names='SMA_50')
+            spy_data_slice.ta.sma(length=200, append=True, col_names='SMA_200')
+            spy_data_slice.ta.rsi(length=14, append=True, col_names='RSI_14')
+            latest_spy = spy_data_slice.iloc[-1]
 
-            # 2. Slice the data to only include historical data up to the analysis date
-            spy_data_up_to_date = spy_data[spy_data.index <= pd.to_datetime(analysis_date)]
+            vix_data_raw = self.data_source_manager.get_stock_data("^VIX", days_back=5)
+            vix_data = clean_raw_data(vix_data_raw)
+            vix_slice = vix_data[vix_data.index <= pd.to_datetime(analysis_date)]
+            latest_vix = vix_slice.iloc[-1] if not vix_slice.empty else None
+            # latest_vix = vix_data[vix_data.index <= pd.to_datetime(analysis_date)].iloc[
+            #     -1] if not vix_data.empty else None
 
-            if len(spy_data_up_to_date) < days:
-                self.log(f"Not enough SPY data ({len(spy_data_up_to_date)} bars) for {days}-day MA.", "WARNING")
-                return False
+            # --- Rule 1: Price vs. 50-day SMA ---
+            if latest_spy['close'] > latest_spy['SMA_50']:
+                health_score += 1
+                reasons.append("✅ SPY > 50-day SMA")
+            else:
+                reasons.append("❌ SPY < 50-day SMA")
 
-            # 3. Calculate the SMA on the historically-sliced data
-            spy_data_up_to_date[f'sma_{days}'] = ta.trend.sma_indicator(spy_data_up_to_date['close'], window=days)
+            # --- Rule 2: 50-day SMA vs. 200-day SMA ---
+            if latest_spy['SMA_50'] > latest_spy['SMA_200']:
+                health_score += 1
+                reasons.append("✅ 50-day SMA > 200-day SMA")
+            else:
+                reasons.append("❌ 50-day SMA < 200-day SMA")
 
-            latest_row = spy_data_up_to_date.iloc[-1]
-            latest_price = latest_row['close']
-            moving_average = latest_row[f'sma_{days}']
+            # --- Rule 3: VIX Level ---
+            if latest_vix is not None and latest_vix['close'] < 30:
+                health_score += 1
+                reasons.append(f"✅ VIX < 30 ({latest_vix['close']:.2f})")
+            else:
+                reason_str = f"❌ VIX > 30 ({latest_vix['close']:.2f})" if latest_vix is not None else \
+                    "❌ VIX data unavailable"
+                reasons.append(reason_str)
 
-            if pd.isna(moving_average):
-                self.log("Could not calculate SMA for SPY (result is NaN).", "WARNING")
-                return False
+            # --- Rule 4: RSI Momentum ---
+            if latest_spy['RSI_14'] > 50:
+                health_score += 1
+                reasons.append(f"✅ SPY RSI > 50 ({latest_spy['RSI_14']:.2f})")
+            else:
+                reasons.append(f"❌ SPY RSI < 50 ({latest_spy['RSI_14']:.2f})")
 
-            return latest_price > moving_average
+            return health_score, reasons
         except Exception as e:
-            self.log(f"Error during market trend analysis: {e}", "WARNING")
-            return False
+            self.log(f"Error in market health check: {e}", "ERROR")
+            return 0, [f"Error: {e}"]
 
-    # --- GEN-3: The core state machine logic for prediction ---
-    def run_analysis(self, ticker_symbol, analysis_date):
+    def run_analysis(self, ticker_symbol, analysis_date, use_market_filter=True):
+        debug = False
         try:
+            if debug: st.write("--- `run_analysis` started. ---")
+
             full_stock_data = self.data_source_manager.get_stock_data(ticker_symbol)
-            if full_stock_data is None or full_stock_data.empty:
-                return None, None
+            if full_stock_data is None or full_stock_data.empty: return None, None
             full_stock_data = clean_raw_data(full_stock_data)
 
-            # Get the data for the specific date being analyzed
             data_up_to_date = full_stock_data[full_stock_data.index <= pd.to_datetime(analysis_date)]
             if data_up_to_date.empty:
                 return full_stock_data, {'action': "WAIT", 'reason': "No data available for this date.",
                                          'current_price': 0, 'agent': "System"}
 
             price_on_date = data_up_to_date.iloc[-1]['close']
+            if use_market_filter:
+                health_score, health_reasons = self.get_market_health_index(analysis_date)
+                market_health_results = {'health_score': health_score, 'health_reasons': health_reasons}
 
-            # Step 1: The Conductor. Assess overall market health.
-            # Pass the analysis_date to the market trend function
-            if not self.is_market_in_uptrend(analysis_date):
-                return full_stock_data, {'action': "WAIT / AVOID", 'confidence': 99.9, 'current_price': price_on_date,
-                                         'reason': "Market Downtrend", 'buy_date': None, 'agent': "Market Regime Agent"}
+                if debug: st.write(f"--- Market Health Check complete. Score: {health_score}/4 ---")
 
-            # Step 2: Feature Engineering
+                if health_score < 3:
+                    if debug: st.write("--- Market Health FAILED. Returning WAIT/AVOID. ---")
+                    return full_stock_data, {**market_health_results, 'action': "WAIT / AVOID", 'confidence': 99.9,
+                                             'current_price': price_on_date,
+                                             'reason': f"Market Health Index: {health_score}/4. Conditions not met.",
+                                             'buy_date': None, 'agent': "Market Regime Agent"}
+            else:
+                # If the filter is disabled, create a placeholder dictionary and log it
+                market_health_results = {'health_score': 'N/A',
+                                         'health_reasons': ["Market Health Filter was manually disabled."]}
+                self.log("Market Health Filter was disabled by user.", "WARNING")
+
+            if debug: st.write("--- Market Health PASSED. Proceeding to feature engineering. ---")
+
             featured_data = self.calculator.calculate_all_features(data_up_to_date)
             if featured_data.empty:
-                return full_stock_data, {'action': "WAIT", 'reason': "Insufficient data for analysis.",
-                                         'current_price': price_on_date, 'agent': "System"}
+                return full_stock_data, {**market_health_results, 'action': "WAIT",
+                                         'reason': "Insufficient data for analysis.", 'current_price': price_on_date,
+                                         'agent': "System"}
 
             latest_row = featured_data.iloc[-1]
             cluster = latest_row['volatility_cluster']
+            all_features_dict = latest_row.to_dict()
 
-            # Step 3: State Check (Is there an open position?)
-            if self.position.get(ticker_symbol):
-                current_position = self.position[ticker_symbol]
-                if latest_row['close'] <= current_position['stop_loss_price']:
-                    del self.position[ticker_symbol]
-                    return full_stock_data, {'action': "CUT LOSS", 'reason': "Stop-loss hit.",
-                                             'current_price': price_on_date, 'agent': "Risk Manager"}
+            def get_shap_explanation(model, features_df):
+                explainer = shap.TreeExplainer(model)
+                shap_values = explainer.shap_values(features_df)
+                if isinstance(shap_values, list) and len(shap_values) == 2:
+                    return shap_values[1], explainer.expected_value[1]
+                else:
+                    return shap_values, explainer.expected_value
 
+            if self.position.get(ticker_symbol):  # State: Position is OPEN
+                action = "HOLD"  # Default action
+                confidence = 0
+                agent_name = f"{cluster.capitalize()}-Volatility Hold Agent"
+
+                # Define model names
                 profit_model_name = f"profit_take_model_{cluster}_vol"
                 loss_model_name = f"cut_loss_model_{cluster}_vol"
-                profit_model = self.models.get(profit_model_name)
-                loss_model = self.models.get(loss_model_name)
 
-                if not profit_model or not loss_model:
-                    return full_stock_data, {'action': "HOLD", 'reason': "Missing Models.",
-                                             'current_price': price_on_date, 'agent': "System"}
+                # Ensure models are loaded
+                if profit_model_name in self.models and loss_model_name in self.models:
+                    profit_model = self.models[profit_model_name]
+                    loss_model = self.models[loss_model_name]
 
-                features = latest_row[self.feature_names[profit_model_name]].astype(float).to_frame().T
-                profit_pred, loss_pred = profit_model.predict(features)[0], loss_model.predict(features)[0]
+                    # Prepare features for both models (assuming they use the same feature set)
+                    features = latest_row[self.feature_names[loss_model_name]].astype(float).to_frame().T
 
-                if loss_pred == 1:
-                    del self.position[ticker_symbol]
-                    return full_stock_data, {'action': "CUT LOSS",
-                                             'confidence': loss_model.predict_proba(features)[0][1],
-                                             'current_price': price_on_date,
-                                             'agent': f"{cluster.capitalize()}-Volatility Risk Agent"}
-                elif profit_pred == 1:
-                    del self.position[ticker_symbol]
-                    return full_stock_data, {'action': "SELL", 'confidence': profit_model.predict_proba(features)[0][1],
-                                             'current_price': price_on_date,
-                                             'agent': f"{cluster.capitalize()}-Volatility Profit Agent"}
+                    # --- Priority System: Check for Cut-Loss signal FIRST ---
+                    if loss_model.predict(features)[0] == 1:
+                        action = "CUT LOSS"
+                        confidence = loss_model.predict_proba(features)[0][1] * 100
+                        agent_name = f"{cluster.capitalize()}-Volatility Cut-Loss Agent"
+                        # Since we are exiting, clear the position
+                        del self.position[ticker_symbol]
+
+                    # --- If no cut-loss, check for a Profit-Take signal ---
+                    elif profit_model.predict(features)[0] == 1:
+                        action = "SELL"  # Changed from "PROFIT TAKE" for consistency
+                        confidence = profit_model.predict_proba(features)[0][1] * 100
+                        agent_name = f"{cluster.capitalize()}-Volatility Profit-Take Agent"
+                        # Since we are exiting, clear the position
+                        del self.position[ticker_symbol]
                 else:
-                    return full_stock_data, {'action': "HOLD", 'reason': "No exit signal.",
-                                             'current_price': price_on_date, 'agent': "System"}
+                    self.log(f"Missing profit or loss models for cluster '{cluster}'. Defaulting to HOLD.", "WARNING")
+
+                action_result = {
+                    'action': action,
+                    'confidence': confidence,
+                    'current_price': float(latest_row['close']),
+                    'agent': agent_name,
+                    'buy_date': self.position.get(ticker_symbol, {}).get('entry_date')  # Pass along original buy date
+                }
+
+                return full_stock_data, {**market_health_results, **action_result, 'all_features': all_features_dict}
 
             else:  # State: No Position
                 entry_model_name = f"entry_model_{cluster}_vol"
                 entry_model = self.models.get(entry_model_name)
 
                 if not entry_model:
-                    return full_stock_data, {'action': "WAIT", 'reason': "Missing Models.",
-                                             'current_price': price_on_date, 'agent': "System"}
+                    return full_stock_data, {**market_health_results, 'action': "WAIT", 'reason': "Missing Models.",
+                                             'current_price': price_on_date, 'agent': "System",
+                                             'all_features': all_features_dict}
 
                 features = latest_row[self.feature_names[entry_model_name]].astype(float).to_frame().T
                 entry_pred = entry_model.predict(features)[0]
                 entry_prob = entry_model.predict_proba(features)[0]
+                result = {}
 
                 if entry_pred == 1:
                     stop_loss_price = latest_row['close'] - (latest_row['atr_14'] * 2.5)
+                    shap_values_for_buy, base_value_for_buy = get_shap_explanation(entry_model, features)
+                    result = {
+                        'action': "BUY", 'confidence': entry_prob[1] * 100, 'current_price': float(latest_row['close']),
+                        'buy_date': latest_row.name.date(),
+                        'agent': f"{cluster.capitalize()}-Volatility Entry Agent", 'stop_loss_price': stop_loss_price,
+                        'shap_values': shap_values_for_buy[0], 'shap_base_value': base_value_for_buy,
+                        'feature_names': features.columns.tolist(), 'feature_values': features.iloc[0].tolist()
+                    }
                     self.position[ticker_symbol] = {'entry_price': latest_row['close'],
                                                     'stop_loss_price': stop_loss_price}
-                    return full_stock_data, {'action': "BUY", 'confidence': entry_prob[1] * 100,
-                                             'current_price': float(latest_row['close']),
-                                             'buy_date': latest_row.name.date(),
-                                             'agent': f"{cluster.capitalize()}-Volatility Entry Agent",
-                                             'stop_loss_price': stop_loss_price}
                 else:
-                    return full_stock_data, {'action': "WAIT", 'confidence': entry_prob[0] * 100,
-                                             'current_price': float(latest_row['close']),
-                                             'agent': f"{cluster.capitalize()}-Volatility Entry Agent"}
+                    result = {'action': "WAIT", 'confidence': entry_prob[0] * 100,
+                              'current_price': float(latest_row['close']),
+                              'agent': f"{cluster.capitalize()}-Volatility Entry Agent"}
+
+                final_result = {**market_health_results, **result, 'all_features': all_features_dict}
+                if debug:
+                    st.write("--- Final result dictionary being returned: ---")
+                    st.json(final_result)
+                return full_stock_data, final_result
 
         except Exception as e:
             st.code(traceback.format_exc())
@@ -593,7 +697,7 @@ class ProfessionalStockAdvisor:
             except Exception as e:
                 self.log(f"Could not calculate Bollinger Bands: {e}", "WARNING")
         fig.add_trace(
-            go.Bar(x=stock_data.index, y=stock_data['volume'], name='Volume', marker_color='rgba(100,110,120,0.6)'),
+            go.Bar(x=stock_data.index, y=stock_data['volume'], name='Volume', marker=dict(color='rgba(100,110,120,0.6)')),
             row=2, col=1)
         fig.add_vline(x=analysis_date, line_width=1, line_dash="dash", line_color="white", name="Analysis Date",
                       row=1)
@@ -631,32 +735,143 @@ class ProfessionalStockAdvisor:
         return fig
 
 
+
+def display_analysis_results(ai_result, stock_data, stock_symbol, analysis_date, advisor):
+    """
+    Renders the entire multi-stage analysis UI in a consistent format.
+    This function is responsible for all display logic.
+    """
+    debug=False
+    if debug:
+        st.write("--- Data received by `display_analysis_results`: ---")
+        st.json(ai_result)
+    # --- 1. TOP-LEVEL METRICS ---
+    st.subheader("System Recommendations")
+    action = ai_result.get('action', 'N/A')
+    confidence = ai_result.get('confidence', 0)
+    current_price = ai_result.get('current_price', 0)
+
+    # Calculate profit metrics only if it's a BUY signal
+    if "BUY" in action and current_price > 0:
+        est_profit_pct = advisor.calculate_dynamic_profit_target(confidence)
+        profit_target_price = current_price * (1 + est_profit_pct / 100)
+        hypothetical_shares = 1000 / current_price
+        gross_profit = (profit_target_price - current_price) * hypothetical_shares
+        net_profit, _ = advisor.apply_israeli_fees_and_tax(gross_profit, hypothetical_shares)
+    else:
+        profit_target_price = 0
+        net_profit = 0
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        if "BUY" in action:
+            st.success(f"**Signal: {action}**")
+        else:
+            st.warning(f"**Signal: {action}**")
+    col2.metric("Confidence", f"{confidence:.1f}%" if confidence > 0 else "N/A")
+    col3.metric("Profit Target", f"${profit_target_price:.2f}" if profit_target_price > 0 else "-")
+    col4.metric("Hypothetical Net Profit", f"${net_profit:.2f}" if net_profit > 0 else "-")
+    st.markdown("---")
+
+    # --- 2. MARKET HEALTH ANALYSIS ---
+    st.subheader("1. Market Health Analysis (SPY)")
+    health_score = ai_result.get('health_score')
+    health_reasons = ai_result.get('health_reasons', [])
+
+    st.metric("Market Health Index", f"{health_score}/4" if health_score is not None else "N/A")
+    if health_reasons:
+        for reason in health_reasons:
+            st.markdown(reason)
+    st.markdown("---")
+
+    # --- 3. PRICE CHART ---
+    st.subheader("2. Price Chart")
+    fig = advisor.create_chart(stock_symbol, stock_data, ai_result, analysis_date)
+    if fig:
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.warning("Could not generate price chart.")
+    st.markdown("---")
+
+    # --- 4. SUMMARY & PARAMETERS ---
+    st.subheader("3. Analysis Summary")
+    agent_name = ai_result.get('agent', 'N/A')
+
+    if "Market Regime Agent" in agent_name:
+        st.error(
+            f"**Reason for Signal:** Analysis halted by the `{agent_name}`. Market conditions are unfavorable for new BUY signals.")
+    else:
+        st.info(f"**Agent Hand-off:** Based on volatility, the system selected the `{agent_name}`.")
+
+    if 'shap_values' in ai_result:
+        with st.expander("Show Key Factors in AI Decision (SHAP Analysis)"):
+            explanation = shap.Explanation(
+                values=ai_result['shap_values'],
+                base_values=ai_result['shap_base_value'],
+                data=ai_result['feature_values'],
+                feature_names=ai_result['feature_names']
+            )
+            fig, ax = plt.subplots()
+            shap.waterfall_plot(explanation, max_display=10, show=False)
+            st.pyplot(fig)
+
+    if 'all_features' in ai_result:
+        with st.expander("Show All Technical Parameters Used"):
+            features_df = pd.DataFrame.from_dict(ai_result['all_features'], orient='index', columns=['Value'])
+            features_df.index.name = 'Feature'
+            features_df['Value'] = features_df['Value'].astype(str)
+            st.dataframe(features_df.style.format(precision=4), use_container_width=True)
+
+
 def create_enhanced_interface():
+    # --- Connection Status Indicator ---
+    _, col2 = st.columns([4, 1])
+
+    status_placeholder = col2.empty()
+
     st.title("🏢 StockWise AI Trading Advisor")
 
     AGENT_CONFIGS = {
         'Dynamic Profit (Recommended)': "models/NASDAQ-gen3-dynamic",
+        '1% Net Profit': "models/NASDAQ-gen3-1pct",
         '2% Net Profit': "models/NASDAQ-gen3-2pct",
         '3% Net Profit': "models/NASDAQ-gen3-3pct",
         '4% Net Profit': "models/NASDAQ-gen3-4pct"
     }
 
-    # --- Define ALL sidebar inputs at the top in the correct order ---
+    # --- Sidebar UI ---
     st.sidebar.header("🎯 Trading Analysis")
-    # --- Add checkboxes to select systems ---
     st.sidebar.markdown("**Select Systems to Run:**")
     run_ai = st.sidebar.checkbox("Run AI Advisor (Gen-3)", value=True)
-    run_mico = st.sidebar.checkbox("Run Micha System (Rule-Based)", value=True)
-
+    run_mico = False  # Hard-coded for Phase 1
 
     selected_agent_name = st.sidebar.selectbox("🧠 Select AI Agent", options=list(AGENT_CONFIGS.keys()))
+    investment_amount = st.sidebar.number_input("Interested Amount", value=1000, min_value=0)
     stock_symbol = st.sidebar.text_input("📊 Stock Symbol", value="NVDA").upper().strip()
-    analysis_date = st.sidebar.date_input("📅 Analysis Date", value=datetime.now().date())
+
+    if 'analysis_date_input' not in st.session_state:
+        st.session_state.analysis_date_input = datetime.now().date()
+
+    def set_date_to_today():
+        st.session_state.analysis_date_input = datetime.now().date()
+
+    # --- Sidebar Date Input with "Today" Button ---
+    col1, col2 = st.sidebar.columns([2, 1])
+    with col1:
+        # The date_input widget itself doesn't need to change
+        analysis_date = st.date_input("📅 Analysis Date", key='analysis_date_input')
+    with col2:
+        st.write("")
+        st.write("")
+        # Call the function using on_click. No 'if' block or 'st.rerun()' is needed.
+        st.button("Today", on_click=set_date_to_today, use_container_width=True)
+
     analyze_btn = st.sidebar.button("🚀 Run Professional Analysis", type="primary", use_container_width=True)
+
+    use_market_filter = st.sidebar.checkbox("Enable Market Health Filter (SPY)", value=True)
 
     st.sidebar.markdown("---")
     st.sidebar.header("📈 Market Screener")
-    # --- Add a dropdown to select the stock universe ---
     universe_options = {
         "Full NASDAQ (from file)": load_nasdaq_tickers,
         "S&P 500": get_sp500_tickers,
@@ -669,248 +884,76 @@ def create_enhanced_interface():
     )
     scan_btn = st.sidebar.button("Scan Universe for Opportunities", use_container_width=True)
 
-    # Load the correct advisor based on the agent selection
+    # --- Advisor Loading Logic ---
     selected_model_dir = AGENT_CONFIGS[selected_agent_name]
     if st.session_state.advisor.model_dir != selected_model_dir:
         with st.spinner(f"Loading '{selected_agent_name}' agent..."):
-            st.session_state.advisor = ProfessionalStockAdvisor(model_dir=selected_model_dir)
-
+            st.session_state.advisor = ProfessionalStockAdvisor(
+                model_dir=selected_model_dir,
+                data_source_manager=st.session_state.data_manager
+            )
     advisor = st.session_state.advisor
-    mico_advisor = st.session_state.mico_advisor
-
-    st.markdown(f"### Now using `{selected_agent_name}` Agent" if run_ai else "### AI Advisor is disabled")
+    st.markdown(f"### Now using `{selected_agent_name}` Agent")
     st.markdown("---")
 
-    # --- MODIFIED: Single-Stock Analysis Logic ---
+    # --- Main Analysis & Display Logic ---
     if analyze_btn:
-        if not run_ai and not run_mico:
-            st.warning("Please select at least one system to run (AI or MICO).")
+        if not run_ai:
+            st.warning("Please select the AI Advisor system to run.")
             return
         if not stock_symbol:
             st.warning("Please enter a stock symbol.")
             return
 
-        ai_result, mico_result, stock_data = None, None, None
-        with st.spinner(f"Running selected analysis for {stock_symbol}..."):
-            if run_ai:
-                stock_data, ai_result = advisor.run_analysis(stock_symbol, analysis_date)
-            if run_mico:
-                mico_result = mico_advisor.analyze(stock_symbol)
+        with st.spinner(f"Running full analysis for {stock_symbol}..."):
+            stock_data, ai_result = advisor.run_analysis(stock_symbol, analysis_date, use_market_filter)
 
-        if not ai_result and not mico_result:
-            st.error("Analysis failed for all selected systems.");
-            return
+        if not ai_result:
+            st.error("Analysis failed. Could not retrieve data or run models.")
+            status_placeholder.markdown("<p style='text-align: right;'>🔴 <strong>DATA FAILED</strong></p>",
+                                        unsafe_allow_html=True)
+        else:
+            if st.session_state.data_manager.use_ibkr and st.session_state.data_manager.isConnected():
+                status_placeholder.markdown("<p style='text-align: right;'>🟢 <strong>IBKR</strong></p>",
+                                            unsafe_allow_html=True)
+            else:
+                status_placeholder.markdown("<p style='text-align: right;'>🟡 <strong>YFINANCE</strong></p>",
+                                            unsafe_allow_html=True)
 
-        st.subheader("System Recommendations")
+            display_analysis_results(ai_result, stock_data, stock_symbol, analysis_date, advisor)
 
-        # Dynamically create columns based on which systems were run
-        num_systems = sum([1 for res in [ai_result, mico_result] if res is not None])
-        if num_systems > 0:
-            cols = st.columns(num_systems)
-            col_idx = 0
-
-            # Display AI Advisor Result if it was run
-            if ai_result:
-                with cols[col_idx]:
-                    st.markdown("##### 🤖 AI Advisor (Gen-3)")
-                    action = ai_result.get('action', 'N/A')
-                    if "BUY" in action:
-                        st.success(f"**Signal: {action}**")
-                    else:
-                        st.warning(f"**Signal: {action}**")
-                    st.info(f"**Agent:** `{ai_result.get('agent', 'N/A')}`")
-                    st.metric("Confidence", f"{ai_result.get('confidence', 0):.1f}%")
-                    col_idx += 1
-
-            # Display MICO System Result if it was run
-            if mico_result:
-                with cols[col_idx]:
-                    st.markdown("##### 룰 MICO System (Rule-Based)")
-                    action = mico_result.get('signal', 'N/A')
-                    if "BUY" in action:
-                        st.success(f"**Signal: {action}**")
-                    else:
-                        st.warning(f"**Signal: {action}**")
-                    st.info(f"**Reason:** `{mico_result.get('reason', 'N/A')}`")
-
-        # The rest of the UI (financials, chart) is dependent on the AI result
-        if ai_result:
-            st.subheader("💰 Price Information & AI Analysis")
-            # ... (rest of your financial metrics and create_chart logic remains here)
-            # This part will only show if the AI system was selected.
-            current_price = ai_result.get('current_price', 0)
-            price_col, target_buy_col, profit_col, stop_col = st.columns(4)
-            price_col.metric("Current Price", f"${current_price:.2f}")
-
-            if "BUY" in ai_result.get('action', ''):
-                # ... your existing logic to display buy price, stop-loss, profit target ...
-                # ... and the chart creation call ...
-                st.subheader("📊 Price Chart")
-                fig = advisor.create_chart(stock_symbol, stock_data, ai_result, analysis_date)
-                if fig: st.plotly_chart(fig, use_container_width=True)
-
-    # --- MODIFIED: Screener Logic ---
     if scan_btn:
-        if not run_ai and not run_mico:
-            st.warning("Please select at least one system to run (AI or MICO).")
+        systems_to_run = []
+        if run_ai: systems_to_run.append("AI")
+        if run_mico: systems_to_run.append("MICO")
+        if not systems_to_run:
+            st.warning("Please select at least one system to run.")
             return
 
+        # Load the selected stock universe by calling the chosen function
         load_function = universe_options[selected_universe_name]
         stock_universe = load_function()
-        if not stock_universe: return
 
-        st.subheader(f"Multi-System Scan | Top Opportunities in: {selected_universe_name}")
+        if not stock_universe:
+            st.error(f"Could not load the '{selected_universe_name}' stock list. Cannot run the screener.")
+        else:
+            st.info(f"Scanning {len(stock_universe)} symbols from the '{selected_universe_name}' universe...")
+            # Call the screener function, which now handles its own UI updates
+            if "AI" in systems_to_run:
+                screener.find_buy_opportunities(advisor, stock_universe, analysis_date, investment_amount)
 
-        ai_opportunities, mico_opportunities = pd.DataFrame(), pd.DataFrame()
+        if "MICO" in systems_to_run:
+            st.session_state.mico_advisor.run_screener(stock_universe)
+            # Display the final connection status after the scan is complete
+            if st.session_state.data_manager.use_ibkr and st.session_state.data_manager.isConnected():
+                status_placeholder.markdown("<p style='text-align: right;'>🟢 <strong>IBKR</strong></p>",
+                                            unsafe_allow_html=True)
+            else:
+                status_placeholder.markdown("<p style='text-align: right;'>🔴 <strong>YFINANCE</strong></p>",
+                                            unsafe_allow_html=True)
 
-        if run_ai:
-            with st.spinner(f"Running AI scan on {len(stock_universe)} stocks..."):
-                ai_opportunities = screener.find_buy_opportunities(advisor, stock_universe, analysis_date)
-
-        if run_mico:
-            with st.spinner(f"Running MICO scan on {len(stock_universe)} stocks..."):
-                mico_opportunities = mico_advisor.run_screener(stock_universe)
-
-        # Dynamically create tabs based on which screeners were run
-        tabs_to_show = []
-        if not ai_opportunities.empty and not mico_opportunities.empty:
-            tabs_to_show.append("🔥 Combined High-Confidence")
-        if not ai_opportunities.empty:
-            tabs_to_show.append("🤖 AI Only")
-        if not mico_opportunities.empty:
-            tabs_to_show.append("룰 MICO Only")
-
-        if not tabs_to_show:
-            st.warning("No BUY signals found by any selected system.")
-            return
-
-        tabs = st.tabs(tabs_to_show)
-        tab_idx = 0
-
-        if "🔥 Combined High-Confidence" in tabs_to_show:
-            with tabs[tab_idx]:
-                st.markdown("#### Signals where both AI and MICO systems agree")
-                combined_df = pd.merge(ai_opportunities, mico_opportunities, on="Symbol", how="inner")
-                if combined_df.empty:
-                    st.warning("No overlapping BUY signals found between the two systems.")
-                else:
-                    st.dataframe(combined_df, use_container_width=True)
-                tab_idx += 1
-
-        if "🤖 AI Only" in tabs_to_show:
-            with tabs[tab_idx]:
-                st.markdown("#### All signals from the AI Advisor")
-                st.dataframe(ai_opportunities, use_container_width=True)
-                tab_idx += 1
-
-        if "룰 MICO Only" in tabs_to_show:
-            with tabs[tab_idx]:
-                st.markdown("#### All signals from the MICO System")
-                st.dataframe(mico_opportunities, use_container_width=True)
-
-    # Default message if no buttons are clicked
     if not analyze_btn and not scan_btn:
         st.info("Select an action from the sidebar to begin.")
-
-    # # --- Restore the logic for the scan button ---
-    # if scan_btn:
-    #     # Dynamically load the selected stock list
-    #     load_function = universe_options[selected_universe_name]
-    #     stock_universe = load_function()
-    #
-    #     if not stock_universe:
-    #         # Error messages are handled within the loading functions
-    #         return
-    #
-    #     st.subheader(f"BULL SCAN | Top BUY Opportunities in: {selected_universe_name}")
-    #     st.info(f"Scanning {len(stock_universe)} stocks for 'BUY' signals on {analysis_date.strftime('%Y-%m-%d')}...")
-    #
-    #     opportunities_df = screener.find_buy_opportunities(advisor, stock_universe, analysis_date)
-    #
-    #     if not opportunities_df.empty:
-    #         st.success(f"Scan complete! Found {len(opportunities_df)} potential opportunities.")
-    #
-    # # Logic for the single-stock analysis button
-    # if analyze_btn:
-    #     if not stock_symbol:
-    #         st.warning("Please enter a stock symbol.")
-    #         return
-    #
-    #     with st.spinner(f"Running analysis for {stock_symbol}..."):
-    #         stock_data, result = advisor.run_analysis(stock_symbol, analysis_date)
-    #
-    #     if not result:
-    #         st.error("Analysis failed.")
-    #         return
-    #
-    #     action = result['action']
-    #     confidence = result.get('confidence', 0)
-    #     current_price = result.get('current_price', 0)
-    #     agent = result.get('agent', "Unknown Agent")
-    #
-    #     col1, col2, col3 = st.columns([3, 2, 2])
-    #     with col1:
-    #         if "BUY" in action:
-    #             st.success(f"🟢 **RECOMMENDATION: {action}**")
-    #         elif "SELL" in action or "CUT LOSS" in action:
-    #             st.error(f"🔴 **RECOMMENDATION: {action}**")
-    #         else:
-    #             st.warning(f"🟡 **RECOMMENDATION: {action}**")
-    #     with col2:
-    #         st.info(f"🧠 **Agent**: {agent}")
-    #     with col3:
-    #         st.metric("Model Confidence", f"{confidence:.1f}%")
-    #
-    #     st.subheader("💰 Price Information & Analysis")
-    #     price_col, target_buy_col, profit_col, stop_col = st.columns(4)
-    #     price_col.metric("Current Price", f"${current_price:.2f}")
-    #
-    #     if "BUY" in action:
-    #         buy_price = result.get('current_price')
-    #         target_buy_col.metric("🎯 Target Buy", f"${buy_price:.2f}")
-    #         stop_loss_price = result.get('stop_loss_price')
-    #         stop_col.metric("🔴 Stop-Loss", f"${stop_loss_price:.2f}")
-    #         profit_target_pct = advisor.calculate_dynamic_profit_target(confidence)
-    #         profit_target_price = buy_price * (1 + profit_target_pct / 100)
-    #         profit_col.metric("✅ Profit Target", f"${profit_target_price:.2f}", f"+{profit_target_pct:.1f}%")
-    #
-    #     st.subheader("📊 Price Chart")
-    #     fig = advisor.create_chart(stock_symbol, stock_data, result, analysis_date)
-    #     if fig: st.plotly_chart(fig, use_container_width=True)
-    #
-    #     st.subheader("📝 Action Summary")
-    #     if "BUY" in action and result.get('buy_date'):
-    #         hypothetical_investment = 1000
-    #         buy_price = result.get('current_price', 1)
-    #         profit_target_pct = advisor.calculate_dynamic_profit_target(confidence)
-    #         profit_target_price = buy_price * (1 + profit_target_pct / 100)
-    #         hypothetical_shares = hypothetical_investment / buy_price
-    #         gross_profit_dollars = (profit_target_price - buy_price) * hypothetical_shares
-    #         net_profit_dollars, total_deducted = advisor.apply_israeli_fees_and_tax(gross_profit_dollars,
-    #                                                                                 hypothetical_shares)
-    #         net_profit_percentage = (
-    #                                             net_profit_dollars / hypothetical_investment) * 100 if hypothetical_investment > 0 else 0
-    #
-    #         # Corrected the corrupted and malformed summary text.
-    #         summary_text = (
-    #             f"- **Action:** The model recommends **BUYING** {stock_symbol} at **${current_price:.2f}**.\n"
-    #             f"- **Agent:** The decision was made by the `{agent}`.\n"
-    #             f"- **Risk Management:** A dynamic stop-loss is suggested at **${result.get('stop_loss_price'):.2f}**.\n"
-    #             f"- **Profit Scenario:** Based on a hypothetical **${hypothetical_investment:,}** investment, "
-    #             f"if the Profit Target of **${profit_target_price:.2f}** is reached, the estimated "
-    #             f"**Net Profit** (after fees & taxes) would be approximately **${net_profit_dollars:.2f}** "
-    #             f"(a **{net_profit_percentage:.2f}%** net return)."
-    #         )
-    #         st.success(summary_text)
-    #
-    #     elif "SELL" in action or "CUT LOSS" in action:
-    #         st.error(f"- **Action:** The model recommends **{action}** the position in {stock_symbol}.\n"
-    #                  f"- **Agent:** The exit signal was triggered by the `{agent}`.")
-    #     else:
-    #         st.warning(f"- **Action:** The model recommends to **WAIT or AVOID** buying {stock_symbol}.\n"
-    #                    f"- **Agent:** The decision was made by the `{agent}`.")
-    # else:
-    #     st.info("Select an action from the sidebar.")
 
 
 # --- Main Execution ---
@@ -918,9 +961,21 @@ if __name__ == "__main__":
     # Define the default agent to load on the very first run
     DEFAULT_AGENT_MODEL_DIR = "models/NASDAQ-gen3-dynamic"
 
+    # Initialize the DataSourceManager ONCE and store it in the session state
+    if 'data_manager' not in st.session_state:
+        st.session_state.data_manager = DataSourceManager(use_ibkr=True)
+
     # Initialize the advisor in the session state ONCE if it doesn't exist
     if 'advisor' not in st.session_state:
-        st.session_state.advisor = ProfessionalStockAdvisor(model_dir=DEFAULT_AGENT_MODEL_DIR)
+        st.session_state.advisor = ProfessionalStockAdvisor(
+            model_dir=DEFAULT_AGENT_MODEL_DIR,
+            data_source_manager=st.session_state.data_manager
+        )
+
+    # # Initialize the Micha Stock advisor in the session state ONCE if it doesn't exist
+    # if 'mico_advisor' not in st.session_state:
+    #     # Pass the same data manager to the MicoAdvisor
+    #     st.session_state.mico_advisor = MicoAdvisor(data_manager=st.session_state.data_manager)
 
     # Check if models were loaded successfully before running the UI
     if st.session_state.advisor.models:
