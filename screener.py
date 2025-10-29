@@ -39,7 +39,7 @@ from stockwise_simulation import ProfessionalStockAdvisor
 
 
 def find_buy_opportunities(advisor: ProfessionalStockAdvisor, stock_universe: list, analysis_date,
-                           confidence_threshold=70):
+                           confidence_threshold=70, investment_amount=1000):
     """
     Scans a universe of stocks and displays BUY signals in real-time using a Streamlit placeholder.
     """
@@ -63,16 +63,23 @@ def find_buy_opportunities(advisor: ProfessionalStockAdvisor, stock_universe: li
             est_profit_pct = advisor.calculate_dynamic_profit_target(confidence)
 
             net_profit_dollars = 0
+            profit_target_price = 0  # Initialize profit target price
+
             if buy_price > 0:
                 profit_target_price = buy_price * (1 + est_profit_pct / 100)
-                hypothetical_shares = 1000 / buy_price
+                hypothetical_shares = investment_amount / buy_price
                 gross_profit_dollars = (profit_target_price - buy_price) * hypothetical_shares
                 net_profit_dollars, _ = advisor.apply_israeli_fees_and_tax(gross_profit_dollars, hypothetical_shares)
 
             trade_info = {
-                'Symbol': symbol, 'Confidence': confidence, 'Entry Price': buy_price,
-                'Stop-Loss': result.get('stop_loss_price'), 'Est. Net Profit ($)': net_profit_dollars,
-                'Est. Gross Profit (%)': est_profit_pct, 'Agent': result.get('agent')
+                'Symbol': symbol,
+                'Confidence': confidence,
+                'Entry Price': buy_price,
+                'Profit Target ($)': profit_target_price,
+                'Stop-Loss': result.get('stop_loss_price'),
+                'Est. Net Profit ($)': net_profit_dollars,
+                'Est. Gross Profit (%)': est_profit_pct,
+                'Agent': result.get('agent')
             }
             recommended_trades.append(trade_info)
 
@@ -81,8 +88,12 @@ def find_buy_opportunities(advisor: ProfessionalStockAdvisor, stock_universe: li
             if not temp_df.empty:
                 temp_df = temp_df.sort_values(by='Confidence', ascending=False).reset_index(drop=True)
                 results_placeholder.dataframe(temp_df.style.format({
-                    'Confidence': '{:.1f}%', 'Entry Price': '${:.2f}', 'Stop-Loss': '${:.2f}',
-                    'Est. Net Profit ($)': '${:.2f}', 'Est. Gross Profit (%)': '{:.1f}%'
+                    'Confidence': '{:.1f}%',
+                    'Entry Price': '${:.2f}',
+                    'Profit Target ($)': '${:.2f}',
+                    'Stop-Loss': '${:.2f}',
+                    'Est. Net Profit ($)': '${:.2f}',
+                    'Est. Gross Profit (%)': '{:.1f}%'
                 }), use_container_width=True)
 
     progress_placeholder.empty()
