@@ -1,36 +1,35 @@
 # mico_system.py  # Micha Stock system
 """
-MICO Rule-Based Trading Advisor
-===============================
+Micha (MICO) Rule-Based Trading Advisor
+========================================
 
-This script implements a rule-based trading advisor and screener inspired by the
-"Micho Stock" methodology. It is designed to run in parallel with the AI-based
-agents to provide an alternative, logic-based analysis.
+This script implements a dynamic, rule-based trading advisor (Micha System).
+It is designed to run in parallel with the AI-based agents and can be
+optimized using a grid-search backtester.
 
-The system focuses on identifying stocks that exhibit a combination of strong
-upward trends, significant volume spikes (indicating institutional interest),
-and favorable entry points that are not overbought.
+The system analyzes stocks based on a flexible set of rules for trend,
+momentum, and entry points.
 
 Core Logic:
 -----------
-The `MicoAdvisor` class analyzes a stock and generates a "BUY" signal only if all
-of the following three strict conditions are met:
-1.  **Strong Uptrend**: The stock's current price is above its 50-day moving
+The `MichaAdvisor` class analyzes a stock and generates a "BUY" signal if
+all of the following conditions (based on *default* parameters) are met:
+1.  **Strong Uptrend**: The stock's price is above its 50-day moving
     average, which in turn is above its 200-day moving average.
-2.  **Volume Spike**: Within the last 5 days, the trading volume has spiked to
-    more than double its 30-day average.
-3.  **Good Entry Point**: The 14-day Relative Strength Index (RSI) is below 65,
-    indicating the stock is not currently in an overbought condition.
+2.  **Momentum Confirmation**: The MACD line is currently above its signal line.
+3.  **Good Entry Point**: The 14-day Relative Strength Index (RSI) is below 70,
+    indicating the stock is not in an overbought condition.
 
-If a stock meets all criteria, it is flagged as a "BUY"; otherwise, it is
-considered a "HOLD".
+All of these parameters (SMAs, RSI, MACD, etc.) are configurable via a
+`params` dictionary passed to the `analyze` method.
 
 Functionality:
 --------------
--   `analyze(symbol)`: Analyzes a single stock symbol and returns a dictionary
-    containing the signal ('BUY' or 'HOLD') and a human-readable string
-    explaining which of the rules were met. Results are cached for 15 minutes
-    for performance.
+-   `analyze(symbol, analysis_date, params=None)`: Analyzes a single stock
+    symbol for a specific historical date. It uses the provided `params`
+    dictionary to configure its rules. If a "BUY" signal is found, it
+    returns a dictionary containing the signal, reasoning, and
+    calculated stop-loss and profit-target prices.
 -   `run_screener(stock_universe)`: Iterates through a given list of stock
     symbols, running the `analyze` function on each. It uses a real-time
     progress bar in the Streamlit UI and returns a pandas DataFrame of all
@@ -38,87 +37,122 @@ Functionality:
 
 """
 
+
 import pandas as pd
 import pandas_ta as ta
 import streamlit as st
 from data_source_manager import DataSourceManager
+from utils import clean_raw_data
 
 
-class MicoAdvisor:
+class MichaAdvisor:
     """
-    A rule-based trading advisor inspired by the "Micho Stock" methodology,
-    focusing on trend, volume, and momentum to find opportunities.
+    A rule-based trading advisor (MICO/Micha System).
+    Analyzes stocks based on a predefined set of technical indicator rules.
     """
 
     def __init__(self, data_manager: DataSourceManager):
         self.dm = data_manager
 
-    @st.cache_data(ttl=900)  # Cache results for 15 minutes
-    def analyze(_self, symbol: str) -> dict:
-        """
-        Analyzes a single stock based on the MICO rule-based system.
-        Note: _self is used because st.cache_data hashes the first argument.
-        """
-        # 1. Fetch data
-        df = _self.dm.get_stock_data(symbol, days_back=300)
-        if df.empty or len(df) < 200:
-            return {'signal': 'WAIT', 'reason': 'Insufficient historical data.'}
+    @st.cache_data(ttl=900)
+    def analyze(_self, symbol: str, analysis_date, params: dict = None) -> dict:
+        if params is None: params = {}
 
-        # 2. Calculate indicators
-        df.ta.sma(length=50, append=True, col_names='SMA_50')
-        df.ta.sma(length=200, append=True, col_names='SMA_200')
-        df.ta.rsi(length=14, append=True, col_names='RSI_14')
-        df['volume_ma_30'] = df['volume'].rolling(30).mean()
+        # --- Make all rules dynamic based on params ---
+        sma_short = params.get('sma_short', 50)
+        sma_long = params.get('sma_long', 200)
+        rsi_period = params.get('rsi_period', 14)
+        rsi_threshold = params.get('rsi_threshold', 70)
+        macd_fast = params.get('macd_fast', 12)
+        macd_slow = params.get('macd_slow', 26)
+        macd_signal = params.get('macd_signal', 9)
+        atr_period = params.get('atr_period', 14)
+        atr_mult_stop = params.get('atr_mult_stop', 2.0)
+        atr_mult_profit = params.get('atr_mult_profit', 2.0)  # Risk/Reward ratio
 
-        latest = df.iloc[-1]
+        # Use sma_long as minimum data requirement
+        df_raw = _self.dm.get_stock_data(symbol, days_back=sma_long + 50)
+        if df_raw.empty:
+            return {'signal': 'WAIT', 'reason': f'Failed to download data for {symbol} (Network Error).'}
 
-        # 3. Apply rules
-        is_uptrend = latest['close'] > latest['SMA_50'] and latest['SMA_50'] > latest['SMA_200']
+        df_slice = df_raw[df_raw.index <= pd.to_datetime(analysis_date)]
 
-        recent_volume = df.tail(5)
-        is_volume_spike = (recent_volume['volume'] > recent_volume['volume_ma_30'] * 2).any()
+        if df_slice.empty or len(df_slice) < sma_long:
+            return {'signal': 'WAIT', 'reason': 'Insufficient historical data for this date.'}
 
-        is_not_overbought = latest['RSI_14'] < 65
+        # --- Apply indicators with dynamic lengths ---
+        df_slice.ta.sma(length=sma_short, append=True, col_names=f'sma_{sma_short}')
+        df_slice.ta.sma(length=sma_long, append=True, col_names=f'sma_{sma_long}')
+        df_slice.ta.rsi(length=rsi_period, append=True, col_names=f'rsi_{rsi_period}')
+        df_slice.ta.macd(fast=macd_fast, slow=macd_slow, signal=macd_signal, append=True,
+                         col_names=(f"macd_{macd_fast}_{macd_slow}", f"macd_hist_{macd_fast}_{macd_slow}",
+                                    f"macd_signal_{macd_fast}_{macd_slow}"))
+        df_slice.ta.atr(length=atr_period, append=True, col_names=f'atr_{atr_period}')
+        df_slice.dropna(inplace=True)
 
-        # 4. Generate signal
-        reasons = []
-        if is_uptrend:
-            reasons.append("✅ Strong Uptrend")
+        if df_slice.empty: return {'signal': 'WAIT', 'reason': 'Data error after calculating indicators.'}
+
+        latest = df_slice.iloc[-1]
+        reasons, buy_conditions_met = [], 0
+
+        # --- Check rules using dynamic column names ---
+        if latest['close'] > latest[f'sma_{sma_short}'] and latest[f'sma_{sma_short}'] > latest[f'sma_{sma_long}']:
+            buy_conditions_met += 1
+            reasons.append(f"✅ Price > {sma_short}-day SMA & {sma_short} > {sma_long}-day SMA.")
         else:
-            reasons.append("❌ Not in Uptrend")
+            reasons.append(f"❌ Price not in uptrend (SMA {sma_short}/{sma_long}).")
 
-        if is_volume_spike:
-            reasons.append("✅ Recent Volume Spike (Smart Money)")
+        if latest[f'rsi_{rsi_period}'] < rsi_threshold:
+            buy_conditions_met += 1
+            reasons.append(f"✅ RSI ({latest[f'rsi_{rsi_period}']:.1f}) < {rsi_threshold}.")
         else:
-            reasons.append("❌ No Recent Volume Spike")
+            reasons.append(f"❌ RSI ({latest[f'rsi_{rsi_period}']:.1f}) >= {rsi_threshold}.")
 
-        if is_not_overbought:
-            reasons.append("✅ Good Entry Point (Not Overbought)")
+        if latest[f"macd_{macd_fast}_{macd_slow}"] > latest[f"macd_signal_{macd_fast}_{macd_slow}"]:
+            buy_conditions_met += 1
+            reasons.append("✅ MACD > signal line.")
         else:
-            reasons.append("❌ Potentially Overbought (RSI > 65)")
+            reasons.append("❌ MACD < signal line.")
 
-        reason_string = " | ".join(reasons)
+        # --- All 3 conditions must be met ---
+        if buy_conditions_met == 3:
+            current_price = latest['close']
+            atr_value = latest[f'atr_{atr_period}']
+            stop_loss_price = current_price - (atr_value * atr_mult_stop)
+            risk = current_price - stop_loss_price
+            profit_target_price = current_price + (risk * atr_mult_profit)  # Use R/R
+            return {
+                'signal': 'BUY', 'reason': "\n".join(reasons),
+                'current_price': current_price, 'stop_loss_price': stop_loss_price,
+                'profit_target_price': profit_target_price, 'debug_rsi': latest[f'rsi_{rsi_period}']
+            }
+        return {'signal': 'WAIT', 'reason': "\n".join(reasons)}
 
-        if is_uptrend and is_volume_spike and is_not_overbought:
-            return {'signal': 'BUY', 'reason': reason_string}
+    def run_screener(self, stock_universe: list):
+        """Scans a universe of stocks and displays Micha BUY signals in a Streamlit UI."""
+        st.subheader("📜 Micha System Screener Results")
 
-        return {'signal': 'HOLD', 'reason': reason_string}
-
-    def run_screener(self, stock_universe: list) -> pd.DataFrame:
-        """
-        Runs the MICO analysis across a list of stocks to find BUY opportunities.
-        """
-        st.subheader("MICO System Scan")
-        opportunities = []
+        recommended_trades = []
         progress_placeholder = st.empty()
+        results_placeholder = st.empty()
 
         for i, symbol in enumerate(stock_universe):
-            progress_text = f"Scanning with MICO... ({i + 1}/{len(stock_universe)}): {symbol}"
+            progress_text = f"Scanning... ({i + 1}/{len(stock_universe)}): {symbol}"
             progress_placeholder.progress((i + 1) / len(stock_universe), text=progress_text)
 
             result = self.analyze(symbol)
-            if result['signal'] == 'BUY':
-                opportunities.append({'Symbol': symbol, 'MICO Signal': 'BUY', 'MICO Reason': result['reason']})
+            if result and result['signal'] == 'BUY':
+                trade_info = {
+                    'Symbol': symbol,
+                    'Source': 'Micha',  # Identifies the source system
+                    'Reason': result.get('reason', 'N/A')
+                }
+                recommended_trades.append(trade_info)
+
+                # Update table in real-time
+                temp_df = pd.DataFrame(recommended_trades)
+                results_placeholder.dataframe(temp_df, use_container_width=True)
 
         progress_placeholder.empty()
-        return pd.DataFrame(opportunities)
+        if not recommended_trades:
+            results_placeholder.warning("Micha System found no BUY signals in this universe.")
