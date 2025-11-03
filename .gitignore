@@ -1,8 +1,24 @@
-/.env
-# Python
+# Virtual Environment
+.venv/
+
+# Python cache
 __pycache__/
 *.pyc
-.venv/
+
+# Log files
+logs/
+*.log
+
+# Data and Model files (optional, but recommended if large)
+data/
+models/
+*.csv
+*.parquet
+*.pkl
+*.json
+
+/.env
+# Python
 venv/
 script_env/
 
@@ -12,15 +28,10 @@ script_env/
 
 # Data, Models, Logs, and Reports
 # These should be stored on Google Drive, not in Git.
-data/
-models/
-logs/
+
 reports/
-*.csv
-*.json
 *.txt
 *.xlsx
-*.log
 
 # Temp files created by some editors
 *~
