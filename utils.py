@@ -53,6 +53,10 @@ def clean_raw_data(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame()
 
+    # This prevents the "ambiguous value" error during backtesting.
+    if not df.index.is_unique:
+        df = df[~df.index.duplicated(keep='first')]
+
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.droplevel(1)
 
