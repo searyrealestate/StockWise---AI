@@ -30,77 +30,81 @@ Key Functionality:
 
 
 import pandas as pd
-from tqdm import tqdm
 import streamlit as st
-from stockwise_simulation import ProfessionalStockAdvisor
-import pandas as pd
-import streamlit as st
-from stockwise_simulation import ProfessionalStockAdvisor
+from utils import clean_raw_data
+import json
 
 
-def find_buy_opportunities(advisor: ProfessionalStockAdvisor, stock_universe: list, analysis_date,
-                           confidence_threshold=70, investment_amount=1000):
+def run_unified_screener(active_advisors: dict, stock_universe: list,
+                         analysis_date, investment_amount=1000, debug_mode=False, use_optimized_params=False):
     """
-    Scans a universe of stocks and displays BUY signals in real-time using a Streamlit placeholder.
+    Scans a universe of stocks. Can now automatically load and use optimized parameters.
     """
     recommended_trades = []
-
-    # Create placeholders for real-time UI updates
+    st.subheader("📈 Unified Screener Results")
     progress_placeholder = st.empty()
     results_placeholder = st.empty()
-
     total_stocks = len(stock_universe)
 
+    # Load optimized parameters if the user has requested it
+    best_params = {}
+    if use_optimized_params:
+        try:
+            with open("best_params.json", "r") as f:
+                best_params = json.load(f)
+            st.success("✅ Loaded optimized parameters from `best_params.json`.")
+        except FileNotFoundError:
+            st.warning("⚠️ `best_params.json` not found. Running with default model parameters.")
+
     for i, symbol in enumerate(stock_universe):
-        progress_text = f"Scanning... ({i + 1}/{total_stocks}): {symbol}"
+        scan_models = '/'.join(active_advisors.keys())
+        progress_text = f"Scanning ({scan_models})... ({i + 1}/{total_stocks}): {symbol}"
         progress_placeholder.progress((i + 1) / total_stocks, text=progress_text)
 
-        _, result = advisor.run_analysis(symbol, analysis_date)
+        for advisor_name, advisor_instance in active_advisors.items():
+            # Get the specific optimized params for this model, or an empty dict if none exist
+            # Note: The key for the dictionary is the Class Name (e.g., "MichaAdvisor")
+            model_class_name = type(advisor_instance).__name__
+            params_for_model = best_params.get(model_class_name, {})
 
-        if result and result['action'] == "BUY" and result.get('confidence', 0) > confidence_threshold:
-            confidence = result.get('confidence', 0)
-            buy_price = result.get('current_price', 0)
-            est_profit_pct = advisor.calculate_dynamic_profit_target(confidence)
+            result = advisor_instance.analyze(symbol, analysis_date, params=params_for_model)
 
-            net_profit_dollars = 0
-            profit_target_price = 0  # Initialize profit target price
+            if result and (result.get('signal') or result.get('action')) == 'BUY':
+                buy_price = result.get('current_price', 0)
+                profit_target_price = result.get('profit_target_price', 0)
 
-            if buy_price > 0:
-                profit_target_price = buy_price * (1 + est_profit_pct / 100)
-                hypothetical_shares = investment_amount / buy_price
-                gross_profit_dollars = (profit_target_price - buy_price) * hypothetical_shares
-                net_profit_dollars, _ = advisor.apply_israeli_fees_and_tax(gross_profit_dollars, hypothetical_shares)
+                net_profit_dollars = 0
+                if buy_price > 0 and profit_target_price > 0:
+                    shares = investment_amount / buy_price
+                    gross_profit = (profit_target_price - buy_price) * shares
+                    net_profit_dollars, _ = st.session_state.advisor.apply_israeli_fees_and_tax(gross_profit, shares)
 
-            trade_info = {
-                'Symbol': symbol,
-                'Confidence': confidence,
-                'Entry Price': buy_price,
-                'Profit Target ($)': profit_target_price,
-                'Stop-Loss': result.get('stop_loss_price'),
-                'Est. Net Profit ($)': net_profit_dollars,
-                'Est. Gross Profit (%)': est_profit_pct,
-                'Agent': result.get('agent')
-            }
-            recommended_trades.append(trade_info)
+                trade_info = {
+                    'Symbol': symbol,
+                    'Source': advisor_name,
+                    'Entry Price': buy_price if buy_price > 0 else None,
+                    'Profit Target ($)': profit_target_price if profit_target_price > 0 else None,
+                    'Stop-Loss': result.get('stop_loss_price'),
+                    'Est. Net Profit ($)': net_profit_dollars if net_profit_dollars > 0 else None,
+                    # BUG FIX: Always add the Analysis Date, regardless of debug mode.
+                    'Analysis Date': analysis_date.strftime('%Y-%m-%d')
+                }
 
-            # Update the results table in real-time
-            temp_df = pd.DataFrame(recommended_trades)
-            if not temp_df.empty:
-                temp_df = temp_df.sort_values(by='Confidence', ascending=False).reset_index(drop=True)
-                results_placeholder.dataframe(temp_df.style.format({
-                    'Confidence': '{:.1f}%',
-                    'Entry Price': '${:.2f}',
-                    'Profit Target ($)': '${:.2f}',
-                    'Stop-Loss': '${:.2f}',
-                    'Est. Net Profit ($)': '${:.2f}',
-                    'Est. Gross Profit (%)': '{:.1f}%'
-                }), use_container_width=True)
+                if debug_mode:
+                    trade_info['RSI'] = result.get('debug_rsi')
+
+                recommended_trades.append(trade_info)
 
     progress_placeholder.empty()
-
     if not recommended_trades:
-        results_placeholder.warning("No strong 'BUY' signals found for the selected date.")
+        results_placeholder.warning("No 'BUY' signals found from the selected models for this date.")
         return pd.DataFrame()
 
-    final_df = pd.DataFrame(recommended_trades).sort_values(by='Confidence', ascending=False).reset_index(drop=True)
+    final_df = pd.DataFrame(recommended_trades)
+    formatter = {
+        'Entry Price': '${:.2f}', 'Profit Target ($)': '${:.2f}', 'Stop-Loss': '${:.2f}',
+        'Est. Net Profit ($)': '${:.2f}', 'RSI': '{:.2f}'
+    }
+    results_placeholder.dataframe(final_df.style.format(formatter, na_rep='-'), use_container_width=True)
+
     return final_df
