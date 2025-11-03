@@ -9,6 +9,8 @@ from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_sc
 from sklearn.model_selection import train_test_split
 from data_manager import DataManager
 from datetime import datetime
+import numpy as np
+from Create_parquet_file_NASDAQ import apply_triple_barrier
 
 # --- Setup logging ---
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] (%(name)s) %(message)s")
@@ -27,6 +29,23 @@ class Gen3ModelTrainer:
         self.agent_name = agent_name
         os.makedirs(self.model_dir, exist_ok=True)
         logger.info(f"Gen3-Model Trainer initialized. Models will be saved to: {self.model_dir}")
+
+    def _extract_params(self, custom_params: dict) -> (dict, dict):
+        """
+        Splits the parameters dictionary from the tuner into
+        labeling parameters and model parameters.
+        """
+        label_param_keys = ['profit_take_mult', 'stop_loss_mult', 'time_limit_bars', 'rsi_overbought_threshold']
+
+        labeling_params = {k: v for k, v in custom_params.items() if k in label_param_keys}
+        model_params = {k: v for k, v in custom_params.items() if k not in label_param_keys}
+
+        # Check if we have the essential labeling params
+        if 'time_limit_bars' not in labeling_params:
+            logger.error(f"CRITICAL: Tuner params file is missing 'time_limit_bars'.")
+            return None, model_params
+
+        return labeling_params, model_params
 
     def _train_single_model(self, df: pd.DataFrame, feature_cols: list, label_col: str, model_name: str,
                             custom_params: dict) -> dict:
@@ -114,9 +133,9 @@ class Gen3ModelTrainer:
             'volume_ma_20', 'rsi_14', 'momentum_5', 'macd', 'macd_signal',
             'macd_histogram', 'bb_position', 'volatility_20d', 'atr_14',
             'adx', 'adx_pos', 'adx_neg', 'obv', 'rsi_28',
-            'z_score_20', 'bb_width', 'correlation_50d_qqq', 'vix_close','corr_tlt', 'cmf',
+            'z_score_20', 'bb_width', 'correlation_50d_qqq', 'vix_close', 'corr_tlt', 'cmf',
             'bb_upper', 'bb_lower', 'bb_middle', 'daily_return',
-            'kama_10', 'stoch_k', 'stoch_d', 'dominant_cycle'
+            'kama_10', 'stoch_k', 'st_och_d', 'dominant_cycle'
         ]
 
         # Define the clusters and the models to be trained for each
@@ -144,15 +163,45 @@ class Gen3ModelTrainer:
                         custom_params = json.load(f)
                     logger.info(f"Loaded specific params for {model_filename} from {params_path}")
                 except FileNotFoundError:
-                    logger.warning(f"⚠️ No specific parameter file found at {params_path}. Using default settings.")
-                    custom_params = {}  # Use default LGBM settings if no file is found
+                    logger.critical(f"❌ FATAL: No parameter file found at {params_path}. Cannot train.")
+                    logger.critical("Please run the 'orchestrate_tuning.py' script first!")
+                    continue
 
+                # 1. Split params into two groups
+                labeling_params, model_params = self._extract_params(custom_params)
+
+                if not labeling_params:
+                    logger.critical(f"Skipping {model_filename} due to missing labeling parameters in JSON file.")
+                    continue
+
+                # 2. Re-label the DataFrame in memory
+                logger.info(f"Re-labeling data for {model_filename} using optimized params...")
+                re_labeled_df = cluster_df.copy()
+                tb_labels = apply_triple_barrier(
+                    close_prices=re_labeled_df['close'],
+                    high_prices=re_labeled_df['high'],
+                    low_prices=re_labeled_df['low'],
+                    atr=re_labeled_df['atr_14'],
+                    profit_take_mult=labeling_params.get('profit_take_mult', 2.0),
+                    stop_loss_mult=labeling_params.get('stop_loss_mult', 2.5),
+                    time_limit_bars=labeling_params.get('time_limit_bars', 15),
+                    profit_mode='dynamic'
+                )
+
+                # 3. Re-create all target columns from the new labels
+                re_labeled_df['target_entry'] = np.where(tb_labels == 1, 1, 0)
+                re_labeled_df['target_cut_loss'] = np.where(tb_labels == -1, 1, 0)
+                overbought_threshold = labeling_params.get('rsi_overbought_threshold', 75)
+                overbought_condition = re_labeled_df['rsi_14'] > overbought_threshold
+                re_labeled_df['target_profit_take'] = np.where((tb_labels == 1) & (overbought_condition), 1, 0)
+
+                # 4. Train the model using the re-labeled data and model-specific params
                 self._train_single_model(
-                    df=cluster_df,
+                    df=re_labeled_df,  # Pass the re-labeled DataFrame
                     feature_cols=gen3_feature_cols,
                     label_col=target_col,
                     model_name=model_filename,
-                    custom_params=custom_params
+                    custom_params=model_params  # Pass only the model params
                 )
 
         logger.info("\n🎉 Gen-3 Model Training Pipeline Finished Successfully!")
