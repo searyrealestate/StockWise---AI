@@ -38,9 +38,20 @@ import yfinance as yf
 import logging
 import time
 import threading
-from ibapi.client import EClient
-from ibapi.wrapper import EWrapper
-from ibapi.contract import Contract
+try:
+    # Try to import the real ibapi
+    from ibapi.client import EClient
+    from ibapi.wrapper import EWrapper
+    from ibapi.contract import Contract
+except ImportError:
+    # If it fails (like on Streamlit Cloud), create dummy classes
+    # This stops the app from crashing
+    class EClient:
+        pass
+    class EWrapper:
+        pass
+    class Contract:
+        pass
 import datetime
 import os
 import traceback
