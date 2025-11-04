@@ -47,6 +47,7 @@ UI and Outputs:
 from google.cloud import storage
 from google.oauth2 import service_account
 import streamlit as st
+import streamlit_authenticator as stauth
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -73,6 +74,8 @@ from trading_models import (MeanReversionAdvisor, BreakoutAdvisor, SuperTrendAdv
                             MovingAverageCrossoverAdvisor, VolumeMomentumAdvisor)
 import mico_optimizer
 from io import BytesIO
+import yaml
+from yaml.loader import SafeLoader
 
 
 # --- Page Configuration ---
@@ -351,25 +354,29 @@ class ProfessionalStockAdvisor:
 
         if data_source_manager:
             self.data_source_manager = data_source_manager
-        elif self.testing_mode:
-            self.data_source_manager = None
         else:
-            self.data_source_manager = DataSourceManager(use_ibkr=True)
+            # This default (use_ibkr=False) is for Streamlit Cloud
+            self.data_source_manager = DataSourceManager(use_ibkr=False)
+
+        # if self.testing_mode:
+        #     self.data_source_manager = None
+        # else:
+        #     st.write("Testing mode does not support on Cloud.")
+        #     self.data_source_manager = DataSourceManager(use_ibkr=True)
 
         # Pass the SINGLE data manager instance to the FeatureCalculator.
         self.calculator = FeatureCalculator(data_manager=self.data_source_manager)
 
-        # --- GEN-3: Load the entire suite of specialist models ---
+        # --- SMART MODEL LOADING ---
+        # This will now try GCS, then fall back to local files.
         self.models, self.feature_names = self._load_gen3_models()
+
         self.tax = 0.25
         self.broker_fee = 0.004
         self.position = {}
         self.model_version_info = f"Gen-3: {os.path.basename(model_dir)}"
         if self.download_log: self.log_file = self.setup_log_file()
         self.log("Application Initialized.", "INFO")
-
-    # In stockwise_simulation.py
-    # INSIDE the ProfessionalStockAdvisor class
 
     @st.cache_resource(ttl=3600)  # Cache for 1 hour
     def _download_and_load_models(_self, bucket_name="stockwise-gen3-models-public"):
@@ -425,38 +432,81 @@ class ProfessionalStockAdvisor:
             st.error(f"FATAL: Could not load models. Check secrets. {e}")
             return None, None
 
+    def _load_models_from_disk(self):
+        """
+        The original function to load models from the local 'models' folder.
+        """
+        models = {}
+        feature_names = {}
+        try:
+            model_files = glob.glob(os.path.join(self.model_dir, "*.pkl"))
+            if not model_files:
+                self.log(f"No local models found in {self.model_dir}.", "ERROR")
+                return None, None
+
+            for model_path in model_files:
+                model_name = os.path.basename(model_path).replace(".pkl", "")
+                features_path = model_path.replace(".pkl", "_features.json")
+
+                models[model_name] = joblib.load(model_path)
+                with open(features_path, 'r') as f:
+                    feature_names[model_name] = json.load(f)
+
+            self.log(f"✅ Successfully loaded {len(models)} models from local disk.", "INFO")
+            return models, feature_names
+        except Exception as e:
+            self.log(f"Error loading local models: {e}", "ERROR")
+            return None, None
+
     # This replaces your OLD _load_gen3_models
-    def _load_gen3_models(self):
-        # This function is now just a wrapper
-        # NOTE: Make sure your bucket name here is correct
-        return self._download_and_load_models(bucket_name="stockwise-gen3-models-public")
+    @st.cache_resource(ttl=3600)  # Cache for 1 hour
+    def _load_gen3_models(_self):
+        """
+        Smart model loader:
+        Tries to load from GCS (for Streamlit Cloud).
+        If it fails, it falls back to loading from the local disk.
+        """
+        try:
+            # --- 1. TRY CLOUD (st.secrets) ---
+            _self.log("Attempting to load models from GCS (Cloud Mode)...")
+            creds_json = st.secrets["gcs_service_account"]
+            credentials = service_account.Credentials.from_service_account_info(creds_json)
+            storage_client = storage.Client(credentials=credentials)
 
-    # def _load_gen3_models(self):
-    #     """
-    #     Loads the entire suite of specialist models for Gen-3.
-    #     """
-    #     models = {}
-    #     feature_names = {}
-    #     try:
-    #         model_files = glob.glob(os.path.join(self.model_dir, "*.pkl"))
-    #         if not model_files:
-    #             self.log(f"No models found in {self.model_dir}. Please run the model trainer.", "ERROR")
-    #             return None, None
-    #
-    #         for model_path in model_files:
-    #             model_name = os.path.basename(model_path).replace(".pkl", "")
-    #             features_path = model_path.replace(".pkl", "_features.json")
-    #             models[model_name] = joblib.load(model_path)
-    #             with open(features_path, 'r') as f:
-    #                 feature_names[model_name] = json.load(f)
-    #
-    #         self.log(f"✅ Successfully loaded {len(models)} specialist models for Gen-3.", "INFO")
-    #         return models, feature_names
-    #     except Exception as e:
-    #         self.log(f"Error loading Gen-3 models: {e}", "ERROR")
-    #         return None, None
+            # *** IMPORTANT: Change this to your bucket name ***
+            bucket = storage_client.bucket("stockwise-gen3-models-public")
 
-    # log, setup_log_file, validate_symbol_professional methods are correct and do not need changes...
+            models = {}
+            feature_names = {}
+
+            blobs = list(bucket.list_blobs(prefix=f"{_self.model_dir}/"))  # e.g., "models/NASDAQ-gen3-dynamic/"
+            if not blobs:
+                _self.log(f"No models found in GCS at gs://{bucket.name}/{_self.model_dir}", "ERROR")
+                return None, None
+
+            for blob in blobs:
+                if blob.name.endswith(".pkl"):
+                    model_name = os.path.basename(blob.name).replace(".pkl", "")
+                    features_path = blob.name.replace(".pkl", "_features.json")
+
+                    model_bytes = blob.download_as_bytes()
+                    models[model_name] = joblib.load(BytesIO(model_bytes))
+
+                    features_blob = bucket.blob(features_path)
+                    if features_blob.exists():
+                        features_bytes = features_blob.download_as_bytes()
+                        feature_names[model_name] = json.loads(features_bytes.decode('utf-8'))
+                    else:
+                        _self.log(f"Missing feature file: {features_path}", "WARNING")
+
+            _self.log(f"✅ Successfully loaded {len(models)} models from GCS.", "INFO")
+            return models, feature_names
+
+        except Exception as e:
+            # --- 2. FALLBACK TO LOCAL ---
+            _self.log(f"GCS load failed (Error: {e}). Assuming local run. Loading from disk...", "WARNING")
+            return _self._load_models_from_disk()
+
     def log(self, message, level="INFO"):
         timestamp = datetime.now().strftime('%H:%M:%S')
         entry = f"[{timestamp}] [{level}] {message}"
@@ -891,249 +941,6 @@ def display_analysis_results(ai_result, mico_result, stock_data, stock_symbol, a
             st.dataframe(features_df.style.format(precision=4), use_container_width=True)
 
 
-# def create_enhanced_interface():
-#     # --- Connection Status Indicator ---
-#     _, col2 = st.columns([4, 1])
-#
-#     status_placeholder = col2.empty()
-#
-#     st.title("🏢 StockWise AI Trading Advisor")
-#
-#     AGENT_CONFIGS = {
-#         'Dynamic Profit (Recommended)': "models/NASDAQ-gen3-dynamic",
-#         '1% Net Profit': "models/NASDAQ-gen3-1pct",
-#         '2% Net Profit': "models/NASDAQ-gen3-2pct",
-#         '3% Net Profit': "models/NASDAQ-gen3-3pct",
-#         '4% Net Profit': "models/NASDAQ-gen3-4pct"
-#     }
-#
-#     # --- Sidebar UI ---
-#     st.sidebar.header("🎯 Trading Analysis")
-#     st.sidebar.markdown("**Select Systems to Run:**")
-#     # run_ai = st.sidebar.checkbox("Run AI Advisor (Gen-3)", value=True)
-#     # run_mico = st.sidebar.checkbox("Run Micha System (Rule-Based)", value=True)
-#     run_ai, run_mico = True, True
-#
-#     # Add checkboxes for the new models
-#     with st.sidebar.expander("Advanced Models", expanded=True):
-#         run_mean_reversion = st.sidebar.checkbox("Run Mean Reversion Model", value=True)
-#         run_breakout = st.sidebar.checkbox("Run Breakout Model", value=True)
-#         run_supertrend = st.sidebar.checkbox("Run SuperTrend Model", value=True)
-#         run_ma_crossover = st.sidebar.checkbox("Run MA Crossover Model", value=False)
-#         run_volume_momentum = st.sidebar.checkbox("Run Volume Momentum Model", value=False)
-#
-#
-#
-#     selected_agent_name = st.sidebar.selectbox("🧠 Select AI Agent", options=list(AGENT_CONFIGS.keys()))
-#     investment_amount = st.sidebar.number_input(
-#         "Hypothetical Investment per Trade ($)",
-#         min_value=100,
-#         value=1000,
-#         step=50,
-#         help="Set the amount to use for calculating hypothetical net profit in the screener."
-#     )
-#     stock_symbol = st.sidebar.text_input("📊 Stock Symbol", value="NVDA").upper().strip()
-#
-#     if 'analysis_date_input' not in st.session_state:
-#         st.session_state.analysis_date_input = datetime.now().date()
-#
-#     def set_date_to_today():
-#         st.session_state.analysis_date_input = datetime.now().date()
-#
-#     # --- Sidebar Date Input with "Today" Button ---
-#     col1, col2 = st.sidebar.columns([2, 1])
-#     with col1:
-#         # The date_input widget itself doesn't need to change
-#         analysis_date = st.date_input("📅 Analysis Date", key='analysis_date_input')
-#     with col2:
-#         st.write("")
-#         st.write("")
-#         # Call the function using on_click. No 'if' block or 'st.rerun()' is needed.
-#         st.button("Today", on_click=set_date_to_today, use_container_width=True)
-#
-#     analyze_btn = st.sidebar.button("🚀 Run Professional Analysis", type="primary", use_container_width=True)
-#     use_market_filter = st.sidebar.checkbox("Enable Market Health Filter (SPY)", value=True)
-#
-#     st.sidebar.markdown("---")
-#     st.sidebar.header("📈 Market Screener")
-#
-#     # Add a dedicated date input for the screener
-#     if 'screener_date_input' not in st.session_state:
-#         st.session_state.screener_date_input = datetime.now().date()
-#
-#     # Add the debug mode checkbox
-#     debug_mode = st.sidebar.checkbox("Enable Screener Debug Mode", value=False)
-#     use_optimized = st.sidebar.checkbox("✅ Use Optimized Parameters", value=False,
-#                                         help="Requires running the Optimizer first to generate best_params.json")
-#     # scan_btn = st.sidebar.button("Scan Universe for Opportunities", use_container_width=True)
-#     if debug_mode:
-#         def set_screener_date_to_today():
-#             st.session_state.screener_date_input = datetime.now().date()
-#
-#         col1_scr, col2_scr = st.sidebar.columns([2, 1])
-#         with col1_scr:
-#             screener_analysis_date = col1_scr.date_input("🗓️ Screener Date", key='screener_date_input')
-#         with col2_scr:
-#             st.write("")
-#             st.write("")
-#             col2_scr.button("Today", on_click=set_screener_date_to_today, use_container_width=True, key='screener_today_btn')
-#     else:
-#         screener_analysis_date = analysis_date
-#
-#     # Reordered the screener options logically
-#     universe_options = {
-#         "Full NASDAQ (from file)": load_nasdaq_tickers,
-#         "S&P 500": get_sp500_tickers,
-#         "NASDAQ 100": get_nasdaq100_tickers
-#     }
-#     selected_universe_name = st.sidebar.selectbox(
-#         "Select universe to scan:",
-#         options=list(universe_options.keys()),
-#         key="universe_selector"
-#     )
-#
-#     # Defined the "Scan" button only ONCE, after all its options
-#     scan_btn = st.sidebar.button("Scan Universe for Opportunities", use_container_width=True)
-#
-#     # st.sidebar.markdown("---")
-#     # st.sidebar.header("⚙️ Strategy Optimizer")
-#
-#     # opt_symbol = st.sidebar.text_input("Stock to Optimize", value="AAPL").upper().strip()
-#
-#     # Define your advisors for the optimizer dropdown
-#     optimizer_advisors = {
-#         # Added all optimizable models to this dictionary
-#         "MichaAdvisor": st.session_state.mico_advisor,
-#         "SuperTrendAdvisor": st.session_state.supertrend_advisor,
-#         "MeanReversionAdvisor": st.session_state.mean_reversion_advisor,
-#         "BreakoutAdvisor": st.session_state.breakout_advisor,
-#         "MovingAverageCrossoverAdvisor": st.session_state.ma_crossover_advisor,
-#         "VolumeMomentumAdvisor": st.session_state.volume_momentum_advisor,
-#     }
-#
-#     # opt_advisor_name = st.sidebar.selectbox("Model to Optimize", options=optimizer_advisors.keys())
-#     #
-#     # col1_opt, col2_opt = st.sidebar.columns(2)
-#     # opt_start_date = col1_opt.date_input("Opt. Start Date", datetime.now().date() - timedelta(days=365))
-#     # opt_end_date = col2_opt.date_input("Opt. End Date", datetime.now().date())
-#     #
-#     # optimize_btn = st.sidebar.button("Find Best Parameters", use_container_width=True)
-#
-#     # --- Advisor Loading Logic ---
-#     selected_model_dir = AGENT_CONFIGS[selected_agent_name]
-#     if st.session_state.advisor.model_dir != selected_model_dir:
-#         with st.spinner(f"Loading '{selected_agent_name}' agent..."):
-#             st.session_state.advisor = ProfessionalStockAdvisor(
-#                 model_dir=selected_model_dir,
-#                 data_source_manager=st.session_state.data_manager
-#             )
-#     advisor = st.session_state.advisor
-#     st.markdown(f"### Now using `{selected_agent_name}` Agent")
-#     st.markdown("---")
-#
-#     # --- Main Analysis & Display Logic ---
-#     if analyze_btn:
-#         if not run_ai and not run_mico:
-#             st.warning("Please select the AI Advisor system to run.")
-#             return
-#         if not stock_symbol:
-#             st.warning("Please enter a stock symbol.")
-#             return
-#
-#         ai_result, mico_result, stock_data = None, None, None
-#         with st.spinner(f"Running full analysis for {stock_symbol}..."):
-#             if run_ai:
-#                 stock_data, ai_result = advisor.run_analysis(stock_symbol, analysis_date, use_market_filter)
-#             if run_mico:
-#                 mico_result = st.session_state.mico_advisor.analyze(stock_symbol, analysis_date)
-#                 # If AI didn't run, we still need the stock_data for the chart
-#                 if stock_data is None:
-#                     raw_data = advisor.data_source_manager.get_stock_data(stock_symbol)
-#                     stock_data = clean_raw_data(raw_data)
-#
-#         if not ai_result and not mico_result:
-#             st.error("Analysis failed. Could not retrieve data or run models.")
-#             status_placeholder.markdown("<p style='text-align: right;'>🔴 <strong>DATA FAILED</strong></p>",
-#                                         unsafe_allow_html=True)
-#         else:
-#             if st.session_state.data_manager.use_ibkr and st.session_state.data_manager.isConnected():
-#                 status_placeholder.markdown("<p style='text-align: right;'>🟢 <strong>IBKR</strong></p>",
-#                                             unsafe_allow_html=True)
-#             else:
-#                 status_placeholder.markdown("<p style='text-align: right;'>🟡 <strong>YFINANCE</strong></p>",
-#                                             unsafe_allow_html=True)
-#
-#             display_analysis_results(ai_result, mico_result, stock_data, stock_symbol, analysis_date, advisor)
-#
-#     if scan_btn:
-#         st.session_state.analysis_run = False
-#
-#         # Clear previous results before starting a new scan
-#         if 'screener_results' in st.session_state:
-#             del st.session_state['screener_results']
-#
-#         active_advisors = {}
-#         if run_ai: active_advisors["AI"] = st.session_state.advisor
-#         if run_mico: active_advisors["MICO"] = st.session_state.mico_advisor
-#         if run_mean_reversion: active_advisors["MeanReversion"] = st.session_state.mean_reversion_advisor
-#         if run_breakout: active_advisors["Breakout"] = st.session_state.breakout_advisor
-#         if run_supertrend: active_advisors["SuperTrend"] = st.session_state.supertrend_advisor
-#         if run_ma_crossover: active_advisors["MACrossover"] = st.session_state.ma_crossover_advisor
-#         if run_volume_momentum: active_advisors["VolumeMomentum"] = st.session_state.volume_momentum_advisor
-#
-#         if not active_advisors:
-#             st.warning("Please select at least one system to run for the screener.")
-#             return
-#
-#         # Load the selected stock universe by calling the chosen function
-#         load_function = universe_options[selected_universe_name]
-#         stock_universe = load_function()
-#
-#         if not stock_universe:
-#             st.error(f"Could not load the '{selected_universe_name}' stock list.")
-#         else:
-#             st.info(f"Scanning {len(stock_universe)} symbols from the '{selected_universe_name}' universe...")
-#             recommended_trades_df = screener.run_unified_screener(
-#                 active_advisors=active_advisors,
-#                 stock_universe=stock_universe,
-#                 analysis_date=screener_analysis_date,
-#                 investment_amount=investment_amount,
-#                 debug_mode=debug_mode,
-#                 use_optimized_params=use_optimized
-#             )
-#             if recommended_trades_df is not None and not recommended_trades_df.empty:
-#                 st.session_state.screener_results = recommended_trades_df
-#
-#         # The redundant MICO screener call has been removed.
-#         if st.session_state.data_manager.use_ibkr and st.session_state.data_manager.isConnected():
-#             # Display the final connection status after the scan is complete
-#             status_placeholder.markdown("<p style='text-align: right;'>🟢 <strong>IBKR</strong></p>",
-#                                         unsafe_allow_html=True)
-#         else:
-#             status_placeholder.markdown("<p style='text-align: right;'>🟡 <strong>YFINANCE</strong></p>",
-#                                         unsafe_allow_html=True)
-#
-#     if not analyze_btn and not scan_btn:
-#         st.info("Select an action from the sidebar to begin.")
-#
-#     # This section shows the analysis button ONLY if results exist
-#     if 'screener_results' in st.session_state:
-#         st.markdown("---")
-#         st.success(f"Screener found {len(st.session_state.screener_results)} trade opportunities.")
-#
-#         analyze_screener_btn = st.button("🔬 Analyze Screener Results", type="primary", use_container_width=True)
-#         # If the button is clicked, set the state to True
-#         if analyze_screener_btn:
-#             st.session_state.analysis_run = True
-#
-#         # Display the backtest if the state is True
-#         if st.session_state.get('analysis_run', False):
-#             with st.spinner("Running backtest simulation on results..."):
-#                 results_analyzer.run_backtest(
-#                     trades_df=st.session_state.screener_results,
-#                     data_manager=st.session_state.data_manager
-#                 )
-
 def create_enhanced_interface():
     # --- Connection Status Indicator ---
     _, col2 = st.columns([4, 1])
@@ -1190,10 +997,13 @@ def create_enhanced_interface():
     analyze_btn = st.sidebar.button("🚀 Run Professional Analysis", type="primary", use_container_width=True)
     use_market_filter = st.sidebar.checkbox("Enable Market Health Filter (SPY)", value=True)
 
+    # todo: this should run in parallel to the main UI, the user can work in parallel with the screener
+    # todo: check of an option to save the data or now to the delete the information to the user until
+    #  he finish to analyze the data.
     st.sidebar.markdown("---")
     st.sidebar.header("📈 Market Screener")
 
-    debug_mode = st.sidebar.checkbox("Enable Screener Debug Mode", value=False)
+    debug_mode = st.sidebar.checkbox("Enable Screener Debug Mode", value=True)
     use_optimized = st.sidebar.checkbox("✅ Use Optimized Parameters", value=True,
                                         help="Requires running the Optimizer first to generate best_params.json")
 
@@ -1217,9 +1027,9 @@ def create_enhanced_interface():
         screener_analysis_date = analysis_date  # Default to the main analysis date
 
     universe_options = {
-        "Full NASDAQ (from file)": load_nasdaq_tickers,
+        "NASDAQ 100": get_nasdaq100_tickers,
         "S&P 500": get_sp500_tickers,
-        "NASDAQ 100": get_nasdaq100_tickers
+        "Full NASDAQ (from file)": load_nasdaq_tickers
     }
     selected_universe_name = st.sidebar.selectbox(
         "Select universe to scan:",
@@ -1230,6 +1040,7 @@ def create_enhanced_interface():
 
     st.sidebar.markdown("---")
 
+    # todo: create a scheduler that will run the screener every month with 5000 stocks
     # --- Strategy Optimizer Section (Restored and Implemented) ---
     st.sidebar.header("⚙️ Strategy Optimizer")
     st.sidebar.info("Run this to find & save the best parameters for a model.")
@@ -1354,7 +1165,21 @@ def create_enhanced_interface():
     if 'screener_results' in st.session_state:
         st.markdown("---")
         st.success(f"Screener found {len(st.session_state.screener_results)} trade opportunities.")
-        analyze_screener_btn = st.button("🔬 Analyze Screener Results", type="primary", use_container_width=True)
+
+        # --- ALWAYS DISPLAY THE SCREENER RESULTS TABLE ---
+        # This ensures the table stays on the screen
+        final_df = st.session_state.screener_results
+        formatter = {
+            'Entry Price': '${:.2f}', 'Profit Target ($)': '${:.2f}', 'Stop-Loss': '${:.2f}',
+            'Est. Net Profit ($)': '${:.2f}', 'RSI': '{:.2f}'
+        }
+
+        st.dataframe(final_df.style.format(formatter, na_rep='-'), use_container_width=True)
+
+        if st.session_state.screener_date_input == datetime.now().date():
+            analyze_screener_btn = st.button("🔬 Analyze Screener Results", type="primary", use_container_width=True)
+        else:
+            analyze_screener_btn = True
         if analyze_screener_btn: st.session_state.analysis_run = True
         if st.session_state.get('analysis_run', False):
             with st.spinner("Running backtest simulation on results..."):
@@ -1372,44 +1197,80 @@ def create_enhanced_interface():
 if __name__ == "__main__":
     st.set_page_config(layout="wide", page_title="StockWise AI Advisor")
 
-    # Define the default agent to load on the very first run
-    DEFAULT_AGENT_MODEL_DIR = "models/NASDAQ-gen3-dynamic"
+    # --- 1. LOAD AUTHENTICATION CONFIG ---
+    try:
+        with open('config.yaml') as file:
+            config = yaml.load(file, Loader=SafeLoader)
+    except FileNotFoundError:
+        st.error("FATAL: config.yaml file not found. Please create it.")
+        st.stop()
 
-    # Initialize the DataSourceManager ONCE and store it in the session state
-    if 'data_manager' not in st.session_state:
-        st.session_state.data_manager = DataSourceManager(use_ibkr=False)
-        st.session_state.data_manager.connect_to_ibkr()
+    authenticator = stauth.Authenticate(
+        config['credentials'],
+        config['cookie']['name'],
+        config['cookie']['key'],
+        config['cookie']['expiry_days']
+    )
 
-    # Initialize the advisor in the session state ONCE if it doesn't exist
-    if 'advisor' not in st.session_state:
-        st.session_state.advisor = ProfessionalStockAdvisor(
-            model_dir=DEFAULT_AGENT_MODEL_DIR,
-            data_source_manager=st.session_state.data_manager
-        )
+    # --- 2. RENDER LOGIN WIDGET ---
+    # This is the line that was missing. It draws the login form.
+    authenticator.login('main')
 
-    # Initialize the Micha Stock advisor in the session state ONCE if it doesn't exist
-    if 'mico_advisor' not in st.session_state:
-        # Pass the same data manager to the MicoAdvisor
-        st.session_state.mico_advisor = MichaAdvisor(data_manager=st.session_state.data_manager)
+    # --- 3. GET AUTH STATUS FROM SESSION STATE ---
+    name = st.session_state.get('name')
+    authentication_status = st.session_state.get('authentication_status')
+    username = st.session_state.get('username')
 
-    # Initialize the new trading models and store them in the session state
-    if 'mean_reversion_advisor' not in st.session_state:
-        st.session_state.mean_reversion_advisor = MeanReversionAdvisor(data_manager=st.session_state.data_manager)
+    # --- CHECK AUTHENTICATION STATUS ---
+    if authentication_status:
+        # --- AUTHENTICATION SUCCESSFUL ---
+        # Show logout button in the sidebar
+        authenticator.logout('Logout', 'sidebar')
+        st.sidebar.write(f'Welcome *{name}*')
 
-    if 'breakout_advisor' not in st.session_state:
-        st.session_state.breakout_advisor = BreakoutAdvisor(data_manager=st.session_state.data_manager)
+        # Define the default agent to load on the very first run
+        DEFAULT_AGENT_MODEL_DIR = "models/NASDAQ-gen3-dynamic"
 
-    if 'supertrend_advisor' not in st.session_state:
-        st.session_state.supertrend_advisor = SuperTrendAdvisor(data_manager=st.session_state.data_manager)
+        # Initialize the DataSourceManager ONCE and store it in the session state
+        if 'data_manager' not in st.session_state:
+            st.session_state.data_manager = DataSourceManager(use_ibkr=True)
+            st.session_state.data_manager.connect_to_ibkr()
 
-    if 'ma_crossover_advisor' not in st.session_state:
-        st.session_state.ma_crossover_advisor = MovingAverageCrossoverAdvisor(
-            data_manager=st.session_state.data_manager)
-    if 'volume_momentum_advisor' not in st.session_state:
-        st.session_state.volume_momentum_advisor = VolumeMomentumAdvisor(data_manager=st.session_state.data_manager)
+        # Initialize the advisor in the session state ONCE if it doesn't exist
+        if 'advisor' not in st.session_state:
+            st.session_state.advisor = ProfessionalStockAdvisor(
+                model_dir=DEFAULT_AGENT_MODEL_DIR,
+                data_source_manager=st.session_state.data_manager
+            )
 
-    # Check if models were loaded successfully before running the UI
-    if st.session_state.advisor.models:
-        create_enhanced_interface()
-    else:
-        st.error(f"FATAL: Default models could not be loaded from '{DEFAULT_AGENT_MODEL_DIR}'.")
+        # Initialize the Micha Stock advisor in the session state ONCE if it doesn't exist
+        if 'mico_advisor' not in st.session_state:
+            # Pass the same data manager to the MicoAdvisor
+            st.session_state.mico_advisor = MichaAdvisor(data_manager=st.session_state.data_manager)
+
+        # Initialize the new trading models and store them in the session state
+        if 'mean_reversion_advisor' not in st.session_state:
+            st.session_state.mean_reversion_advisor = MeanReversionAdvisor(data_manager=st.session_state.data_manager)
+
+        if 'breakout_advisor' not in st.session_state:
+            st.session_state.breakout_advisor = BreakoutAdvisor(data_manager=st.session_state.data_manager)
+
+        if 'supertrend_advisor' not in st.session_state:
+            st.session_state.supertrend_advisor = SuperTrendAdvisor(data_manager=st.session_state.data_manager)
+
+        if 'ma_crossover_advisor' not in st.session_state:
+            st.session_state.ma_crossover_advisor = MovingAverageCrossoverAdvisor(
+                data_manager=st.session_state.data_manager)
+        if 'volume_momentum_advisor' not in st.session_state:
+            st.session_state.volume_momentum_advisor = VolumeMomentumAdvisor(data_manager=st.session_state.data_manager)
+
+        # Check if models were loaded successfully before running the UI
+        if st.session_state.advisor.models:
+            create_enhanced_interface()
+        else:
+            st.error(f"FATAL: Default models could not be loaded from '{DEFAULT_AGENT_MODEL_DIR}'.")
+
+    elif not authentication_status:
+        st.error('Username/password is incorrect')
+    elif authentication_status is None:
+        st.warning('Please enter your username and password')
