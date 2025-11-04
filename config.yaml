@@ -1,0 +1,17 @@
+# config.yaml
+credentials:
+  usernames:
+    emesika: # username1
+      email: eyalmesika@gmail.com
+      name: Eyal Mesika
+      password: '$2b$12$cumrOsDADOU9XVeok8hlyuNE4Gp2wZbEv6xYJ7ZKC9LAP5fmjsnCi' # Eyal hash
+    nroda: # username2
+      email: rodanis@gmail.com
+      name: Nadav Nisan Roda
+      password: '$2b$12$Wjez.tVUnyVs4j99oTGAXu2I6926p5yvwQLABnL3CGbQFzaZZ6L1K' # Nadav hash
+cookie:
+  expiry_days: 30
+  key: 'a_very_secret_key_12345' # This can be any random string
+  name: 'stockwise_auth_cookie'
+preauthorized:
+  emails: []
