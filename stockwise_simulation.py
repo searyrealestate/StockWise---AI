@@ -481,6 +481,7 @@ class ProfessionalStockAdvisor:
 
             blobs = list(bucket.list_blobs(prefix=f"{_self.model_dir}/"))  # e.g., "models/NASDAQ-gen3-dynamic/"
             if not blobs:
+                # _self.log(f"No models found in GCS at gs://{bucket.name}/{_self.model_dir}", "ERROR")
                 _self.log(f"No models found in GCS at gs://{bucket.name}/{_self.model_dir}", "ERROR")
                 return None, None
 
