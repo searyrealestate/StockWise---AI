@@ -1232,9 +1232,23 @@ if __name__ == "__main__":
         DEFAULT_AGENT_MODEL_DIR = "models/NASDAQ-gen3-dynamic"
 
         # Initialize the DataSourceManager ONCE and store it in the session state
+        # --- Smart Data Manager Initialization ---
         if 'data_manager' not in st.session_state:
-            st.session_state.data_manager = DataSourceManager(use_ibkr=True)
-            st.session_state.data_manager.connect_to_ibkr()
+
+            # Check if we are on Streamlit Cloud by looking for the secret
+            try:
+                _ = st.secrets["gcs_service_account"]
+                IS_CLOUD = True
+            except:
+                IS_CLOUD = False
+
+            if IS_CLOUD:
+                # We are on Streamlit Cloud, do NOT use ibapi
+                st.session_state.data_manager = DataSourceManager(use_ibkr=False)
+            else:
+                # We are on a local PC, use ibapi
+                st.session_state.data_manager = DataSourceManager(use_ibkr=True)
+                st.session_state.data_manager.connect_to_ibkr()
 
         # Initialize the advisor in the session state ONCE if it doesn't exist
         if 'advisor' not in st.session_state:
