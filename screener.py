@@ -43,7 +43,6 @@ def run_unified_screener(active_advisors: dict, stock_universe: list,
     recommended_trades = []
     st.subheader("📈 Unified Screener Results")
     progress_placeholder = st.empty()
-    results_placeholder = st.empty()
     total_stocks = len(stock_universe)
 
     # Load optimized parameters if the user has requested it
@@ -97,7 +96,6 @@ def run_unified_screener(active_advisors: dict, stock_universe: list,
 
     progress_placeholder.empty()
     if not recommended_trades:
-        results_placeholder.warning("No 'BUY' signals found from the selected models for this date.")
         return pd.DataFrame()
 
     final_df = pd.DataFrame(recommended_trades)
@@ -105,6 +103,5 @@ def run_unified_screener(active_advisors: dict, stock_universe: list,
         'Entry Price': '${:.2f}', 'Profit Target ($)': '${:.2f}', 'Stop-Loss': '${:.2f}',
         'Est. Net Profit ($)': '${:.2f}', 'RSI': '{:.2f}'
     }
-    results_placeholder.dataframe(final_df.style.format(formatter, na_rep='-'), use_container_width=True)
 
     return final_df
