@@ -80,11 +80,16 @@ class DataSourceManager(EWrapper, EClient):
     _client_id_lock = threading.Lock()
 
     def __init__(self, use_ibkr=False, host='127.0.0.1', port=7497, allow_fallback=True):
-        EClient.__init__(self, self)
+
+        # 1. Set the flags FIRST
         self.use_ibkr = use_ibkr
         self.host = host
         self.port = port
         self.allow_fallback = allow_fallback
+
+        # 2. NOW, conditionally initialize EClient
+        if self.use_ibkr:
+            EClient.__init__(self, self)
 
         with DataSourceManager._client_id_lock:
             self.client_id = DataSourceManager._client_id_counter
