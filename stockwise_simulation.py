@@ -241,7 +241,7 @@ class FeatureCalculator:
                                                                                          raw=False)
             # --- 3. Contextual (External) Features (NOW PROTECTED) ---
             try:
-                # print("DEBUG: Attempting to download QQQ data...")
+                st.write("DEBUG: Attempting to download QQQ data...")
                 qqq_data = yf.download("QQQ", start=df.index.min() - timedelta(days=70), end=df.index.max(),
                                        progress=False,
                                        auto_adjust=True)
@@ -253,10 +253,10 @@ class FeatureCalculator:
                     qqq_close = qqq_data['close'].reindex(df.index, method='ffill')
                     df['correlation_50d_qqq'] = df['close'].rolling(50).corr(qqq_close)
                 else:
-                    # print("WARNING: Could not download or process QQQ data. Correlation feature will be zero.")
+                    st.write("WARNING: Could not download or process QQQ data. Correlation feature will be zero.")
                     df['correlation_50d_qqq'] = 0.0
             except Exception as e:
-                # print(f"--- An exception occurred during QQQ data processing: {e} ---")
+                st.write(f"--- An exception occurred during QQQ data processing: {e} ---")
                 df['correlation_50d_qqq'] = 0.0
 
             try:
@@ -293,7 +293,6 @@ class FeatureCalculator:
 
             # This return is now INSIDE the try block
             return df
-
 
         except Exception as e:
 
