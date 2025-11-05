@@ -288,6 +288,29 @@ class FeatureCalculator:
             low_thresh, high_thresh = 0.015, 0.030
             df['volatility_cluster'] = pd.cut(df['volatility_90d'], bins=[-np.inf, low_thresh, high_thresh, np.inf],
                                               labels=['low', 'mid', 'high'])
+
+            # --- Rename columns to TitleCase to match the model's feature list ---
+            # This is the list of features from your KeyError log
+            feature_list_lowercase = [
+                'volume_ma_20', 'rsi_14', 'momentum_5', 'macd', 'macd_signal',
+                'macd_histogram', 'bb_upper', 'bb_lower', 'bb_middle', 'bb_position',
+                'daily_return', 'volatility_20d', 'atr_14', 'adx', 'adx_pos', 'adx_neg',
+                'obv', 'rsi_28', 'z_score_20', 'bb_width', 'correlation_50d_qqq', 'vix_close',
+                'corr_tlt', 'cmf', 'kama_10', 'stoch_k', 'stoch_d', 'dominant_cycle'
+            ]
+
+            # Create a rename dictionary, e.g., {'volume_ma_20': 'Volume_MA_20'}
+            rename_dict = {}
+            for col in df.columns:
+                if col in feature_list_lowercase:
+                    # A robust way to convert to TitleCase that handles acronyms
+                    rename_dict[col] = col.replace('_ma_', '_MA_').replace('_id_', '_ID_').replace('_qqq',
+                                                                                                   '_QQQ').title()
+
+            # Apply the rename
+            df.rename(columns=rename_dict, inplace=True)
+            # --- END OF FIX ---
+
             df.bfill(inplace=True)
             df.ffill(inplace=True)
 
