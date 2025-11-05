@@ -210,12 +210,8 @@ class FeatureCalculator:
         # print("\n--- STARTING DEBUG FOR FeatureCalculator ---")
         # print(f"1. Initial columns: {df.columns.tolist()}")
 
-        # Standardize column names to lowercase for pandas-ta compatibility
-        df.columns = [col.lower() for col in df.columns]
-        # print(f"2. Columns after converting to lowercase: {df.columns.tolist()}")
-
         try:
-            # MODIFIED: Standardize column names to lowercase
+            # Standardize column names to lowercase
             df.columns = [col.lower() for col in df.columns]
 
             # --- 1. Pandas-TA Features ---
@@ -231,10 +227,10 @@ class FeatureCalculator:
             df.ta.obv(append=True)
             df.ta.cmf(append=True, col_names="cmf")
 
-            # Add a final lowercase conversion to handle default names like 'OBV'
+            # Add a final lowercase conversion to handle default names from pandas-ta like 'OBV'
             df.columns = [col.lower() for col in df.columns]
 
-            # --- 2. Manual Features ---
+            # --- 2. Manual Features (NOW PROTECTED) ---
             df['daily_return'] = df['close'].pct_change()
             df['volume_ma_20'] = df['volume'].rolling(20).mean()
             df['volatility_20d'] = df['daily_return'].rolling(20).std()
@@ -243,12 +239,13 @@ class FeatureCalculator:
             df['stoch_k'], df['stoch_d'] = calculate_stochastic(df['high'], df['low'], df['close'])
             df['dominant_cycle'] = df['close'].rolling(window=252, min_periods=90).apply(self.get_dominant_cycle,
                                                                                          raw=False)
-
-            # --- 3. Contextual (External) Features ---
+            # --- 3. Contextual (External) Features (NOW PROTECTED) ---
             try:
+                # print("DEBUG: Attempting to download QQQ data...")
                 qqq_data = yf.download("QQQ", start=df.index.min() - timedelta(days=70), end=df.index.max(),
                                        progress=False,
                                        auto_adjust=True)
+
                 if isinstance(qqq_data, pd.DataFrame) and not qqq_data.empty:
                     if isinstance(qqq_data.columns, pd.MultiIndex):
                         qqq_data.columns = qqq_data.columns.droplevel(1)
@@ -256,42 +253,55 @@ class FeatureCalculator:
                     qqq_close = qqq_data['close'].reindex(df.index, method='ffill')
                     df['correlation_50d_qqq'] = df['close'].rolling(50).corr(qqq_close)
                 else:
+                    # print("WARNING: Could not download or process QQQ data. Correlation feature will be zero.")
                     df['correlation_50d_qqq'] = 0.0
-            except Exception:
+            except Exception as e:
+                # print(f"--- An exception occurred during QQQ data processing: {e} ---")
                 df['correlation_50d_qqq'] = 0.0
 
             try:
+                # VIX Data
                 vix_raw = self.data_manager.get_stock_data('^VIX')
                 vix_clean = clean_raw_data(vix_raw)
                 if not vix_clean.empty:
-                    df['vix_close'] = vix_clean['close'].reindex(df.index, method='ffill')
+                    aligned_vix = vix_clean['close'].reindex(df.index, method='ffill')
+                    df['vix_close'] = aligned_vix
                 else:
                     df['vix_close'] = 0.0
             except Exception:
                 df['vix_close'] = 0.0
 
             try:
+                # TLT Data
                 tlt_raw = self.data_manager.get_stock_data('TLT')
                 tlt_clean = clean_raw_data(tlt_raw)
                 if not tlt_clean.empty:
-                    df['corr_tlt'] = df['close'].rolling(50).corr(tlt_clean['close'].reindex(df.index, method='ffill'))
+                    aligned_tlt = tlt_clean['close'].reindex(df.index, method='ffill')
+                    df['corr_tlt'] = df['close'].rolling(50).corr(aligned_tlt)
                 else:
                     df['corr_tlt'] = 0.0
             except Exception:
                 df['corr_tlt'] = 0.0
 
-            # --- 4. Final Processing ---
+            # --- 4. Final Processing (NOW PROTECTED) ---
             df['volatility_90d'] = df['daily_return'].rolling(90).std()
             low_thresh, high_thresh = 0.015, 0.030
             df['volatility_cluster'] = pd.cut(df['volatility_90d'], bins=[-np.inf, low_thresh, high_thresh, np.inf],
                                               labels=['low', 'mid', 'high'])
             df.bfill(inplace=True)
             df.ffill(inplace=True)
+
+            # This return is now INSIDE the try block
             return df
 
+
         except Exception as e:
-            st.error(f"Error during pandas-ta calculations: {e}")
-            return pd.DataFrame()
+
+            # --- THIS IS THE DEBUG PRINTER ---
+            # If ANY error occurs (like missing 'volume'), we catch it here
+            st.error(f"--- DEBUG: Feature calculation FAILED. Error: {e}. Skipping this stock. ---")
+            st.exception(e)  # This prints the full error traceback
+            return pd.DataFrame()  # Return an empty frame so the screener can continue
 
 
 # --- Main Application Class (with Gen-3 Architecture) ---
