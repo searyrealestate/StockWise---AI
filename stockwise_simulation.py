@@ -154,32 +154,6 @@ def load_nasdaq_tickers(max_stocks=None):
         return []
 
 
-# def clean_raw_data(df: pd.DataFrame) -> pd.DataFrame:
-#     """A single, robust function to clean raw data immediately after fetching."""
-#     if df is None or df.empty:
-#         return pd.DataFrame()
-#
-#     # This handles the case of multi-ticker downloads from yfinance
-#     if isinstance(df.columns, pd.MultiIndex):
-#         # The ticker symbol is level 1 of the MultiIndex. Drop it, keep level 0.
-#         df.columns = df.columns.droplevel(1)
-#
-#     df.columns = [col.lower() for col in df.columns]
-#
-#     # Ensure standard OHLCV columns are numeric, coercing errors
-#     standard_cols = ['open', 'high', 'low', 'close', 'volume']
-#     for col in standard_cols:
-#         if col in df.columns:
-#             df[col] = pd.to_numeric(df[col], errors='coerce')
-#
-#     # Only drop NaNs from the columns that actually exist in the DataFrame.
-#     existing_cols = [col for col in standard_cols if col in df.columns]
-#     if existing_cols:
-#         df.dropna(subset=existing_cols, inplace=True)
-#
-#     return df
-
-
 def calculate_kama(close, window=10, pow1=2, pow2=30):
     """Calculates Kaufman's Adaptive Moving Average (KAMA) manually."""
     diff = abs(close.diff(1))
@@ -458,7 +432,6 @@ class ProfessionalStockAdvisor:
             self.log(f"Error loading local models: {e}", "ERROR")
             return None, None
 
-    # This replaces your OLD _load_gen3_models
     @st.cache_resource(ttl=3600)  # Cache for 1 hour
     def _load_gen3_models(_self):
         """
@@ -520,6 +493,7 @@ class ProfessionalStockAdvisor:
         except Exception as e:
             # --- 2. FALLBACK TO LOCAL ---
             _self.log(f"GCS load failed (Error: {e}). Assuming local run. Loading from disk...", "WARNING")
+            st.write(f"--- DEBUG: GCS load FAILED. Error: {e}. Falling back to local disk... ---")
             return _self._load_models_from_disk()
 
     def log(self, message, level="INFO"):
@@ -761,7 +735,6 @@ class ProfessionalStockAdvisor:
         # We only need the second item for the screener.
         _, result = self.run_analysis(symbol, analysis_date, use_market_filter=True)
         return result
-
 
     def calculate_dynamic_profit_target(self, confidence):
         # This function is now deprecated in favor of model-driven 'SELL' signals.
@@ -1249,7 +1222,6 @@ if __name__ == "__main__":
         # Initialize the DataSourceManager ONCE and store it in the session state
         # --- Smart Data Manager Initialization ---
         if 'data_manager' not in st.session_state:
-
             # Check if we are on Streamlit Cloud by looking for the secret
             try:
                 _ = st.secrets["gcs_service_account"]
