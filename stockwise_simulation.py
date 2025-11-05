@@ -343,7 +343,7 @@ class ProfessionalStockAdvisor:
 
         # --- SMART MODEL LOADING ---
         # This will now try GCS, then fall back to local files.
-        self.models, self.feature_names = self._load_gen3_models()
+        self.models, self.feature_names = self._load_gen3_models_v2()
 
         self.tax = 0.25
         self.broker_fee = 0.004
@@ -433,7 +433,7 @@ class ProfessionalStockAdvisor:
             return None, None
 
     @st.cache_resource(ttl=3600)  # Cache for 1 hour
-    def _load_gen3_models(_self):
+    def _load_gen3_models_v2(_self):
         """
         Smart model loader:
         Tries to load from GCS (for Streamlit Cloud).
