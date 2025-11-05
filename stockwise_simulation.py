@@ -289,27 +289,42 @@ class FeatureCalculator:
             df['volatility_cluster'] = pd.cut(df['volatility_90d'], bins=[-np.inf, low_thresh, high_thresh, np.inf],
                                               labels=['low', 'mid', 'high'])
 
-            # --- Rename columns to TitleCase to match the model's feature list ---
-            # This is the list of features from your KeyError log
-            feature_list_lowercase = [
-                'volume_ma_20', 'rsi_14', 'momentum_5', 'macd', 'macd_signal',
-                'macd_histogram', 'bb_upper', 'bb_lower', 'bb_middle', 'bb_position',
-                'daily_return', 'volatility_20d', 'atr_14', 'adx', 'adx_pos', 'adx_neg',
-                'obv', 'rsi_28', 'z_score_20', 'bb_width', 'correlation_50d_qqq', 'vix_close',
-                'corr_tlt', 'cmf', 'kama_10', 'stoch_k', 'stoch_d', 'dominant_cycle'
-            ]
+            # --- Explicit Rename Mapping ---
+            # This explicit dictionary maps the lowercase generated name to the
+            # exact TitleCase name the model was trained on.
+            rename_map = {
+                'volume_ma_20': 'Volume_MA_20',
+                'rsi_14': 'RSI_14',
+                'momentum_5': 'Momentum_5',
+                'macd': 'MACD',
+                'macd_signal': 'MACD_Signal',
+                'macd_histogram': 'MACD_Histogram',
+                'bb_upper': 'BB_Upper',
+                'bb_lower': 'BB_Lower',
+                'bb_middle': 'BB_Middle',
+                'bb_position': 'BB_Position',
+                'daily_return': 'Daily_Return',
+                'volatility_20d': 'Volatility_20d',
+                'atr_14': 'ATR_14',
+                'adx': 'ADX',
+                'adx_pos': 'ADX_Pos',
+                'adx_neg': 'ADX_Neg',
+                'obv': 'OBV',
+                'rsi_28': 'RSI_28',
+                'z_score_20': 'Z_Score_20',
+                'bb_width': 'BB_Width',
+                'correlation_50d_qqq': 'Correlation_50d_QQQ',
+                'vix_close': 'VIX_Close',
+                'corr_tlt': 'Corr_TLT',
+                'cmf': 'CMF',
+                'kama_10': 'KAMA_10',
+                'stoch_k': 'Stoch_K',
+                'stoch_d': 'Stoch_D',
+                'dominant_cycle': 'Dominant_Cycle'
+            }
 
-            # Create a rename dictionary, e.g., {'volume_ma_20': 'Volume_MA_20'}
-            rename_dict = {}
-            for col in df.columns:
-                if col in feature_list_lowercase:
-                    # A robust way to convert to TitleCase that handles acronyms
-                    rename_dict[col] = col.replace('_ma_', '_MA_').replace('_id_', '_ID_').replace('_qqq',
-                                                                                                   '_QQQ').title()
-
-            # Apply the rename
-            df.rename(columns=rename_dict, inplace=True)
-            # --- END OF FIX ---
+            # Apply the explicit rename
+            df.rename(columns=rename_map, inplace=True)
 
             df.bfill(inplace=True)
             df.ffill(inplace=True)
