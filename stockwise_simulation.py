@@ -210,21 +210,23 @@ class FeatureCalculator:
         # print("\n--- STARTING DEBUG FOR FeatureCalculator ---")
         # print(f"1. Initial columns: {df.columns.tolist()}")
 
-        # MODIFIED: Standardize column names to lowercase for pandas-ta compatibility
+        # Standardize column names to lowercase for pandas-ta compatibility
         df.columns = [col.lower() for col in df.columns]
         # print(f"2. Columns after converting to lowercase: {df.columns.tolist()}")
 
         try:
+            # MODIFIED: Standardize column names to lowercase
+            df.columns = [col.lower() for col in df.columns]
+
+            # --- 1. Pandas-TA Features ---
             df.ta.bbands(length=20, append=True,
                          col_names=("bb_lower", "bb_middle", "bb_upper", "bb_width", "bb_position"))
             df.ta.atr(length=14, append=True, col_names="atr_14")
             df.ta.rsi(length=14, append=True, col_names="rsi_14")
             df.ta.rsi(length=28, append=True, col_names="rsi_28")
             df.ta.macd(append=True, col_names=("macd", "macd_histogram", "macd_signal"))
-            # df.ta.adx(length=14, append=True, col_names=("adx", "adx_pos", "adx_neg"))
             df.ta.adx(length=14, append=True, col_names=("adx", "adx_pos", "adx_neg", "adxr_temp"))
             df.drop(columns=["adxr_temp"], inplace=True, errors='ignore')
-            # CORRECT: Use a consistent lowercase name for the new column
             df.ta.mom(length=5, append=True, col_names="momentum_5")
             df.ta.obv(append=True)
             df.ta.cmf(append=True, col_names="cmf")
@@ -232,89 +234,64 @@ class FeatureCalculator:
             # Add a final lowercase conversion to handle default names like 'OBV'
             df.columns = [col.lower() for col in df.columns]
 
+            # --- 2. Manual Features ---
+            df['daily_return'] = df['close'].pct_change()
+            df['volume_ma_20'] = df['volume'].rolling(20).mean()
+            df['volatility_20d'] = df['daily_return'].rolling(20).std()
+            df['z_score_20'] = (df['close'] - df['bb_middle']) / df['close'].rolling(20).std()
+            df['kama_10'] = calculate_kama(df['close'], window=10)
+            df['stoch_k'], df['stoch_d'] = calculate_stochastic(df['high'], df['low'], df['close'])
+            df['dominant_cycle'] = df['close'].rolling(window=252, min_periods=90).apply(self.get_dominant_cycle,
+                                                                                         raw=False)
+
+            # --- 3. Contextual (External) Features ---
+            try:
+                qqq_data = yf.download("QQQ", start=df.index.min() - timedelta(days=70), end=df.index.max(),
+                                       progress=False,
+                                       auto_adjust=True)
+                if isinstance(qqq_data, pd.DataFrame) and not qqq_data.empty:
+                    if isinstance(qqq_data.columns, pd.MultiIndex):
+                        qqq_data.columns = qqq_data.columns.droplevel(1)
+                    qqq_data.columns = [col.lower() for col in qqq_data.columns]
+                    qqq_close = qqq_data['close'].reindex(df.index, method='ffill')
+                    df['correlation_50d_qqq'] = df['close'].rolling(50).corr(qqq_close)
+                else:
+                    df['correlation_50d_qqq'] = 0.0
+            except Exception:
+                df['correlation_50d_qqq'] = 0.0
+
+            try:
+                vix_raw = self.data_manager.get_stock_data('^VIX')
+                vix_clean = clean_raw_data(vix_raw)
+                if not vix_clean.empty:
+                    df['vix_close'] = vix_clean['close'].reindex(df.index, method='ffill')
+                else:
+                    df['vix_close'] = 0.0
+            except Exception:
+                df['vix_close'] = 0.0
+
+            try:
+                tlt_raw = self.data_manager.get_stock_data('TLT')
+                tlt_clean = clean_raw_data(tlt_raw)
+                if not tlt_clean.empty:
+                    df['corr_tlt'] = df['close'].rolling(50).corr(tlt_clean['close'].reindex(df.index, method='ffill'))
+                else:
+                    df['corr_tlt'] = 0.0
+            except Exception:
+                df['corr_tlt'] = 0.0
+
+            # --- 4. Final Processing ---
+            df['volatility_90d'] = df['daily_return'].rolling(90).std()
+            low_thresh, high_thresh = 0.015, 0.030
+            df['volatility_cluster'] = pd.cut(df['volatility_90d'], bins=[-np.inf, low_thresh, high_thresh, np.inf],
+                                              labels=['low', 'mid', 'high'])
+            df.bfill(inplace=True)
+            df.ffill(inplace=True)
+            return df
+
         except Exception as e:
             st.error(f"Error during pandas-ta calculations: {e}")
             return pd.DataFrame()
-
-        # Consistently use lowercase column names ('close', 'volume', etc.)
-        df['daily_return'] = df['close'].pct_change()
-        df['volume_ma_20'] = df['volume'].rolling(20).mean()
-        df['volatility_20d'] = df['daily_return'].rolling(20).std()
-        df['z_score_20'] = (df['close'] - df['bb_middle']) / df['close'].rolling(20).std()
-
-        # Add calculations for KAMA, Stochastic, and Dominant Cycle
-        df['kama_10'] = calculate_kama(df['close'], window=10)
-        df['stoch_k'], df['stoch_d'] = calculate_stochastic(df['high'], df['low'], df['close'])
-        df['dominant_cycle'] = df['close'].rolling(window=252, min_periods=90).apply(self.get_dominant_cycle,
-                                                                                         raw=False)
-        try:
-            # --- START OF ENHANCED DEBUG BLOCK ---
-            # print("DEBUG: Attempting to download QQQ data...")
-            qqq_data = yf.download("QQQ", start=df.index.min() - timedelta(days=70), end=df.index.max(), progress=False,
-                                   auto_adjust=True)
-
-            # print(f"DEBUG: Type of qqq_data is: {type(qqq_data)}")
-            # print(f"DEBUG: Value of qqq_data is: {qqq_data}")
-
-            # Add a check to ensure yfinance returned a valid DataFrame
-            if isinstance(qqq_data, pd.DataFrame) and not qqq_data.empty:
-                # print("DEBUG: qqq_data is a valid DataFrame. Entering IF block.")
-                if isinstance(qqq_data.columns, pd.MultiIndex):
-                    # The ticker symbol is level 1 of the MultiIndex. Drop it, keep level 0.
-                    # print("DEBUG: qqq_data has a MultiIndex. Dropping level 1 and keeping level 0.")
-                    qqq_data.columns = qqq_data.columns.droplevel(1)
-
-                qqq_data.columns = [col.lower() for col in qqq_data.columns]
-                qqq_close = qqq_data['close'].reindex(df.index, method='ffill')
-                df['correlation_50d_qqq'] = df['close'].rolling(50).corr(qqq_close)
-                # print("DEBUG: IF block completed successfully.")
-            else:
-                # print("DEBUG: qqq_data is NOT a valid DataFrame. Entering ELSE block.")
-                print("WARNING: Could not download or process QQQ data. Correlation feature will be zero.")
-                df['correlation_50d_qqq'] = 0.0
-        except Exception as e:
-            print(f"--- An exception occurred during QQQ data processing: {e} ---")
-            # print(f"DEBUG: Type of qqq_data at time of exception was: {type(qqq_data)}")
-            df['correlation_50d_qqq'] = 0.0
-
-        try:
-            # VIX Data
-            vix_raw = self.data_manager.get_stock_data('^VIX')
-            vix_clean = clean_raw_data(vix_raw)
-            if not vix_clean.empty:
-                aligned_vix = vix_clean['close'].reindex(df.index, method='ffill')
-                df['vix_close'] = aligned_vix
-            else:
-                df['vix_close'] = 0.0
-
-            # TLT Data
-            tlt_raw = self.data_manager.get_stock_data('TLT')
-            tlt_clean = clean_raw_data(tlt_raw)
-            if not tlt_clean.empty:
-                aligned_tlt = tlt_clean['close'].reindex(df.index, method='ffill')
-                df['corr_tlt'] = df['close'].rolling(50).corr(aligned_tlt)
-            else:
-                df['corr_tlt'] = 0.0
-        except Exception:
-            df['vix_close'] = 0.0
-            df['corr_tlt'] = 0.0
-
-        # Mocking the cluster labels for live prediction
-        df['volatility_90d'] = df['daily_return'].rolling(90).std()
-        # These values are based on the defaults in the training script.
-        low_thresh, high_thresh = 0.015, 0.030
-        df['volatility_cluster'] = pd.cut(df['volatility_90d'], bins=[-np.inf, low_thresh, high_thresh, np.inf],
-                                          labels=['low', 'mid', 'high'])
-
-        # # Rename the core columns back to TitleCase before returning the DataFrame
-        # df.rename(columns={
-        #     'open': 'Open', 'high': 'High', 'low': 'Low',
-        #     'close': 'Close', 'volume': 'Volume'
-        # }, inplace=True)
-
-        df.bfill(inplace=True)
-        df.ffill(inplace=True)
-        return df
 
 
 # --- Main Application Class (with Gen-3 Architecture) ---
