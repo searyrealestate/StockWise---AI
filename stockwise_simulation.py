@@ -442,7 +442,7 @@ class ProfessionalStockAdvisor:
         try:
             # --- 1. TRY CLOUD (st.secrets) ---
             # --- DEBUGGING PRINTS START ---
-            st.write("--- DEBUG: Attempting to load models from GCS (Cloud Mode)... ---")
+            # st.write("--- DEBUG: Attempting to load models from GCS (Cloud Mode)... ---")
             _self.log("Attempting to load models from GCS (Cloud Mode)...")
 
             creds_json = st.secrets["gcs_service_account"]
@@ -452,7 +452,7 @@ class ProfessionalStockAdvisor:
             # *** IMPORTANT: Change this to your bucket name ***
             bucket_name = "stockwise-gen3-models-public"
             bucket = storage_client.bucket(bucket_name)
-            st.write(f"--- DEBUG: Successfully connected to bucket: {bucket_name} ---")
+            # st.write(f"--- DEBUG: Successfully connected to bucket: {bucket_name} ---")
 
             models = {}
             feature_names = {}
@@ -460,17 +460,17 @@ class ProfessionalStockAdvisor:
             # _self.model_dir is "models/NASDAQ-gen3-dynamic"
             # We add "StockWise/" to match your GCS bucket structure
             gcs_path = f"StockWise/{_self.model_dir}/"
-            st.write(f"--- DEBUG: Searching for files with prefix: '{gcs_path}' ---")
+            # st.write(f"--- DEBUG: Searching for files with prefix: '{gcs_path}' ---")
 
             blobs = list(bucket.list_blobs(prefix=gcs_path))
 
-            st.write(f"--- DEBUG: Found {len(blobs)} files (blobs) in this path. ---")
+            # st.write(f"--- DEBUG: Found {len(blobs)} files (blobs) in this path. ---")
 
             if not blobs:
                 _self.log(f"No models found in GCS at gs://{bucket.name}/{_self.model_dir}/", "ERROR")
                 return None, None
 
-            st.write("--- DEBUG: 'blobs' list is NOT empty. Starting to load models... ---")
+            # st.write("--- DEBUG: 'blobs' list is NOT empty. Starting to load models... ---")
 
             for blob in blobs:
                 if blob.name.endswith(".pkl"):
@@ -495,12 +495,13 @@ class ProfessionalStockAdvisor:
             _self.log(f"GCS load failed (Error: {e}). Assuming local run. Loading from disk...", "WARNING")
 
             # This will print the full, real error to the screen
-            st.error(f"--- DEBUG: GCS load FAILED. The hidden error is: {e} ---")
+            # st.error(f"--- DEBUG: GCS load FAILED. The hidden error is: {e} ---")
             st.exception(e)  # This will print the full traceback
             # --- END NEW DEBUG ---
 
-            st.write(f"--- DEBUG: GCS load FAILED. Error: {e}. Falling back to local disk... ---")
+            # st.write(f"--- DEBUG: GCS load FAILED. Error: {e}. Falling back to local disk... ---")
             return _self._load_models_from_disk()
+
     def log(self, message, level="INFO"):
         timestamp = datetime.now().strftime('%H:%M:%S')
         entry = f"[{timestamp}] [{level}] {message}"
