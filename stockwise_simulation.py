@@ -241,7 +241,7 @@ class FeatureCalculator:
                                                                                          raw=False)
             # --- 3. Contextual (External) Features (NOW PROTECTED) ---
             try:
-                st.write("DEBUG: Attempting to download QQQ data...")
+                # st.write("DEBUG: Attempting to download QQQ data...")
                 qqq_data = yf.download("QQQ", start=df.index.min() - timedelta(days=70), end=df.index.max(),
                                        progress=False,
                                        auto_adjust=True)
@@ -294,36 +294,35 @@ class FeatureCalculator:
             # exact TitleCase name the model was trained on.
             rename_map = {
                 'volume_ma_20': 'Volume_MA_20',
-                'rsi_14': 'RSI_14',
-                'momentum_5': 'Momentum_5',
-                'macd': 'MACD',
-                'macd_signal': 'MACD_Signal',
-                'macd_histogram': 'MACD_Histogram',
-                'bb_upper': 'BB_Upper',
-                'bb_lower': 'BB_Lower',
-                'bb_middle': 'BB_Middle',
-                'bb_position': 'BB_Position',
                 'daily_return': 'Daily_Return',
-                'volatility_20d': 'Volatility_20D',
                 'atr_14': 'ATR_14',
                 'adx': 'ADX',
-                'adx_pos': 'ADX_Pos',
-                'adx_neg': 'ADX_Neg',
-                'obv': 'OBV',
-                'rsi_28': 'RSI_28',
-                'z_score_20': 'Z_Score_20',
+                'adx_pos': 'ADX_pos',
+                'adx_neg': 'ADX_neg',
+                'volatility_20d': 'Volatility_20D',
+                'momentum_5': 'Momentum_5',
+                'macd': 'MACD',
+                'macd_histogram': 'MACD_Histogram',
+                'macd_signal': 'MACD_Signal',
+                'bb_lower': 'BB_Lower',
+                'bb_middle': 'BB_Middle',
+                'bb_upper': 'BB_Upper',
                 'bb_width': 'BB_Width',
-                'correlation_50d_qqq': 'Correlation_50D_QQQ',
-                'dominant_cycle_126d': 'Dominant_Cycle_126D',
-                'smoothed_close_5d': 'Smoothed_Close_5D',
-                'rsi_14_smoothed': 'RSI_14_Smoothed',
-                'vix_close': 'VIX_Close',
-                'corr_tlt': 'Corr_TLT',
+                'bb_position': 'BB_Position',
+                'obv': 'OBV',
                 'cmf': 'CMF',
                 'kama_10': 'KAMA_10',
                 'stoch_k': 'Stoch_K',
                 'stoch_d': 'Stoch_D',
-                'dominant_cycle': 'Dominant_Cycle'
+                'rsi_14': 'RSI_14',
+                'rsi_28': 'RSI_28',
+                'z_score_20': 'Z_Score_20',
+                'vix_close': 'VIX_Close',
+                'correlation_50d_qqq': 'Correlation_5D_QQQ',
+                'dominant_cycle_126d': 'Dominant_Cycle_126D',
+                'smoothed_close_5d': 'Smoothed_Close_5D',
+                'rsi_14_smoothed': 'RSI_14_Smoothed',
+                'corr_tlt': 'Corr_TLT'
             }
 
             # Apply the explicit rename
@@ -331,6 +330,7 @@ class FeatureCalculator:
 
             df.bfill(inplace=True)
             df.ffill(inplace=True)
+            df.dropna(inplace=True)
 
             # This return is now INSIDE the try block
             return df
@@ -339,7 +339,7 @@ class FeatureCalculator:
 
             # --- THIS IS THE DEBUG PRINTER ---
             # If ANY error occurs (like missing 'volume'), we catch it here
-            st.error(f"--- DEBUG: Feature calculation FAILED. Error: {e}. Skipping this stock. ---")
+            # st.error(f"--- DEBUG: Feature calculation FAILED. Error: {e}. Skipping this stock. ---")
             st.exception(e)  # This prints the full error traceback
             return pd.DataFrame()  # Return an empty frame so the screener can continue
 
