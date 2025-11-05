@@ -1,0 +1,20 @@
+{
+    "MichaAdvisor": {
+        "sma_short": 20,
+        "sma_long": 100,
+        "rsi_period": 14,
+        "rsi_threshold": 75,
+        "atr_mult_stop": 2.5,
+        "atr_mult_profit": 2.0
+    },
+    "BreakoutAdvisor": {
+        "breakout_window": 50
+    },
+    "VolumeMomentumAdvisor": {
+        "obv_window": 20
+    },
+    "MeanReversionAdvisor": {
+        "bb_length": 20,
+        "rsi_oversold": 25
+    }
+}
