@@ -482,14 +482,14 @@ class ProfessionalStockAdvisor:
             # --- Remove 'models/' from path for GCS prefix ---
             # _self.model_dir is "models/NASDAQ-gen3-dynamic"
             # We want just "NASDAQ-gen3-dynamic/" for the GCS prefix
-            if "models/" in _self.model_dir:
-                gcs_prefix = _self.model_dir.replace("models/", "")
-            else:
-                gcs_prefix = _self.model_dir
+            # if "models/" in _self.model_dir:
+            #     gcs_prefix = _self.model_dir.replace("models/", "")
+            # else:
+            #     gcs_prefix = _self.model_dir
 
-            blobs = list(bucket.list_blobs(prefix=f"{gcs_prefix}/"))
+            blobs = list(bucket.list_blobs(prefix=f"{_self.model_dir}/"))
             if not blobs:
-                _self.log(f"No models found in GCS at gs://{bucket.name}/{gcs_prefix}", "ERROR")
+                _self.log(f"No models found in GCS at gs://{bucket.name}/{_self.model_dir}/", "ERROR")
                 return None, None
 
             for blob in blobs:
@@ -1292,7 +1292,7 @@ if __name__ == "__main__":
         else:
             st.error(f"FATAL: Default models could not be loaded from '{DEFAULT_AGENT_MODEL_DIR}'.")
 
-    elif not authentication_status:
-        st.error('Username/password is incorrect')
     elif authentication_status is None:
         st.warning('Please enter your username and password')
+    elif not authentication_status:
+        st.error('Username/password is incorrect')
