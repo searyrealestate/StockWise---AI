@@ -479,10 +479,17 @@ class ProfessionalStockAdvisor:
             models = {}
             feature_names = {}
 
-            blobs = list(bucket.list_blobs(prefix=f"{_self.model_dir}/"))  # e.g., "models/NASDAQ-gen3-dynamic/"
+            # --- Remove 'models/' from path for GCS prefix ---
+            # _self.model_dir is "models/NASDAQ-gen3-dynamic"
+            # We want just "NASDAQ-gen3-dynamic/" for the GCS prefix
+            if "models/" in _self.model_dir:
+                gcs_prefix = _self.model_dir.replace("models/", "")
+            else:
+                gcs_prefix = _self.model_dir
+
+            blobs = list(bucket.list_blobs(prefix=f"{gcs_prefix}/"))
             if not blobs:
-                # _self.log(f"No models found in GCS at gs://{bucket.name}/{_self.model_dir}", "ERROR")
-                _self.log(f"No models found in GCS at gs://{bucket.name}/{_self.model_dir}", "ERROR")
+                _self.log(f"No models found in GCS at gs://{bucket.name}/{gcs_prefix}", "ERROR")
                 return None, None
 
             for blob in blobs:
