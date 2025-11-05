@@ -468,23 +468,36 @@ class ProfessionalStockAdvisor:
         """
         try:
             # --- 1. TRY CLOUD (st.secrets) ---
+            # --- DEBUGGING PRINTS START ---
+            st.write("--- DEBUG: Attempting to load models from GCS (Cloud Mode)... ---")
             _self.log("Attempting to load models from GCS (Cloud Mode)...")
+
             creds_json = st.secrets["gcs_service_account"]
             credentials = service_account.Credentials.from_service_account_info(creds_json)
             storage_client = storage.Client(credentials=credentials)
 
             # *** IMPORTANT: Change this to your bucket name ***
-            bucket = storage_client.bucket("stockwise-gen3-models-public")
+            bucket_name = "stockwise-gen3-models-public"
+            bucket = storage_client.bucket(bucket_name)
+            st.write(f"--- DEBUG: Successfully connected to bucket: {bucket_name} ---")
 
             models = {}
             feature_names = {}
 
+            # _self.model_dir is "models/NASDAQ-gen3-dynamic"
+            # We add "StockWise/" to match your GCS bucket structure
             gcs_path = f"StockWise/{_self.model_dir}/"
+            st.write(f"--- DEBUG: Searching for files with prefix: '{gcs_path}' ---")
 
             blobs = list(bucket.list_blobs(prefix=gcs_path))
+
+            st.write(f"--- DEBUG: Found {len(blobs)} files (blobs) in this path. ---")
+
             if not blobs:
                 _self.log(f"No models found in GCS at gs://{bucket.name}/{_self.model_dir}/", "ERROR")
                 return None, None
+
+            st.write("--- DEBUG: 'blobs' list is NOT empty. Starting to load models... ---")
 
             for blob in blobs:
                 if blob.name.endswith(".pkl"):
