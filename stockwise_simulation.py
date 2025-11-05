@@ -493,9 +493,14 @@ class ProfessionalStockAdvisor:
         except Exception as e:
             # --- 2. FALLBACK TO LOCAL ---
             _self.log(f"GCS load failed (Error: {e}). Assuming local run. Loading from disk...", "WARNING")
+
+            # This will print the full, real error to the screen
+            st.error(f"--- DEBUG: GCS load FAILED. The hidden error is: {e} ---")
+            st.exception(e)  # This will print the full traceback
+            # --- END NEW DEBUG ---
+
             st.write(f"--- DEBUG: GCS load FAILED. Error: {e}. Falling back to local disk... ---")
             return _self._load_models_from_disk()
-
     def log(self, message, level="INFO"):
         timestamp = datetime.now().strftime('%H:%M:%S')
         entry = f"[{timestamp}] [{level}] {message}"
