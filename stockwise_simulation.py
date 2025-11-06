@@ -1067,7 +1067,7 @@ def create_enhanced_interface(IS_CLOUD = False):
 
     # todo: create a scheduler that will run the screener every month with 5000 stocks
     # --- Strategy Optimizer Section (Restored and Implemented) ---
-    if IS_CLOUD == True:
+    if IS_CLOUD == False:
         st.sidebar.header("⚙️ Strategy Optimizer")
         st.sidebar.info("Run this to find & save the best parameters for a model.")
 
