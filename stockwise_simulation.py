@@ -966,7 +966,7 @@ def display_analysis_results(ai_result, mico_result, stock_data, stock_symbol, a
             st.dataframe(features_df.style.format(precision=4), use_container_width=True)
 
 
-def create_enhanced_interface():
+def create_enhanced_interface(IS_CLOUD = False):
     # --- Connection Status Indicator ---
     _, col2 = st.columns([4, 1])
     status_placeholder = col2.empty()
@@ -988,14 +988,14 @@ def create_enhanced_interface():
     st.sidebar.header("🎯 Trading Analysis")
     st.sidebar.markdown("**Select Systems to Run:**")
 
-    with st.sidebar.expander("Select Models to Run", expanded=True):
-        run_ai = st.sidebar.checkbox("Run AI Advisor (Gen-3)", value=True)
-        run_mico = st.sidebar.checkbox("Run Micha System (Rule-Based)", value=True)
-        run_mean_reversion = st.sidebar.checkbox("Run Mean Reversion Model", value=True)
-        run_breakout = st.sidebar.checkbox("Run Breakout Model", value=True)
-        run_supertrend = st.sidebar.checkbox("Run SuperTrend Model", value=True)
-        run_ma_crossover = st.sidebar.checkbox("Run MA Crossover Model", value=True)
-        run_volume_momentum = st.sidebar.checkbox("Run Volume Momentum Model", value=True)
+    with st.sidebar.expander("Select Models to Run", expanded=False):
+        run_ai = st.checkbox("Run AI Advisor (Gen-3)", value=True)
+        run_mico = st.checkbox("Run Micha System (Rule-Based)", value=True)
+        run_mean_reversion = st.checkbox("Run Mean Reversion Model", value=True)
+        run_breakout = st.checkbox("Run Breakout Model", value=True)
+        run_supertrend = st.checkbox("Run SuperTrend Model", value=True)
+        run_ma_crossover = st.checkbox("Run MA Crossover Model", value=True)
+        run_volume_momentum = st.checkbox("Run Volume Momentum Model", value=True)
 
     selected_agent_name = st.sidebar.selectbox("🧠 Select AI Agent", options=list(AGENT_CONFIGS.keys()))
     investment_amount = st.sidebar.number_input(
@@ -1067,17 +1067,18 @@ def create_enhanced_interface():
 
     # todo: create a scheduler that will run the screener every month with 5000 stocks
     # --- Strategy Optimizer Section (Restored and Implemented) ---
-    st.sidebar.header("⚙️ Strategy Optimizer")
-    st.sidebar.info("Run this to find & save the best parameters for a model.")
+    if IS_CLOUD == True:
+        st.sidebar.header("⚙️ Strategy Optimizer")
+        st.sidebar.info("Run this to find & save the best parameters for a model.")
 
-    # We no longer need the single-model selectbox
-    opt_symbol = st.sidebar.text_input("Stock to Optimize On", value="SPY").upper().strip()
-    col1_opt, col2_opt = st.sidebar.columns(2)
-    opt_start_date = col1_opt.date_input("Opt. Start Date", datetime.now().date() - timedelta(days=365))
-    opt_end_date = col2_opt.date_input("Opt. End Date", datetime.now().date())
+        # We no longer need the single-model selectbox
+        opt_symbol = st.sidebar.text_input("Stock to Optimize On", value="SPY").upper().strip()
+        col1_opt, col2_opt = st.sidebar.columns(2)
+        opt_start_date = col1_opt.date_input("Opt. Start Date", datetime.now().date() - timedelta(days=365))
+        opt_end_date = col2_opt.date_input("Opt. End Date", datetime.now().date())
 
-    # Button text is updated for clarity
-    optimize_btn = st.sidebar.button("Run Full System Calibration", use_container_width=True)
+        # Button text is updated for clarity
+        optimize_btn = st.sidebar.button("Run Full System Calibration", use_container_width=True)
 
     # ==============================================================================
     # --- LOGIC BLOCKS (Restructured for clarity) ---
@@ -1258,6 +1259,7 @@ if __name__ == "__main__":
 
         # Initialize the DataSourceManager ONCE and store it in the session state
         # --- Smart Data Manager Initialization ---
+        IS_CLOUD = True
         if 'data_manager' not in st.session_state:
             # Check if we are on Streamlit Cloud by looking for the secret
             try:
@@ -1304,7 +1306,7 @@ if __name__ == "__main__":
 
         # Check if models were loaded successfully before running the UI
         if st.session_state.advisor.models:
-            create_enhanced_interface()
+            create_enhanced_interface(IS_CLOUD)
         else:
             st.error(f"FATAL: Default models could not be loaded from '{DEFAULT_AGENT_MODEL_DIR}'.")
 
