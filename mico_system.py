@@ -117,13 +117,22 @@ class MichaAdvisor:
         if buy_conditions_met == 3:
             current_price = latest['close']
             atr_value = latest[f'atr_{atr_period}']
+
+            # --- This is the correct logic for a "BUY" signal ---
+            # Stop-loss should be BELOW the current price
             stop_loss_price = current_price - (atr_value * atr_mult_stop)
+
+            # Risk is the positive distance between price and stop
             risk = current_price - stop_loss_price
+
+            # Profit target should be ABOVE the current price
             profit_target_price = current_price + (risk * atr_mult_profit)  # Use R/R
             return {
                 'signal': 'BUY', 'reason': "\n".join(reasons),
-                'current_price': current_price, 'stop_loss_price': stop_loss_price,
-                'profit_target_price': profit_target_price, 'debug_rsi': latest[f'rsi_{rsi_period}']
+                'current_price': current_price,
+                'stop_loss_price': stop_loss_price,
+                'profit_target_price': profit_target_price,
+                'debug_rsi': latest[f'rsi_{rsi_period}']
             }
         return {'signal': 'WAIT', 'reason': "\n".join(reasons)}
 
