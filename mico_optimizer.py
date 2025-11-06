@@ -82,13 +82,13 @@ def run_full_optimization(optimizer_advisors: dict, parameter_grids: dict, symbo
         )
 
         # Display the detailed results for this specific model
-        st.dataframe(results_df.style.format({'Total P/L %': '{:.2f}%'}), use_container_width=True)
+        st.dataframe(results_df.style.format({'Profit Factor': '{:.2f}'}), use_container_width=True)
 
         if best_params:
-            st.success(f"🏆 Best for {model_name}: `{best_params}` (P/L: {best_performance:.2f}%)")
+            st.success(f"🏆 Best for {model_name}: `{best_params}` (Profit Factor: {best_performance:.2f})")
             all_best_results.append({
                 "Model": model_name,
-                "Best P/L %": best_performance,
+                "Best Profit Factor": best_performance,
                 "Best Parameters": json.dumps(best_params)
             })
             # Save the params for this model to the file
@@ -104,7 +104,7 @@ def run_full_optimization(optimizer_advisors: dict, parameter_grids: dict, symbo
         return
 
     # Display a final summary of all models
-    summary_df = pd.DataFrame(all_best_results).sort_values(by="Best P/L %", ascending=False)
+    summary_df = pd.DataFrame(all_best_results).sort_values(by="Best Profit Factor", ascending=False)
     st.subheader("Overall Optimization Summary")
     st.dataframe(summary_df, use_container_width=True)
     st.success("All models have been optimized and the best parameters are saved to `best_params.json`.")
@@ -141,7 +141,7 @@ def _optimize_single_model(advisor_instance, symbol, start_date, end_date, param
         if all_signals:
             trades_df = pd.DataFrame(all_signals)
             performance = _simulate_trades_for_performance(trades_df, advisor_instance.dm)
-            results.append({**params, 'Total P/L %': performance})
+            results.append({**params, 'Profit Factor': performance})
 
             if performance > best_performance:
                 best_performance = performance
@@ -157,18 +157,20 @@ def _optimize_single_model(advisor_instance, symbol, start_date, end_date, param
         st.error(f"No successful trades found for {model_name}.")
         return None, -float('inf'), pd.DataFrame()
 
-    results_df = pd.DataFrame(results).sort_values(by='Total P/L %', ascending=False)
+    results_df = pd.DataFrame(results).sort_values(by='Profit Factor', ascending=False)
     return best_params, best_performance, results_df
 
 
 def _simulate_trades_for_performance(trades_df, data_manager):
-    """A lightweight backtester that returns a single performance metric (Total P/L %)."""
-    total_pl = 0
+    """
+    A lightweight backtester that returns a single performance metric (Profit Factor).
+    Profit Factor = (Sum of all P/L % from wins) / (Absolute Sum of all P/L % from losses)
+    """
+    all_pl_percents = []
     for _, trade in trades_df.iterrows():
         entry_date = pd.to_datetime(trade['Analysis Date'])
         df_raw = data_manager.get_stock_data(trade['Symbol'], start_date=entry_date)
 
-        # Add safety checks for the DataFrame
         if df_raw.empty or not isinstance(df_raw.index, pd.DatetimeIndex):
             continue
 
@@ -188,9 +190,19 @@ def _simulate_trades_for_performance(trades_df, data_manager):
         if exit_price is None:
             exit_price = trade_period_df['close'].iloc[-1] if not trade_period_df.empty else trade['Entry Price']
 
-        # The calculation was duplicated. This is the single, correct version.
         if trade['Entry Price'] > 0:
             pl_percent = ((exit_price - trade['Entry Price']) / trade['Entry Price']) * 100
-            total_pl += pl_percent
+            all_pl_percents.append(pl_percent)
 
-    return total_pl
+    if not all_pl_percents:
+        return 0  # No trades, so profit factor is 0
+
+    # --- Calculate Profit Factor ---
+    total_gains = sum(p for p in all_pl_percents if p > 0)
+    total_losses = abs(sum(p for p in all_pl_percents if p < 0))
+
+    if total_losses == 0:
+        # If there are no losses, it's an "infinite" profit factor (or 0 if no gains)
+        return float('inf') if total_gains > 0 else 0
+
+    return total_gains / total_losses
