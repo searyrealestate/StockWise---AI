@@ -849,17 +849,25 @@ class ProfessionalStockAdvisor:
         total_deducted_dollars = total_fees_dollars + tax_dollars
         return net_profit_dollars, total_deducted_dollars
 
-    def create_chart(self, stock_symbol, stock_data, result, analysis_date):
+    def create_chart(self, stock_symbol, stock_data, result, analysis_date,
+                     show_mico_lines=False, mico_result=None):
+
         if stock_data.empty: return None
+
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.8, 0.2])
+        # 1. Add Candlestick Trace
         fig.add_trace(
             go.Candlestick(x=stock_data.index, open=stock_data['open'], high=stock_data['high'], low=stock_data['low'],
                            close=stock_data['close'], name='Price'), row=1, col=1)
+
+        # 2. Add AI Moving Averages
         for period, color in [(5, 'orange'), (20, 'blue'), (50, 'red')]:
             if len(stock_data) >= period:
                 ma = stock_data['close'].rolling(window=period).mean()
                 fig.add_trace(go.Scatter(x=stock_data.index, y=ma, mode='lines', name=f'MA{period}',
                                          line=dict(color=color, width=1)), row=1, col=1)
+
+        # 3. Add Bollinger Bands
         if len(stock_data) >= 20:
             try:
                 # Create a temporary DataFrame for the calculation
@@ -871,12 +879,18 @@ class ProfessionalStockAdvisor:
                                          fillcolor='rgba(128,128,128,0.1)', showlegend=False), row=1, col=1)
             except Exception as e:
                 self.log(f"Could not calculate Bollinger Bands: {e}", "WARNING")
+
+        # 4. Add Volume
         fig.add_trace(
             go.Bar(x=stock_data.index, y=stock_data['volume'], name='Volume', marker=dict(color='rgba(100,110,120,0.6)')),
             row=2, col=1)
+
+        # 5. Add Analysis Date Line
         fig.add_vline(x=analysis_date, line_width=1, line_dash="dash", line_color="white", name="Analysis Date",
                       row=1)
-        action = result['action']
+
+        # 6. Add AI Signal Lines
+        action = result.get('action', 'WAIT')
         # current_price = result['current_price']
         current_price = result.get('current_price', stock_data['close'].iloc[-1] if not stock_data.empty else 0)
 
@@ -887,18 +901,50 @@ class ProfessionalStockAdvisor:
             profit_target_pct = self.calculate_dynamic_profit_target(confidence)
             profit_target_price = current_price * (1 + profit_target_pct / 100)
 
-            fig.add_hline(y=float(profit_target_price), line_dash="dash", line_color="lightgreen",
-                          name="Profit Target", row=1, annotation_text=f"Profit Target: ${profit_target_price:.2f}",
+            fig.add_hline(y=float(profit_target_price), line_dash="dot", line_color="cyan",
+                          name="AI Profit Target", row=1, annotation_text=f"AI Target: ${profit_target_price:.2f}",
                           annotation_position="top right")
             fig.add_trace(go.Scatter(
                 x=[buy_date], y=[current_price], mode='markers',
                 marker=dict(color='cyan', size=12, symbol='circle-open', line=dict(width=2)), name='Target Buy'
             ), row=1, col=1)
             if stop_loss:
-                fig.add_hline(y=float(stop_loss), line_dash="dash", line_color="red",
-                              name="Stop-Loss Price", row=1, annotation_text=f"Stop-Loss: ${stop_loss:.2f}",
+                fig.add_hline(y=float(stop_loss), line_dash="dot", line_color="magenta",
+                              name="AI Stop-Loss", row=1, annotation_text=f"AI Stop: ${stop_loss:.2f}",
                               annotation_position="bottom right")
 
+        # --- 7. NEW: Add Mico System Lines ---
+        if show_mico_lines:
+            # Add SMA 200 (since 50 is already plotted)
+            if len(stock_data) >= 200:
+                sma_200 = stock_data['close'].rolling(window=200).mean()
+                fig.add_trace(go.Scatter(
+                    x=stock_data.index, y=sma_200, mode='lines', name='MA200',
+                    line=dict(color='purple', width=1)
+                ), row=1, col=1)
+
+            # Add Mico Stop-Loss and Profit-Target Lines
+            if mico_result and mico_result.get('signal') == 'BUY':
+                sl_price = mico_result.get('stop_loss_price')
+                tp_price = mico_result.get('profit_target_price')
+
+                if sl_price:
+                    fig.add_hline(
+                        y=sl_price, line_width=2, line_dash="dash",
+                        line_color="red", name="Mico Stop-Loss",
+                        annotation_text="Mico Stop-Loss",
+                        annotation_position="bottom left",
+                        row=1, col=1
+                    )
+                if tp_price:
+                    fig.add_hline(
+                        y=tp_price, line_width=2, line_dash="dash",
+                        line_color="green", name="Mico Take-Profit",
+                        annotation_text="Mico Take-Profit",
+                        annotation_position="top left",
+                        row=1, col=1
+                    )
+        # 8. Update Layout
         zoom_start_date = pd.to_datetime(analysis_date) - timedelta(days=10)
         zoom_end_date = pd.to_datetime(analysis_date) + timedelta(days=120)
         fig.update_layout(title_text=f'{stock_symbol} Price & Volume Analysis', xaxis_rangeslider_visible=False,
@@ -910,7 +956,90 @@ class ProfessionalStockAdvisor:
         return fig
 
 
-def display_analysis_results(ai_result, mico_result, stock_data, stock_symbol, analysis_date, advisor):
+# def plot_stock_data_with_signals(df, signals, analysis_date, mico_df=None):
+#     """
+#     Plots the stock data with buy/sell signals and optional Mico indicator lines.
+#
+#     Args:
+#         df (pd.DataFrame): DataFrame with stock data (must have 'close').
+#         signals (pd.DataFrame): DataFrame with signals (must have 'Date' and 'Signal').
+#         analysis_date (datetime): The date of the analysis.
+#         mico_df (pd.DataFrame, optional): A long-form DataFrame with Mico lines to plot.
+#                                           Must have columns: ['Date', 'Value', 'Line_Type'].
+#     """
+#     if df.empty:
+#         st.warning("No data available to plot.")
+#         return
+#
+#     # Ensure index is datetime for plotting
+#     if not isinstance(df.index, pd.DatetimeIndex):
+#         try:
+#             df.index = pd.to_datetime(df.index)
+#         except Exception as e:
+#             st.error(f"Error converting index to datetime: {e}")
+#             return
+#
+#     # Prepare base data
+#     base_data = df.reset_index().rename(columns={'index': 'Date'})
+#
+#     # Base candlestick chart
+#     base = alt.Chart(base_data).mark_ohlc().encode(
+#         x='Date:T',
+#         y=alt.Y('open:Q', title='Price (USD)'),
+#         y2='close:Q',
+#         color=alt.condition("datum.open <= datum.close", alt.value("#26A69A"), alt.value("#EF5350")),
+#         tooltip=[
+#             'Date:T',
+#             alt.Tooltip('open:Q', format='.2f'),
+#             alt.Tooltip('high:Q', format='.2f'),
+#             alt.Tooltip('low:Q', format='.2f'),
+#             alt.Tooltip('close:Q', format='.2f'),
+#             alt.Tooltip('volume:Q', format=',.0f')
+#         ]
+#     ).properties(
+#         title=f"Stock Price"
+#     )
+#
+#     # Signal points
+#     signal_points = alt.Chart(signals).mark_point(size=100, filled=True).encode(
+#         x='Date:T',
+#         y=alt.Y('Price:Q'),
+#         color=alt.Color('Signal:N', scale={'domain': ['BUY', 'SELL', 'WAIT'], 'range': ['green', 'red', 'blue']}),
+#         shape=alt.Shape('Signal:N',
+#                         scale={'domain': ['BUY', 'SELL', 'WAIT'], 'range': ['triangle-up', 'triangle-down', 'circle']}),
+#         tooltip=['Date:T', 'Signal:N', 'Price:Q']
+#     )
+#
+#     # Analysis date rule
+#     rule = alt.Chart(pd.DataFrame({'Date': [analysis_date]})).mark_rule(color='blue', strokeDash=[3, 3]).encode(
+#         x='Date:T',
+#         tooltip=[alt.Tooltip('Date:T', title='Analysis Date')]
+#     )
+#
+#     # --- Add Mico System Lines ---
+#     chart_layers = [base, signal_points, rule]
+#
+#     if mico_df is not None and not mico_df.empty:
+#         # Filter Mico data to match the base data's date range for a cleaner plot
+#         mico_df_filtered = mico_df[mico_df['Date'] >= base_data['Date'].min()]
+#
+#         mico_line_chart = alt.Chart(mico_df_filtered).mark_line().encode(
+#             x='Date:T',
+#             y=alt.Y('Value:Q', title='Price (USD)'),  # Use same axis
+#             color=alt.Color('Line_Type:N', title="Indicator"),  # Color by line type
+#             tooltip=['Date:T', alt.Tooltip('Value:Q', format='.2f'), 'Line_Type:N']
+#         )
+#         chart_layers.append(mico_line_chart)
+#
+#     # Combine all layers
+#     final_chart = alt.layer(*chart_layers).resolve_scale(
+#         y='shared'  # Keep the y-axis (price) shared for all layers
+#     ).interactive()
+#
+#     st.altair_chart(final_chart, use_container_width=True)
+
+
+def display_analysis_results(ai_result, mico_result, stock_data, stock_symbol, analysis_date, advisor, show_mico_lines):
     """
     Renders the entire multi-stage analysis UI in a consistent format.
     This function is responsible for all display logic.
@@ -982,7 +1111,14 @@ def display_analysis_results(ai_result, mico_result, stock_data, stock_symbol, a
 
     # --- 3. PRICE CHART ---
     st.subheader("2. Price Chart")
-    fig = advisor.create_chart(stock_symbol, stock_data, ai_result, analysis_date)
+    fig = advisor.create_chart(
+        stock_symbol,
+        stock_data,
+        ai_result,
+        analysis_date,
+        show_mico_lines=show_mico_lines,
+        mico_result=mico_result
+    )
     if fig:
         st.plotly_chart(fig, use_container_width=True)
     else:
@@ -1074,6 +1210,7 @@ def create_enhanced_interface(IS_CLOUD = False):
 
     analyze_btn = st.sidebar.button("🚀 Run Professional Analysis", type="primary", use_container_width=True)
     use_market_filter = st.sidebar.checkbox("Enable Market Health Filter (SPY)", value=True)
+    st.sidebar.checkbox("Show Mico System Lines", key="show_mico_lines", value=False)
 
     # todo: this should run in parallel to the main UI, the user can work in parallel with the screener
     # todo: check of an option to save the data or now to the delete the information to the user until
@@ -1163,7 +1300,20 @@ def create_enhanced_interface(IS_CLOUD = False):
         with st.spinner(f"Running full analysis for {stock_symbol}..."):
             stock_data, ai_result = advisor.run_analysis(stock_symbol, analysis_date, use_market_filter)
             mico_result = st.session_state.mico_advisor.analyze(stock_symbol, analysis_date, params={})
-            display_analysis_results(ai_result, mico_result, stock_data, stock_symbol, analysis_date, advisor)
+
+            show_mico_lines = st.session_state.get("show_mico_lines", False)
+
+            display_analysis_results(
+                ai_result,
+                mico_result,
+                stock_data,
+                stock_symbol,
+                analysis_date,
+                advisor,
+                show_mico_lines=show_mico_lines
+            )
+
+
 
     # --- Optimizer Logic (Now separate and functional) ---
     if optimize_btn:
