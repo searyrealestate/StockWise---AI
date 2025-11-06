@@ -203,11 +203,12 @@ def calculate_stochastic(high, low, close, window=14, smooth_window=3):
 # --- Feature Engineering Pipeline (for Gen-3 Model) ---
 class FeatureCalculator:
     """A dedicated class to handle all feature calculations for the Gen-3 model."""
-    def __init__(self, data_manager, contextual_data):
+    def __init__(self, data_manager, contextual_data, is_cloud):
         self.data_manager = data_manager
         self.qqq_data = contextual_data['qqq']
         self.vix_data = contextual_data['vix']
         self.tlt_data = contextual_data['tlt']
+        self.is_cloud = is_cloud
 
     def get_dominant_cycle(self, data, min_period=3, max_period=100) -> float:
         data = pd.Series(data).dropna()
@@ -346,41 +347,43 @@ class FeatureCalculator:
             # --- Explicit Rename Mapping ---
             # This explicit dictionary maps the lowercase generated name to the
             # exact TitleCase name the model was trained on.
-            # rename_map = {
-            #     'volume_ma_20': 'Volume_MA_20',
-            #     'daily_return': 'Daily_Return',
-            #     'atr_14': 'ATR_14',
-            #     'adx': 'ADX',
-            #     'adx_pos': 'ADX_pos',
-            #     'adx_neg': 'ADX_neg',
-            #     'volatility_20d': 'Volatility_20D',
-            #     'momentum_5': 'Momentum_5',
-            #     'macd': 'MACD',
-            #     'macd_histogram': 'MACD_Histogram',
-            #     'macd_signal': 'MACD_Signal',
-            #     'bb_lower': 'BB_Lower',
-            #     'bb_middle': 'BB_Middle',
-            #     'bb_upper': 'BB_Upper',
-            #     'bb_width': 'BB_Width',
-            #     'bb_position': 'BB_Position',
-            #     'obv': 'OBV',
-            #     'cmf': 'CMF',
-            #     'kama_10': 'KAMA_10',
-            #     'stoch_k': 'Stoch_K',
-            #     'stoch_d': 'Stoch_D',
-            #     'rsi_14': 'RSI_14',
-            #     'rsi_28': 'RSI_28',
-            #     'z_score_20': 'Z_Score_20',
-            #     'vix_close': 'VIX_Close',
-            #     'correlation_50d_qqq': 'Correlation_50D_QQQ',
-            #     'dominant_cycle': 'Dominant_Cycle_126D',
-            #     'smoothed_close_5d': 'Smoothed_Close_5D',
-            #     'rsi_14_smoothed': 'RSI_14_Smoothed',
-            #     'corr_tlt': 'Corr_TLT'
-            # }
-            #
-            # # Apply the explicit rename
-            # df.rename(columns=rename_map, inplace=True)
+            rename_map = {
+                'volume_ma_20': 'Volume_MA_20',
+                'daily_return': 'Daily_Return',
+                'atr_14': 'ATR_14',
+                'adx': 'ADX',
+                'adx_pos': 'ADX_pos',
+                'adx_neg': 'ADX_neg',
+                'volatility_20d': 'Volatility_20D',
+                'momentum_5': 'Momentum_5',
+                'macd': 'MACD',
+                'macd_histogram': 'MACD_Histogram',
+                'macd_signal': 'MACD_Signal',
+                'bb_lower': 'BB_Lower',
+                'bb_middle': 'BB_Middle',
+                'bb_upper': 'BB_Upper',
+                'bb_width': 'BB_Width',
+                'bb_position': 'BB_Position',
+                'obv': 'OBV',
+                'cmf': 'CMF',
+                'kama_10': 'KAMA_10',
+                'stoch_k': 'Stoch_K',
+                'stoch_d': 'Stoch_D',
+                'rsi_14': 'RSI_14',
+                'rsi_28': 'RSI_28',
+                'z_score_20': 'Z_Score_20',
+                'vix_close': 'VIX_Close',
+                'correlation_50d_qqq': 'Correlation_50D_QQQ',
+                'dominant_cycle': 'Dominant_Cycle_126D',
+                'smoothed_close_5d': 'Smoothed_Close_5D',
+                'rsi_14_smoothed': 'RSI_14_Smoothed',
+                'corr_tlt': 'Corr_TLT'
+            }
+
+            # Apply the explicit rename
+            if self.is_cloud:
+                # Apply the explicit rename ONLY if on the cloud
+                df.rename(columns=rename_map, inplace=True)
 
             df.bfill(inplace=True)
             df.ffill(inplace=True)
@@ -1344,7 +1347,8 @@ if __name__ == "__main__":
         # Pass the context data to the advisor's calculator
         st.session_state.advisor.calculator = FeatureCalculator(
             data_manager=st.session_state.data_manager,
-            contextual_data=st.session_state.contextual_data
+            contextual_data=st.session_state.contextual_data,
+            is_cloud=st.session_state.IS_CLOUD
         )
         # Initialize the Micha Stock advisor in the session state ONCE if it doesn't exist
         if 'mico_advisor' not in st.session_state:
