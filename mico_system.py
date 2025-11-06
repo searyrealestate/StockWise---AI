@@ -54,7 +54,6 @@ class MichaAdvisor:
     def __init__(self, data_manager: DataSourceManager):
         self.dm = data_manager
 
-    @st.cache_data(ttl=900)
     def analyze(_self, symbol: str, analysis_date, params: dict = None) -> dict:
         if params is None: params = {}
 

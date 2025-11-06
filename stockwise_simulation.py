@@ -132,6 +132,26 @@ def get_nasdaq100_tickers():
         return []
 
 
+@st.cache_data(ttl=3600)  # Cache for 1 hour
+def load_contextual_data(_data_manager):
+    """Downloads QQQ, VIX, and TLT data once."""
+    qqq_data = yf.download("QQQ", period="5y", progress=False, auto_adjust=True)
+    if isinstance(qqq_data.columns, pd.MultiIndex):
+        qqq_data.columns = qqq_data.columns.droplevel(1)
+    qqq_data.columns = [col.lower() for col in qqq_data.columns]
+
+    vix_raw = _data_manager.get_stock_data('^VIX')
+    vix_clean = clean_raw_data(vix_raw)
+
+    tlt_raw = _data_manager.get_stock_data('TLT')
+    tlt_clean = clean_raw_data(tlt_raw)
+
+    return {
+        'qqq': qqq_data,
+        'vix': vix_clean,
+        'tlt': tlt_clean
+    }
+
 @st.cache_data
 def load_nasdaq_tickers(max_stocks=None):
     """Loads NASDAQ ticker symbols from a CSV file."""
@@ -183,8 +203,11 @@ def calculate_stochastic(high, low, close, window=14, smooth_window=3):
 # --- Feature Engineering Pipeline (for Gen-3 Model) ---
 class FeatureCalculator:
     """A dedicated class to handle all feature calculations for the Gen-3 model."""
-    def __init__(self, data_manager):
+    def __init__(self, data_manager, contextual_data):
         self.data_manager = data_manager
+        self.qqq_data = contextual_data['qqq']
+        self.vix_data = contextual_data['vix']
+        self.tlt_data = contextual_data['tlt']
 
     def get_dominant_cycle(self, data, min_period=3, max_period=100) -> float:
         data = pd.Series(data).dropna()
@@ -239,51 +262,78 @@ class FeatureCalculator:
             df['stoch_k'], df['stoch_d'] = calculate_stochastic(df['high'], df['low'], df['close'])
             df['dominant_cycle'] = df['close'].rolling(window=252, min_periods=90).apply(self.get_dominant_cycle,
                                                                                          raw=False)
-
             # --- 3. Contextual (External) Features (NOW PROTECTED) ---
+            # try:
+            #     # st.write("DEBUG: Attempting to download QQQ data...")
+            #     qqq_data = yf.download("QQQ", start=df.index.min() - timedelta(days=70), end=df.index.max(),
+            #                            progress=False,
+            #                            auto_adjust=True)
+            #
+            #     if isinstance(qqq_data, pd.DataFrame) and not qqq_data.empty:
+            #         if isinstance(qqq_data.columns, pd.MultiIndex):
+            #             qqq_data.columns = qqq_data.columns.droplevel(1)
+            #         qqq_data.columns = [col.lower() for col in qqq_data.columns]
+            #         qqq_close = qqq_data['close'].reindex(df.index, method='ffill')
+            #         df['correlation_50d_qqq'] = df['close'].rolling(50).corr(qqq_close)
+            #     else:
+            #         st.write("WARNING: Could not download or process QQQ data. Correlation feature will be zero.")
+            #         df['correlation_50d_qqq'] = 0.0
+            # except Exception as e:
+            #     st.write(f"--- An exception occurred during QQQ data processing: {e} ---")
+            #     df['correlation_50d_qqq'] = 0.0
+            # NEW
             try:
-                # st.write("DEBUG: Attempting to download QQQ data...")
-                qqq_data = yf.download("QQQ", start=df.index.min() - timedelta(days=70), end=df.index.max(),
-                                       progress=False,
-                                       auto_adjust=True)
-
-                if isinstance(qqq_data, pd.DataFrame) and not qqq_data.empty:
-                    if isinstance(qqq_data.columns, pd.MultiIndex):
-                        qqq_data.columns = qqq_data.columns.droplevel(1)
-                    qqq_data.columns = [col.lower() for col in qqq_data.columns]
-                    qqq_close = qqq_data['close'].reindex(df.index, method='ffill')
+                if not self.qqq_data.empty:
+                    qqq_close = self.qqq_data['close'].reindex(df.index, method='ffill')
                     df['correlation_50d_qqq'] = df['close'].rolling(50).corr(qqq_close)
                 else:
-                    st.write("WARNING: Could not download or process QQQ data. Correlation feature will be zero.")
+                    st.write("WARNING: Pre-loaded QQQ data is empty. Correlation feature will be zero.")
                     df['correlation_50d_qqq'] = 0.0
             except Exception as e:
                 st.write(f"--- An exception occurred during QQQ data processing: {e} ---")
                 df['correlation_50d_qqq'] = 0.0
-
+            # try:
+            #     # VIX Data
+            #     vix_raw = self.data_manager.get_stock_data('^VIX')
+            #     vix_clean = clean_raw_data(vix_raw)
+            #     if not vix_clean.empty:
+            #         aligned_vix = vix_clean['close'].reindex(df.index, method='ffill')
+            #         df['vix_close'] = aligned_vix
+            #     else:
+            #         df['vix_close'] = 0.0
+            # except Exception:
+            #     df['vix_close'] = 0.0
+            # NEW
             try:
                 # VIX Data
-                vix_raw = self.data_manager.get_stock_data('^VIX')
-                vix_clean = clean_raw_data(vix_raw)
-                if not vix_clean.empty:
-                    aligned_vix = vix_clean['close'].reindex(df.index, method='ffill')
+                if not self.vix_data.empty:
+                    aligned_vix = self.vix_data['close'].reindex(df.index, method='ffill')
                     df['vix_close'] = aligned_vix
                 else:
                     df['vix_close'] = 0.0
             except Exception:
                 df['vix_close'] = 0.0
-
+            # try:
+            #     # TLT Data
+            #     tlt_raw = self.data_manager.get_stock_data('TLT')
+            #     tlt_clean = clean_raw_data(tlt_raw)
+            #     if not tlt_clean.empty:
+            #         aligned_tlt = tlt_clean['close'].reindex(df.index, method='ffill')
+            #         df['corr_tlt'] = df['close'].rolling(50).corr(aligned_tlt)
+            #     else:
+            #         df['corr_tlt'] = 0.0
+            # except Exception:
+            #     df['corr_tlt'] = 0.0
+            # NEW
             try:
                 # TLT Data
-                tlt_raw = self.data_manager.get_stock_data('TLT')
-                tlt_clean = clean_raw_data(tlt_raw)
-                if not tlt_clean.empty:
-                    aligned_tlt = tlt_clean['close'].reindex(df.index, method='ffill')
+                if not self.tlt_data.empty:
+                    aligned_tlt = self.tlt_data['close'].reindex(df.index, method='ffill')
                     df['corr_tlt'] = df['close'].rolling(50).corr(aligned_tlt)
                 else:
                     df['corr_tlt'] = 0.0
             except Exception:
                 df['corr_tlt'] = 0.0
-
             # --- 4. Final Processing (NOW PROTECTED) ---
             df['volatility_90d'] = df['daily_return'].rolling(90).std()
             low_thresh, high_thresh = 0.015, 0.030
@@ -296,41 +346,41 @@ class FeatureCalculator:
             # --- Explicit Rename Mapping ---
             # This explicit dictionary maps the lowercase generated name to the
             # exact TitleCase name the model was trained on.
-            rename_map = {
-                'volume_ma_20': 'Volume_MA_20',
-                'daily_return': 'Daily_Return',
-                'atr_14': 'ATR_14',
-                'adx': 'ADX',
-                'adx_pos': 'ADX_pos',
-                'adx_neg': 'ADX_neg',
-                'volatility_20d': 'Volatility_20D',
-                'momentum_5': 'Momentum_5',
-                'macd': 'MACD',
-                'macd_histogram': 'MACD_Histogram',
-                'macd_signal': 'MACD_Signal',
-                'bb_lower': 'BB_Lower',
-                'bb_middle': 'BB_Middle',
-                'bb_upper': 'BB_Upper',
-                'bb_width': 'BB_Width',
-                'bb_position': 'BB_Position',
-                'obv': 'OBV',
-                'cmf': 'CMF',
-                'kama_10': 'KAMA_10',
-                'stoch_k': 'Stoch_K',
-                'stoch_d': 'Stoch_D',
-                'rsi_14': 'RSI_14',
-                'rsi_28': 'RSI_28',
-                'z_score_20': 'Z_Score_20',
-                'vix_close': 'VIX_Close',
-                'correlation_50d_qqq': 'Correlation_50D_QQQ',
-                'dominant_cycle': 'Dominant_Cycle_126D',
-                'smoothed_close_5d': 'Smoothed_Close_5D',
-                'rsi_14_smoothed': 'RSI_14_Smoothed',
-                'corr_tlt': 'Corr_TLT'
-            }
-
-            # Apply the explicit rename
-            df.rename(columns=rename_map, inplace=True)
+            # rename_map = {
+            #     'volume_ma_20': 'Volume_MA_20',
+            #     'daily_return': 'Daily_Return',
+            #     'atr_14': 'ATR_14',
+            #     'adx': 'ADX',
+            #     'adx_pos': 'ADX_pos',
+            #     'adx_neg': 'ADX_neg',
+            #     'volatility_20d': 'Volatility_20D',
+            #     'momentum_5': 'Momentum_5',
+            #     'macd': 'MACD',
+            #     'macd_histogram': 'MACD_Histogram',
+            #     'macd_signal': 'MACD_Signal',
+            #     'bb_lower': 'BB_Lower',
+            #     'bb_middle': 'BB_Middle',
+            #     'bb_upper': 'BB_Upper',
+            #     'bb_width': 'BB_Width',
+            #     'bb_position': 'BB_Position',
+            #     'obv': 'OBV',
+            #     'cmf': 'CMF',
+            #     'kama_10': 'KAMA_10',
+            #     'stoch_k': 'Stoch_K',
+            #     'stoch_d': 'Stoch_D',
+            #     'rsi_14': 'RSI_14',
+            #     'rsi_28': 'RSI_28',
+            #     'z_score_20': 'Z_Score_20',
+            #     'vix_close': 'VIX_Close',
+            #     'correlation_50d_qqq': 'Correlation_50D_QQQ',
+            #     'dominant_cycle': 'Dominant_Cycle_126D',
+            #     'smoothed_close_5d': 'Smoothed_Close_5D',
+            #     'rsi_14_smoothed': 'RSI_14_Smoothed',
+            #     'corr_tlt': 'Corr_TLT'
+            # }
+            #
+            # # Apply the explicit rename
+            # df.rename(columns=rename_map, inplace=True)
 
             df.bfill(inplace=True)
             df.ffill(inplace=True)
@@ -370,7 +420,7 @@ class ProfessionalStockAdvisor:
         #     self.data_source_manager = DataSourceManager(use_ibkr=True)
 
         # Pass the SINGLE data manager instance to the FeatureCalculator.
-        self.calculator = FeatureCalculator(data_manager=self.data_source_manager)
+        # self.calculator = FeatureCalculator(data_manager=self.data_source_manager)
 
         # --- SMART MODEL LOADING ---
         # This will now try GCS, then fall back to local files.
@@ -1260,22 +1310,29 @@ if __name__ == "__main__":
 
         # Initialize the DataSourceManager ONCE and store it in the session state
         # --- Smart Data Manager Initialization ---
-        IS_CLOUD = True
-        if 'data_manager' not in st.session_state:
-            # Check if we are on Streamlit Cloud by looking for the secret
+        if 'IS_CLOUD' not in st.session_state:
             try:
                 _ = st.secrets["gcs_service_account"]
-                IS_CLOUD = True
+                st.session_state.IS_CLOUD = True  # Store in session state
             except:
-                IS_CLOUD = False
+                st.session_state.IS_CLOUD = False  # Store in session state
 
-            if IS_CLOUD:
+        # 2. Initialize data_manager if it's not already set (runs only once)
+        if 'data_manager' not in st.session_state:
+            if st.session_state.IS_CLOUD:
                 # We are on Streamlit Cloud, do NOT use ibapi
                 st.session_state.data_manager = DataSourceManager(use_ibkr=False)
             else:
                 # We are on a local PC, use ibapi
                 st.session_state.data_manager = DataSourceManager(use_ibkr=True)
                 st.session_state.data_manager.connect_to_ibkr()
+
+        # --- Load Contextual Data ONCE ---
+        if 'contextual_data' not in st.session_state:
+            with st.spinner("Loading market context data (QQQ, VIX, TLT)..."):
+                st.session_state.contextual_data = load_contextual_data(
+                    st.session_state.data_manager
+                )
 
         # Initialize the advisor in the session state ONCE if it doesn't exist
         if 'advisor' not in st.session_state:
@@ -1284,6 +1341,11 @@ if __name__ == "__main__":
                 data_source_manager=st.session_state.data_manager
             )
 
+        # Pass the context data to the advisor's calculator
+        st.session_state.advisor.calculator = FeatureCalculator(
+            data_manager=st.session_state.data_manager,
+            contextual_data=st.session_state.contextual_data
+        )
         # Initialize the Micha Stock advisor in the session state ONCE if it doesn't exist
         if 'mico_advisor' not in st.session_state:
             # Pass the same data manager to the MicoAdvisor
@@ -1307,7 +1369,7 @@ if __name__ == "__main__":
 
         # Check if models were loaded successfully before running the UI
         if st.session_state.advisor.models:
-            create_enhanced_interface(IS_CLOUD)
+            create_enhanced_interface(st.session_state.IS_CLOUD)
         else:
             st.error(f"FATAL: Default models could not be loaded from '{DEFAULT_AGENT_MODEL_DIR}'.")
 
