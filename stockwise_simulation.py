@@ -737,7 +737,7 @@ class ProfessionalStockAdvisor:
                 result = {}
 
                 if entry_pred == 1:
-                    stop_loss_price = latest_row['close'] - (latest_row['atr_14'] * 2.5)
+                    stop_loss_price = latest_row['close'] - (latest_row['ATR_14'] * 2.5)
                     shap_values_for_buy, base_value_for_buy = get_shap_explanation(entry_model, features)
                     result = {
                         'action': "BUY", 'confidence': entry_prob[1] * 100, 'current_price': float(latest_row['close']),
