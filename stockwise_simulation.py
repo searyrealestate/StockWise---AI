@@ -239,6 +239,7 @@ class FeatureCalculator:
             df['stoch_k'], df['stoch_d'] = calculate_stochastic(df['high'], df['low'], df['close'])
             df['dominant_cycle'] = df['close'].rolling(window=252, min_periods=90).apply(self.get_dominant_cycle,
                                                                                          raw=False)
+
             # --- 3. Contextual (External) Features (NOW PROTECTED) ---
             try:
                 # st.write("DEBUG: Attempting to download QQQ data...")
@@ -289,6 +290,9 @@ class FeatureCalculator:
             df['volatility_cluster'] = pd.cut(df['volatility_90d'], bins=[-np.inf, low_thresh, high_thresh, np.inf],
                                               labels=['low', 'mid', 'high'])
 
+            df['smoothed_close_5d'] = df['close'].rolling(5).mean()
+            df['rsi_14_smoothed'] = df['rsi_14'].rolling(5).mean()
+
             # --- Explicit Rename Mapping ---
             # This explicit dictionary maps the lowercase generated name to the
             # exact TitleCase name the model was trained on.
@@ -318,8 +322,8 @@ class FeatureCalculator:
                 'rsi_28': 'RSI_28',
                 'z_score_20': 'Z_Score_20',
                 'vix_close': 'VIX_Close',
-                'correlation_50d_qqq': 'Correlation_5D_QQQ',
-                'dominant_cycle_126d': 'Dominant_Cycle_126D',
+                'correlation_50d_qqq': 'Correlation_50D_QQQ',
+                'dominant_cycle': 'Dominant_Cycle_126D',
                 'smoothed_close_5d': 'Smoothed_Close_5D',
                 'rsi_14_smoothed': 'RSI_14_Smoothed',
                 'corr_tlt': 'Corr_TLT'
