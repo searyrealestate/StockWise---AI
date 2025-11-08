@@ -54,7 +54,6 @@ import lightgbm as lgb
 import optuna
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import f1_score
-from data_manager import DataManager
 from tqdm import tqdm
 import itertools
 import concurrent.futures
