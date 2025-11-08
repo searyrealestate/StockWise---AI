@@ -7,7 +7,7 @@ import lightgbm as lgb
 import argparse
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, classification_report
 from sklearn.model_selection import train_test_split
-from data_manager import DataManager
+from data_source_manager import DataSourceManager
 from datetime import datetime
 import numpy as np
 from Create_parquet_file_NASDAQ import apply_triple_barrier
@@ -212,7 +212,7 @@ def run_training_job(agent_name: str, data_dir: str, model_dir: str): # <-- Upda
     Helper function to run a single, complete training job for one agent.
     """
     logger.info(f"\n{'=' * 80}\n🚀 STARTING TRAINING JOB FOR: {model_dir}\n{'=' * 80}")
-    train_data_manager = DataManager(data_dir, label="Train")
+    train_data_manager = DataSourceManager(data_dir, label="Train")
     symbols = train_data_manager.get_available_symbols()
     combined_df = train_data_manager.combine_feature_files(symbols)
     if combined_df.empty:
