@@ -60,6 +60,7 @@ import concurrent.futures
 from Create_parquet_file_NASDAQ import apply_triple_barrier
 import numpy as np
 from datetime import datetime
+import sys
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] (%(name)s) %(message)s")
@@ -75,12 +76,16 @@ logger.addHandler(file_handler)
 
 # --- Configuration ---
 AGENT_DATA_DIRS = {
-    'dynamic': "models/NASDAQ-training set/features/dynamic_profit",
-    '4pct': "models/NASDAQ-training set/features/4per_profit",
-    '3pct': "models/NASDAQ-training set/features/3per_profit",
-    '2pct': "models/NASDAQ-training set/features/2per_profit",
     '1pct': "models/NASDAQ-training set/features/1per_profit",
+    '2pct': "models/NASDAQ-training set/features/2per_profit",
+    '3pct': "models/NASDAQ-training set/features/3per_profit",
+    '4pct': "models/NASDAQ-training set/features/4per_profit",
+    'dynamic': "models/NASDAQ-training set/features/dynamic_profit"
 }
+# Define base options for menus
+ALL_AGENTS = list(AGENT_DATA_DIRS.keys())
+ALL_MODEL_TYPES = ['entry', 'profit_take', 'cut_loss']
+ALL_CLUSTERS = ['low', 'mid', 'high']
 
 
 def run_single_study(agent_name: str, model_type: str, cluster: str, n_trials=100):
@@ -138,7 +143,7 @@ def run_single_study(agent_name: str, model_type: str, cluster: str, n_trials=10
             profit_take_mult=profit_take_mult,
             stop_loss_mult=stop_loss_mult,
             time_limit_bars=time_limit_bars,
-            profit_mode='dynamic'  # Assuming dynamic for this example
+            profit_mode='dynamic'
         )
 
         # Re-create all three target labels based on the new tb_labels
@@ -182,7 +187,9 @@ def run_single_study(agent_name: str, model_type: str, cluster: str, n_trials=10
         preds = model.predict(X_val)
         return f1_score(y_val, preds, zero_division=0)
 
-    study = optuna.create_study(direction='maximize')
+    # Create a unique name for the study, e.g., "[4pct/entry/low]"
+    study_name = f"[{agent_name}/{model_type}/{cluster}]"
+    study = optuna.create_study(direction='maximize', study_name=study_name)
     study.optimize(objective, n_trials=n_trials)
 
     logger.info(f"Best F1-Score: {study.best_value:.4f}")
@@ -220,15 +227,104 @@ def get_user_selection(prompt: str, options: list) -> list:
     return get_user_selection(prompt, options)
 
 
-if __name__ == "__main__":
-    # --- Interactive Menus (Unchanged) ---
-    agents_to_tune = get_user_selection("Which agent do you want to optimize?", list(AGENT_DATA_DIRS.keys()))
-    model_types_to_tune = get_user_selection("Which model type do you want to optimize?",
-                                             ['entry', 'profit_take', 'cut_loss'])
-    clusters_to_tune = get_user_selection("Which volatility cluster do you want to optimize?", ['low', 'mid', 'high'])
+def _get_single_choice_from_list(prompt: str, options: list) -> str:
+    """
+    NEW: A helper function for the 'Custom Run' menu.
+    Prompts the user to select exactly ONE item from a list.
+    """
+    print(f"\n{prompt}")
+    for i, option in enumerate(options):
+        print(f"{i + 1}. {option.title()}")
 
-    # --- Create the full list of jobs to run ---
-    all_jobs = list(itertools.product(agents_to_tune, model_types_to_tune, clusters_to_tune))
+    while True:
+        choice = input(f"Please enter your selection (1-{len(options)}): ")
+        try:
+            choice_int = int(choice)
+            if 1 <= choice_int <= len(options):
+                return options[choice_int - 1]
+            else:
+                print(f"❌ Invalid selection. Must be between 1 and {len(options)}.")
+        except ValueError:
+            print("❌ Invalid input. Please enter a number.")
+
+
+def get_custom_jobs() -> list:
+    """
+    NEW: An interactive function to build a custom list of tuning jobs.
+    Returns a list of tuples, e.g., [('4pct', 'entry', 'low'), ...].
+    """
+    custom_jobs_list = []
+    print("\n--- Custom Job Builder ---")
+
+    while True:
+        print(f"\nBuilding Job #{len(custom_jobs_list) + 1}:")
+
+        # 1. Select Agent
+        agent = _get_single_choice_from_list("Select Agent:", ALL_AGENTS)
+
+        # 2. Select Model Type
+        model_type = _get_single_choice_from_list("Select Model Type:", ALL_MODEL_TYPES)
+
+        # 3. Select Cluster
+        cluster = _get_single_choice_from_list("Select Volatility Cluster:", ALL_CLUSTERS)
+
+        job_tuple = (agent, model_type, cluster)
+        custom_jobs_list.append(job_tuple)
+        print(f"✅ Job added: {job_tuple}")
+
+        while True:
+            add_another = input("Add another job? (y/n): ").lower().strip()
+            if add_another in ['y', 'n']:
+                break
+
+        if add_another == 'n':
+            break
+
+    return custom_jobs_list
+
+
+if __name__ == "__main__":
+    all_jobs = []
+
+    # --- NEW: Top-Level Menu (Standard vs. Custom) ---
+    print("\n" + "=" * 50)
+    print("      StockWise Tuner Orchestrator")
+    print("=" * 50)
+    print("\nHow do you want to run the tuner?")
+    print("1. Standard Run (Select categories, runs all combinations)")
+    print("2. Custom Run (Define a specific list of jobs)")
+
+    while True:
+        run_mode = input("Please enter your selection (1-2): ").strip()
+        if run_mode in ['1', '2']:
+            break
+        print("❌ Invalid selection. Please enter 1 or 2.")
+
+        # --- ROUTE TO THE CORRECT LOGIC ---
+
+    if run_mode == '1':
+        # --- This is the OLD logic for a Standard Run ---
+        logger.info("Starting Standard Run...")
+        agents_to_tune = get_user_selection("Which agent do you want to optimize?", ALL_AGENTS)
+        model_types_to_tune = get_user_selection("Which model type do you want to optimize?", ALL_MODEL_TYPES)
+        clusters_to_tune = get_user_selection("Which volatility cluster do you want to optimize?", ALL_CLUSTERS)
+        all_jobs = list(itertools.product(agents_to_tune, model_types_to_tune, clusters_to_tune))
+
+    elif run_mode == '2':
+        # --- This is the NEW logic for a Custom Run ---
+        logger.info("Starting Custom Run...")
+        all_jobs = get_custom_jobs()
+
+        # --- Safety check and summary before running ---
+    if not all_jobs:
+        logger.warning("No jobs were defined. Exiting.")
+        sys.exit(0)
+
+    logger.info("\n" + "─" * 50)
+    logger.info(f"Tuning run will consist of the following {len(all_jobs)} job(s):")
+    for job in all_jobs:
+        logger.info(f"  - {job}")
+    logger.info("─" * 50 + "\n")
 
     # --- Run tuning jobs in parallel ---
     # MAX_WORKERS = max(1, 1 if not os.cpu_count() else os.cpu_count() // 2)
