@@ -233,7 +233,7 @@ if __name__ == "__main__":
 
     # --- Run tuning jobs in parallel ---
     # MAX_WORKERS = max(1, 1 if not os.cpu_count() else os.cpu_count() // 2)
-    MAX_WORKERS = 10
+    MAX_WORKERS = 7
     logger.info(f"Initializing ProcessPoolExecutor with {MAX_WORKERS} workers.")
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
