@@ -201,6 +201,28 @@ class DataSourceManager(EWrapper, EClient):
             self._log("Disconnecting from TWS...")
             super().disconnect()
 
+    @st.cache_data(ttl=3600)  # Cache for 1 hour
+    def get_fundamental_info(_self, symbol: str) -> dict:
+        """
+        Fetches key fundamental info for a symbol using yfinance.
+        This is kept separate as it's not OHLCV data and works on cloud.
+        """
+        _self._log(f"Fetching fundamental info for {symbol} via yfinance...")
+        try:
+            ticker = yf.Ticker(symbol)
+            info = ticker.info
+
+            # Return a subset of key ratios
+            return {
+                'trailingPE': info.get('trailingPE'),
+                'priceToSalesTrailing12Months': info.get('priceToSalesTrailing12Months'),
+                'debtToEquity': info.get('debtToEquity'),
+                'marketCap': info.get('marketCap')
+            }
+        except Exception as e:
+            _self._log(f"Failed to get yfinance info for {symbol}: {e}", "WARNING")
+            return {}
+
     def get_stock_data(self, symbol: str, days_back: int = 1825, interval: str = '1 day', start_date=None,
                        end_date=None):
 
