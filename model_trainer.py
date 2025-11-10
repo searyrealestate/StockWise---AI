@@ -11,6 +11,7 @@ from data_source_manager import DataSourceManager
 from datetime import datetime
 import numpy as np
 from Create_parquet_file_NASDAQ import apply_triple_barrier
+import glob
 
 # --- Setup logging ---
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] (%(name)s) %(message)s")
@@ -135,7 +136,7 @@ class Gen3ModelTrainer:
             'adx', 'adx_pos', 'adx_neg', 'obv', 'rsi_28',
             'z_score_20', 'bb_width', 'correlation_50d_qqq', 'vix_close', 'corr_tlt', 'cmf',
             'bb_upper', 'bb_lower', 'bb_middle', 'daily_return',
-            'kama_10', 'stoch_k', 'st_och_d', 'dominant_cycle'
+            'kama_10', 'stoch_k', 'stoch_d', 'dominant_cycle'
         ]
 
         # Define the clusters and the models to be trained for each
@@ -207,21 +208,52 @@ class Gen3ModelTrainer:
         logger.info("\n🎉 Gen-3 Model Training Pipeline Finished Successfully!")
 
 
-def run_training_job(agent_name: str, data_dir: str, model_dir: str): # <-- Updated signature
+# def run_training_job(agent_name: str, data_dir: str, model_dir: str):
+#     """
+#     Helper function to run a single, complete training job for one agent.
+#     """
+#     logger.info(f"\n{'=' * 80}\n🚀 STARTING TRAINING JOB FOR: {model_dir}\n{'=' * 80}")
+#     train_data_manager = DataSourceManager(data_dir, label="Train")
+#     symbols = train_data_manager.get_available_symbols()
+#     combined_df = train_data_manager.combine_feature_files(symbols)
+#     if combined_df.empty:
+#         logger.error(f"❌ Combined training DataFrame is empty from {data_dir}. Cannot train models.")
+#         return
+#     # The trainer now handles its own parameter loading
+#     trainer = Gen3ModelTrainer(model_dir=model_dir, agent_name=agent_name)
+#     trainer.train_specialist_models(combined_df)
+
+
+def run_training_job(agent_name: str, data_dir: str, model_dir: str):
     """
     Helper function to run a single, complete training job for one agent.
     """
     logger.info(f"\n{'=' * 80}\n🚀 STARTING TRAINING JOB FOR: {model_dir}\n{'=' * 80}")
-    train_data_manager = DataSourceManager(data_dir, label="Train")
-    symbols = train_data_manager.get_available_symbols()
-    combined_df = train_data_manager.combine_feature_files(symbols)
+
+    # --- FIX: Replaced DataManager with glob and pandas to load local files ---
+    file_pattern = os.path.join(data_dir, '*_daily_context.parquet')
+    all_files = glob.glob(file_pattern)
+
+    if not all_files:
+        logger.error(f"❌ No parquet data files found in {data_dir}. Cannot train models.")
+        logger.error("Please run 'Create_parquet_file_NASDAQ.py' first.")
+        return
+
+    try:
+        df_list = [pd.read_parquet(f) for f in all_files]
+        combined_df = pd.concat(df_list, ignore_index=True)
+    except Exception as e:
+        logger.error(f"❌ Error loading or concatenating parquet files from {data_dir}: {e}")
+        return
+    # --- END FIX ---
+
     if combined_df.empty:
         logger.error(f"❌ Combined training DataFrame is empty from {data_dir}. Cannot train models.")
         return
+
     # The trainer now handles its own parameter loading
     trainer = Gen3ModelTrainer(model_dir=model_dir, agent_name=agent_name)
     trainer.train_specialist_models(combined_df)
-
 
 if __name__ == "__main__":
     # Define the configurations for each agent
