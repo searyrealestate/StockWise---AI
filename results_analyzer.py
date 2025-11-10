@@ -199,23 +199,46 @@ def display_backtest_dashboard(results_df: pd.DataFrame, data_manager: DataSourc
                                          key="trade_chart_selector")
     if selected_trade_symbol:
         trade_to_plot = results_df[results_df['Symbol'] == selected_trade_symbol].iloc[0]
-        fig = create_trade_chart(trade_to_plot, data_manager)
+        fig = create_trade_chart(trade_to_plot, data_manager, full_trade_row=trade_to_plot)
         st.plotly_chart(fig, use_container_width=True)
 
 
-def create_trade_chart(trade_data: pd.Series, data_manager: DataSourceManager):
+def create_trade_chart(trade_data: pd.Series, data_manager: DataSourceManager, full_trade_row: pd.Series = None):
     """Generates a Plotly chart visualizing a single simulated trade."""
     symbol = trade_data['Symbol']
     entry_date = pd.to_datetime(trade_data['Entry Date'])
     exit_date = pd.to_datetime(trade_data['Exit Date'])
 
-    chart_start_date = entry_date - pd.Timedelta(days=30)
+    chart_start_date = entry_date - pd.Timedelta(days=250)
     chart_end_date = exit_date + pd.Timedelta(days=10)
     df = data_manager.get_stock_data(symbol, start_date=chart_start_date, end_date=chart_end_date)
     fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['open'], high=df['high'],
                                          low=df['low'], close=df['close'], name='Price')])
+
+    # --- Add Mico System Lines ---
+    if full_trade_row is not None and full_trade_row.get('Source') == 'MICO':
+        # Add Mico SMAs
+        if len(df) >= 50:
+            sma_50 = df['close'].rolling(50).mean()
+            fig.add_trace(
+                go.Scatter(x=df.index, y=sma_50, mode='lines', name='SMA 50', line=dict(color='blue', width=1)))
+        if len(df) >= 200:
+            sma_200 = df['close'].rolling(200).mean()
+            fig.add_trace(
+                go.Scatter(x=df.index, y=sma_200, mode='lines', name='SMA 200', line=dict(color='purple', width=1)))
+
+        # Add Mico Stop-Loss and Profit-Target Lines
+        fig.add_hline(y=trade_data['Stop-Loss'], line_dash="dash", line_color="red", name="Mico Stop-Loss")
+        fig.add_hline(y=trade_data['Profit Target'], line_dash="dash", line_color="green", name="Mico Profit Target")
+    else:
+        # --- AI trades logic ---
+        fig.add_hline(y=trade_data['Stop-Loss'], line_dash="dash", line_color="red", name="Stop-Loss")
+        fig.add_hline(y=trade_data['Profit Target'], line_dash="dash", line_color="green", name="Profit Target")
+
+    # Add Entry Marker
     fig.add_trace(go.Scatter(x=[entry_date], y=[trade_data['Entry Price']], mode='markers',
                              marker=dict(color='blue', size=12, symbol='circle'), name='Entry'))
+
     fig.add_hline(y=trade_data['Stop-Loss'], line_dash="dash", line_color="red", name="Stop-Loss")
     fig.add_hline(y=trade_data['Profit Target'], line_dash="dash", line_color="green", name="Profit Target")
 
@@ -228,3 +251,68 @@ def create_trade_chart(trade_data: pd.Series, data_manager: DataSourceManager):
     fig.update_layout(title=f"Trade Analysis for {symbol} ({trade_data['Outcome']})", xaxis_rangeslider_visible=False,
                       legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     return fig
+
+
+
+# def create_trade_chart(trade_data: pd.Series, data_manager: DataSourceManager, full_trade_row: pd.Series = None):
+#     """Generates a Plotly chart visualizing a single simulated trade."""
+#     symbol = trade_data['Symbol']
+#     entry_date = pd.to_datetime(trade_data['Entry Date'])
+#     exit_date = pd.to_datetime(trade_data['Exit Date'])
+#
+#     # Use a wider date range to ensure SMAs are calculated
+#     chart_start_date = entry_date - pd.Timedelta(days=250)
+#     chart_end_date = exit_date + pd.Timedelta(days=10)
+#     df = data_manager.get_stock_data(symbol, start_date=chart_start_date, end_date=chart_end_date)
+#
+#     fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['open'], high=df['high'],
+#                                          low=df['low'], close=df['close'], name='Price')])
+#
+#     # --- NEW: Add Mico System Lines ---
+#     if full_trade_row is not None and full_trade_row.get('Source') == 'MICO':
+#         # Add Mico SMAs
+#         if len(df) >= 50:
+#             sma_50 = df['close'].rolling(50).mean()
+#             fig.add_trace(
+#                 go.Scatter(x=df.index, y=sma_50, mode='lines', name='SMA 50', line=dict(color='blue', width=1)))
+#         if len(df) >= 200:
+#             sma_200 = df['close'].rolling(200).mean()
+#             fig.add_trace(
+#                 go.Scatter(x=df.index, y=sma_200, mode='lines', name='SMA 200', line=dict(color='purple', width=1)))
+#
+#         # Add Mico Stop-Loss and Profit-Target Lines (which are already in trade_data)
+#         fig.add_hline(y=trade_data['Stop-Loss'], line_dash="dash", line_color="red", name="Mico Stop-Loss")
+#         fig.add_hline(y=trade_data['Profit Target'], line_dash="dash", line_color="green", name="Mico Profit Target")
+#     else:
+#         # --- This is the OLD logic, which runs for AI trades ---
+#         fig.add_hline(y=trade_data['Stop-Loss'], line_dash="dash", line_color="red", name="Stop-Loss")
+#         fig.add_hline(y=trade_data['Profit Target'], line_dash="dash", line_color="green", name="Profit Target")
+#     # --- END NEW ---
+#
+#     # Add Entry Marker
+#     fig.add_trace(go.Scatter(x=[entry_date], y=[trade_data['Entry Price']], mode='markers',
+#                              marker=dict(color='blue', size=12, symbol='circle'), name='Entry'))
+#
+#     # Chart will now correctly show the icon based on P/L %
+#     exit_marker_symbol = 'star-diamond' if trade_data['P/L %'] > 0 else 'x'
+#     exit_marker_color = 'green' if trade_data['P/L %'] > 0 else 'red'
+#
+#     fig.add_trace(go.Scatter(x=[exit_date], y=[trade_data['Exit Price']], mode='markers',
+#                              marker=dict(color=exit_marker_color, size=14, symbol=exit_marker_symbol), name='Exit'))
+#
+#     # Set the x-axis range to focus on the trade
+#     zoom_start_date = entry_date - pd.Timedelta(days=30)
+#     fig.update_layout(
+#         title=f"Trade Analysis for {symbol} ({trade_data['Outcome']})",
+#         xaxis_rangeslider_visible=False,
+#         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+#         xaxis_range=[zoom_start_date, chart_end_date]  # Focus the chart on the trade
+#     )
+#
+#     # Use template from session state for dark/light mode
+#     if st.session_state.get('template', 'plotly_dark') == 'plotly_dark':
+#         fig.update_layout(template="plotly_dark")
+#     else:
+#         fig.update_layout(template="plotly_white")
+#
+#     return fig
