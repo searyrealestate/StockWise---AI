@@ -1204,9 +1204,15 @@ def create_enhanced_interface(IS_CLOUD = False):
 
     selected_agent_name = st.sidebar.selectbox("🧠 Select AI Agent", options=list(AGENT_CONFIGS.keys()))
     investment_amount = st.sidebar.number_input(
-        "Hypothetical Investment per Trade ($)",
-        min_value=100, value=1000, step=50,
-        help="Set the amount to use for calculating hypothetical net profit in the screener."
+        "Initial Portfolio Value ($)",  # Renamed label
+        min_value=10, value=1000, step=10,
+        help="The total starting capital for the backtest."
+    )
+
+    risk_per_trade_percent = st.sidebar.slider(
+        "Risk per Trade (%)",
+        min_value=0.5, max_value=5.0, value=1.0, step=0.1,
+        help="The maximum percentage of the portfolio to risk on a single trade."
     )
     stock_symbol = st.sidebar.text_input("📊 Stock Symbol", value="NVDA").upper().strip()
 
@@ -1464,7 +1470,8 @@ def create_enhanced_interface(IS_CLOUD = False):
                 results_analyzer.run_backtest(
                     trades_df=st.session_state.screener_results,
                     data_manager=st.session_state.data_manager,
-                    investment_amount=investment_amount
+                    initial_portfolio_value=investment_amount,
+                    risk_per_trade_percent=risk_per_trade_percent
                 )
 
     if not analyze_btn and not scan_btn and not optimize_btn:

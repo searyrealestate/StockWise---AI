@@ -425,9 +425,9 @@ class DataSourceManager(EWrapper, EClient):
             try:
                 if start_date:
                     df = yf.download(symbol, start=start_date, end=end_date, interval=yfinance_interval,
-                                     auto_adjust=True, progress=False)
+                                     auto_adjust=False, progress=False)
                 else:
-                    df = yf.download(symbol, period=f"{days_back}d", interval=yfinance_interval, auto_adjust=True,
+                    df = yf.download(symbol, period=f"{days_back}d", interval=yfinance_interval, auto_adjust=False,
                                      progress=False)
 
                 if not df.empty:

@@ -71,6 +71,8 @@ class MichaAdvisor:
         atr_period = params.get('atr_period', 14)
         atr_mult_stop = params.get('atr_mult_stop', 2.0)
         atr_mult_profit = params.get('atr_mult_profit', 2.0)
+        stop_loss_mode = params.get('stop_loss_mode', 'atr')  # 'atr' or 'ma'
+        ma_stop_period = params.get('ma_stop_period', 50)  # e.g., use 50-day MA as stop
 
         # Use sma_long as minimum data requirement
         df_raw = _self.dm.get_stock_data(symbol, days_back=sma_long + 50)
@@ -87,13 +89,17 @@ class MichaAdvisor:
             return {'signal': 'WAIT', 'reason': 'Data error after calculating indicators.'}
 
         # --- Apply indicators with dynamic lengths ---
-        df_slice.ta.sma(length=sma_short, append=True, col_names=f'sma_{sma_short}')
-        df_slice.ta.sma(length=sma_long, append=True, col_names=f'sma_{sma_long}')
-        df_slice.ta.rsi(length=rsi_period, append=True, col_names=f'rsi_{rsi_period}')
-        df_slice.ta.macd(fast=macd_fast, slow=macd_slow, signal=macd_signal, append=True,
-                         col_names=(f"macd_{macd_fast}_{macd_slow}", f"macd_hist_{macd_fast}_{macd_slow}",
-                                    f"macd_signal_{macd_fast}_{macd_slow}"))
-        df_slice.ta.atr(length=atr_period, append=True, col_names=f'atr_{atr_period}')
+        df_slice.ta.sma(length=sma_short, append=True)
+        df_slice.ta.sma(length=sma_long, append=True)
+
+        # --- Ensure the MA for the stop-loss is calculated ---
+        if stop_loss_mode == 'ma' and f'sma_{ma_stop_period}' not in (f'sma_{sma_short}', f'sma_{sma_long}'):
+            _self.log(f"MICO: Calculating extra SMA-{ma_stop_period} for stop-loss.", "DEBUG")
+            df_slice.ta.sma(length=ma_stop_period, append=True)
+
+        df_slice.ta.rsi(length=rsi_period, append=True)
+        df_slice.ta.macd(fast=macd_fast, slow=macd_slow, signal=macd_signal, append=True)
+        df_slice.ta.atr(length=atr_period, append=True)
         df_slice.columns = [col.lower() for col in df_slice.columns]
         df_slice.dropna(inplace=True)
 
@@ -117,7 +123,11 @@ class MichaAdvisor:
             _self.log(f"MICO: {symbol} failed RSI check ({latest[f'rsi_{rsi_period}']:.1f}).", "DEBUG")
             reasons.append(f"❌ RSI ({latest[f'rsi_{rsi_period}']:.1f}) >= {rsi_threshold}.")
 
-        if latest[f"macd_{macd_fast}_{macd_slow}"] > latest[f"macd_signal_{macd_fast}_{macd_slow}"]:
+        # --- CORRECTED MACD Column Name Check ---
+        macd_col = f"macd_{macd_fast}_{macd_slow}_{macd_signal}"
+        signal_col = f"macds_{macd_fast}_{macd_slow}_{macd_signal}"  # Note the 's'
+
+        if latest[macd_col] > latest[signal_col]:
             buy_conditions_met += 1
             reasons.append("✅ MACD > signal line.")
         else:
@@ -132,9 +142,8 @@ class MichaAdvisor:
 
             # --- ADD FUNDAMENTALS ---
             pe_ratio, ps_ratio, de_ratio = None, None, None
-
             try:
-                info = _self.dm.get_fundamental_info(symbol)  # Call the new method
+                info = _self.dm.get_fundamental_info(symbol)
                 if info:
                     pe_ratio = info.get('trailingPE')
                     ps_ratio = info.get('priceToSalesTrailing12Months')
@@ -143,53 +152,76 @@ class MichaAdvisor:
             except Exception as e:
                 _self.log(f"MICO: Could not fetch fundamentals for {symbol}. Error: {e}", "WARN")
 
-            # --- This is the correct logic for a "BUY" signal ---
-            # Stop-loss should be BELOW the current price
-            stop_loss_price = current_price - (atr_value * atr_mult_stop)
+                # --- START OF LOGIC THAT WAS INDENTED WRONG ---
+                # Now it is OUTSIDE the 'except' block
 
-            # Risk is the positive distance between price and stop
-            risk = current_price - stop_loss_price
+                # --- Dynamic Stop-Loss Logic ---
+                if stop_loss_mode == 'ma':
+                    stop_loss_price = latest[f'sma_{ma_stop_period}']
+                    _self.log(f"MICO: {symbol} using MA-based stop at {stop_loss_price:.2f}", "DEBUG")
+                else:  # Default to ATR
+                    stop_loss_price = current_price - (atr_value * atr_mult_stop)
+                    _self.log(f"MICO: {symbol} using ATR-based stop at {stop_loss_price:.2f}", "DEBUG")
 
-            # Profit target should be ABOVE the current price
-            profit_target_price = current_price + (risk * atr_mult_profit)  # Use R/R
-            return {
-                'signal': 'BUY', 'reason': "\n".join(reasons),
-                'current_price': current_price,
-                'stop_loss_price': stop_loss_price,
-                'profit_target_price': profit_target_price,
-                'debug_rsi': latest[f'rsi_{rsi_period}'],
-                'PE Ratio': pe_ratio,  # Add to output
-                'P/S Ratio': ps_ratio,  # Add to output
-                'Debt/Equity': de_ratio  # Add to output
-            }
+                risk = current_price - stop_loss_price
+
+                # --- Safety check ---
+                if risk <= 0:
+                    _self.log(f"MICO: {symbol} invalid risk ({risk}). Price is below stop-loss. Defaulting to ATR.",
+                              "WARN")
+                    stop_loss_price = current_price - (atr_value * atr_mult_stop)  # Default to ATR
+                    risk = current_price - stop_loss_price
+
+                    # Profit target should be ABOVE the current price
+                profit_target_price = current_price + (risk * atr_mult_profit)  # Use R/R
+
+                return {
+                    'signal': 'BUY', 'reason': "\n".join(reasons),
+                    'current_price': current_price,
+                    'stop_loss_price': stop_loss_price,
+                    'profit_target_price': profit_target_price,
+                    'debug_rsi': latest[f'rsi_{rsi_period}'],
+                    'PE Ratio': pe_ratio,  # Add to output
+                    'P/S Ratio': ps_ratio,  # Add to output
+                    'Debt/Equity': de_ratio  # Add to output
+                }
+
         _self.log(f"MICO: {symbol} did not meet all conditions. Signal: WAIT.", "DEBUG")
         return {'signal': 'WAIT', 'reason': "\n".join(reasons)}
 
+    # def run_screener(self, stock_universe: list):
+    #     """Scans a universe of stocks and displays Micha BUY signals in a Streamlit UI."""
+    #     st.subheader("📜 Micha System Screener Results")
+    #
+    #     recommended_trades = []
+    #     progress_placeholder = st.empty()
+    #     results_placeholder = st.empty()
+    #
+    #     for i, symbol in enumerate(stock_universe):
+    #         progress_text = f"Scanning... ({i + 1}/{len(stock_universe)}): {symbol}"
+    #         progress_placeholder.progress((i + 1) / len(stock_universe), text=progress_text)
+    #
+    #         result = self.analyze(symbol)
+    #         if result and result['signal'] == 'BUY':
+    #             trade_info = {
+    #                 'Symbol': symbol,
+    #                 'Source': 'Micha',  # Identifies the source system
+    #                 'Reason': result.get('reason', 'N/A')
+    #             }
+    #             recommended_trades.append(trade_info)
+    #
+    #             # Update table in real-time
+    #             temp_df = pd.DataFrame(recommended_trades)
+    #             results_placeholder.dataframe(temp_df, use_container_width=True)
+    #
+    #     progress_placeholder.empty()
+    #     if not recommended_trades:
+    #         results_placeholder.warning("Micha System found no BUY signals in this universe.")
+
     def run_screener(self, stock_universe: list):
-        """Scans a universe of stocks and displays Micha BUY signals in a Streamlit UI."""
-        st.subheader("📜 Micha System Screener Results")
-
-        recommended_trades = []
-        progress_placeholder = st.empty()
-        results_placeholder = st.empty()
-
-        for i, symbol in enumerate(stock_universe):
-            progress_text = f"Scanning... ({i + 1}/{len(stock_universe)}): {symbol}"
-            progress_placeholder.progress((i + 1) / len(stock_universe), text=progress_text)
-
-            result = self.analyze(symbol)
-            if result and result['signal'] == 'BUY':
-                trade_info = {
-                    'Symbol': symbol,
-                    'Source': 'Micha',  # Identifies the source system
-                    'Reason': result.get('reason', 'N/A')
-                }
-                recommended_trades.append(trade_info)
-
-                # Update table in real-time
-                temp_df = pd.DataFrame(recommended_trades)
-                results_placeholder.dataframe(temp_df, use_container_width=True)
-
-        progress_placeholder.empty()
-        if not recommended_trades:
-            results_placeholder.warning("Micha System found no BUY signals in this universe.")
+        """
+        Scans a universe of stocks and displays Micha BUY signals in a Streamlit UI.
+        This function is now DEPRECATED and logic is handled by screener.py
+        """
+        st.warning("MichaAdvisor.run_screener() is deprecated. Use screener.py.", icon="⚠️")
+        return pd.DataFrame()

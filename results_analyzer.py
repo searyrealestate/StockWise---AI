@@ -52,9 +52,11 @@ import streamlit as st
 import plotly.graph_objects as go
 from data_source_manager import DataSourceManager
 from utils import clean_raw_data
+from datetime import datetime
 
 
-def run_backtest(trades_df: pd.DataFrame, data_manager: DataSourceManager, investment_amount: int = 1000):
+def run_backtest(trades_df: pd.DataFrame, data_manager: DataSourceManager,
+                 initial_portfolio_value: int = 100000, risk_per_trade_percent: float = 1.0):
     """
     Simulates trades based on screener recommendations and analyzes the results.
     """
@@ -66,6 +68,12 @@ def run_backtest(trades_df: pd.DataFrame, data_manager: DataSourceManager, inves
     total_trades = len(trades_df)
     progress_bar = st.progress(0, text="Backtesting recommended trades...")
 
+    # Calculate the dollar amount to risk per trade
+    risk_per_trade_dollars = initial_portfolio_value * (risk_per_trade_percent / 100.0)
+
+    # Get today's date ONCE, outside the loop
+    today_str = datetime.now().strftime('%Y-%m-%d')
+
     for i, trade in trades_df.iterrows():
         symbol = trade['Symbol']
         entry_date = pd.to_datetime(trade['Analysis Date'])
@@ -76,8 +84,17 @@ def run_backtest(trades_df: pd.DataFrame, data_manager: DataSourceManager, inves
 
         progress_bar.progress((i + 1) / total_trades, text=f"Analyzing {symbol}...")
 
+        # --- NEW: Position Sizing ---
+        per_share_risk = entry_price - stop_loss
+        if per_share_risk <= 0:
+            st.warning(f"Skipping {symbol}: Invalid risk (Entry: {entry_price}, SL: {stop_loss}).")
+            continue
+
+        num_shares = risk_per_trade_dollars / per_share_risk
+        investment_amount = num_shares * entry_price  # This is now dynamic
+
         # Fetch historical data starting from the entry date
-        df_raw = data_manager.get_stock_data(symbol, start_date=entry_date)
+        df_raw = data_manager.get_stock_data(symbol, start_date=entry_date,end_date=today_str)
 
         # 1. Check if the DataFrame is empty
         # 2. Check if the index is a DatetimeIndex
@@ -118,7 +135,8 @@ def run_backtest(trades_df: pd.DataFrame, data_manager: DataSourceManager, inves
 
         pl_percent = ((exit_price - entry_price) / entry_price) * 100
 
-        actual_profit_dollars = (pl_percent / 100) * investment_amount
+        # --- Calculate P/L based on dynamic shares ---
+        actual_profit_dollars = (exit_price - entry_price) * num_shares
 
         # --- Verification Logic ---
         actual_trade_df = trade_period_df.loc[entry_date:exit_date]
@@ -140,7 +158,9 @@ def run_backtest(trades_df: pd.DataFrame, data_manager: DataSourceManager, inves
             "Max Price": max_price,
             "Min Price": min_price,
             "Est. Net Profit ($)": est_net_profit,
-            "Actual P/L ($)": actual_profit_dollars
+            "Actual P/L ($)": actual_profit_dollars,
+            "Shares": num_shares,  # Added for info
+            "Investment ($)": investment_amount  # Added for info
         })
 
     progress_bar.empty()
@@ -149,10 +169,10 @@ def run_backtest(trades_df: pd.DataFrame, data_manager: DataSourceManager, inves
         return
 
     results_df = pd.DataFrame(trade_results)
-    display_backtest_dashboard(results_df, data_manager)
+    display_backtest_dashboard(results_df, data_manager, initial_portfolio_value)
 
 
-def display_backtest_dashboard(results_df: pd.DataFrame, data_manager: DataSourceManager):
+def display_backtest_dashboard(results_df: pd.DataFrame, data_manager: DataSourceManager, initial_portfolio_value: int):
     """Renders the performance metrics and trade analysis UI."""
     st.markdown("---")
     st.header("🔬 Backtest Analysis Results")
@@ -170,12 +190,16 @@ def display_backtest_dashboard(results_df: pd.DataFrame, data_manager: DataSourc
 
     total_profit_dollars = results_df['Actual P/L ($)'].sum()
 
+    # --- Add Portfolio Metrics ---
+    final_portfolio_value = initial_portfolio_value + total_profit_dollars
+    total_return_percent = (total_profit_dollars / initial_portfolio_value) * 100
+
     col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Win Rate", f"{win_rate:.2f}%")
-    col2.metric("Avg. Gain / Loss", f"{avg_gain:.2f}% / {avg_loss:.2f}%")
-    col3.metric("Profit Factor", f"{profit_factor:.2f}")
-    col4.metric("Total Trades", f"{len(results_df)}")
-    col5.metric("Total Profit ($)", f"{total_profit_dollars:.2f}")
+    col2.metric("Profit Factor", f"{profit_factor:.2f}")
+    col3.metric("Total P/L ($)", f"{total_profit_dollars:.2f}")
+    col4.metric("Total Return %", f"{total_return_percent:.2f}%")
+    col5.metric("Final Portfolio ($)", f"{final_portfolio_value:.2f}")
 
     # --- Trade Log & Chart Visualization ---
     st.subheader("Trade Log & Verification")
@@ -183,15 +207,14 @@ def display_backtest_dashboard(results_df: pd.DataFrame, data_manager: DataSourc
     # Reordered columns for better readability with new data
     display_cols = [
         "Symbol", "Status", "P/L %", "Outcome", "Entry Date", "Entry Price",
-        "Exit Date", "Exit Price", "Stop-Loss", "Profit Target", "Max Price", "Min Price", "Est. Net Profit ($)"
-        , "Actual P/L ($)"
+        "Exit Date", "Exit Price", "Stop-Loss", "Profit Target",
+        "Shares", "Investment ($)", "Actual P/L ($)"
     ]
     st.dataframe(results_df[display_cols].style.format({
         "P/L %": "{:.2f}%", "Entry Price": "${:.2f}", "Exit Price": "${:.2f}",
         "Stop-Loss": "${:.2f}", "Profit Target": "${:.2f}",
-        "Max Price": "${:.2f}", "Min Price": "${:.2f}",
-        "Est. Net Profit ($)": "${:.2f}",
-        "Actual P/L ($)": "${:.2f}"
+        "Shares": "{:.2f}", "Investment ($)": "${:,.2f}",
+        "Actual P/L ($)": "${:,.2f}"
     }), use_container_width=True)
 
     st.subheader("Visual Trade Analysis")
@@ -219,7 +242,6 @@ def create_trade_chart(trade_data: pd.Series, data_manager: DataSourceManager):
     fig.add_hline(y=trade_data['Stop-Loss'], line_dash="dash", line_color="red", name="Stop-Loss")
     fig.add_hline(y=trade_data['Profit Target'], line_dash="dash", line_color="green", name="Profit Target")
 
-    # Chart will now correctly show the icon based on P/L %
     exit_marker_symbol = 'star-diamond' if trade_data['P/L %'] > 0 else 'x'
     exit_marker_color = 'green' if trade_data['P/L %'] > 0 else 'red'
 

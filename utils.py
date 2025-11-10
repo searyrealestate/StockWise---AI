@@ -62,6 +62,14 @@ def clean_raw_data(df: pd.DataFrame) -> pd.DataFrame:
 
     df.columns = [col.lower() for col in df.columns]
 
+    df = df.loc[:, ~df.columns.duplicated(keep='first')]
+
+    # --- Handle Adjusted Close ---
+    # Use 'adj close' as the new 'close' if it exists
+    if 'adj close' in df.columns:
+        df['close'] = df['adj close']
+        df = df.drop(columns=['adj close'])
+
     standard_cols = ['open', 'high', 'low', 'close', 'volume']
     for col in standard_cols:
         if col in df.columns:
