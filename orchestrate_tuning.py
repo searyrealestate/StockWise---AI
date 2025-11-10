@@ -303,7 +303,6 @@ if __name__ == "__main__":
         # --- ROUTE TO THE CORRECT LOGIC ---
 
     if run_mode == '1':
-        # --- This is the OLD logic for a Standard Run ---
         logger.info("Starting Standard Run...")
         agents_to_tune = get_user_selection("Which agent do you want to optimize?", ALL_AGENTS)
         model_types_to_tune = get_user_selection("Which model type do you want to optimize?", ALL_MODEL_TYPES)
@@ -311,7 +310,6 @@ if __name__ == "__main__":
         all_jobs = list(itertools.product(agents_to_tune, model_types_to_tune, clusters_to_tune))
 
     elif run_mode == '2':
-        # --- This is the NEW logic for a Custom Run ---
         logger.info("Starting Custom Run...")
         all_jobs = get_custom_jobs()
 
@@ -328,7 +326,7 @@ if __name__ == "__main__":
 
     # --- Run tuning jobs in parallel ---
     # MAX_WORKERS = max(1, 1 if not os.cpu_count() else os.cpu_count() // 2)
-    MAX_WORKERS = 7
+    MAX_WORKERS = 2
     logger.info(f"Initializing ProcessPoolExecutor with {MAX_WORKERS} workers.")
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
