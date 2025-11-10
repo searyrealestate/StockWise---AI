@@ -51,10 +51,13 @@ class MichaAdvisor:
     Analyzes stocks based on a predefined set of technical indicator rules.
     """
 
-    def __init__(self, data_manager: DataSourceManager):
+    def __init__(self, data_manager: DataSourceManager, logger=None):
         self.dm = data_manager
+        # Use a dummy logger if none is provided, prevents crashes
+        self.log = logger if logger else lambda msg, level="INFO": None
 
     def analyze(_self, symbol: str, analysis_date, params: dict = None) -> dict:
+        _self.log(f"MICO: Starting analysis for {symbol} on {analysis_date}.", "INFO")
         if params is None: params = {}
 
         # --- Make all rules dynamic based on params ---
@@ -67,17 +70,21 @@ class MichaAdvisor:
         macd_signal = params.get('macd_signal', 9)
         atr_period = params.get('atr_period', 14)
         atr_mult_stop = params.get('atr_mult_stop', 2.0)
-        atr_mult_profit = params.get('atr_mult_profit', 2.0)  # Risk/Reward ratio
+        atr_mult_profit = params.get('atr_mult_profit', 2.0)
 
         # Use sma_long as minimum data requirement
         df_raw = _self.dm.get_stock_data(symbol, days_back=sma_long + 50)
         if df_raw.empty:
+            _self.log(f"MICO: Failed to download data for {symbol}.", "WARN")
             return {'signal': 'WAIT', 'reason': f'Failed to download data for {symbol} (Network Error).'}
 
         df_slice = df_raw[df_raw.index <= pd.to_datetime(analysis_date)]
 
-        if df_slice.empty or len(df_slice) < sma_long:
-            return {'signal': 'WAIT', 'reason': 'Insufficient historical data for this date.'}
+        # if df_slice.empty or len(df_slice) < sma_long:
+        #     return {'signal': 'WAIT', 'reason': 'Insufficient historical data for this date.'}
+        if df_slice.empty:
+            _self.log(f"MICO: Data error after calculating indicators for {symbol}.", "WARN")
+            return {'signal': 'WAIT', 'reason': 'Data error after calculating indicators.'}
 
         # --- Apply indicators with dynamic lengths ---
         df_slice.ta.sma(length=sma_short, append=True, col_names=f'sma_{sma_short}')
@@ -87,6 +94,7 @@ class MichaAdvisor:
                          col_names=(f"macd_{macd_fast}_{macd_slow}", f"macd_hist_{macd_fast}_{macd_slow}",
                                     f"macd_signal_{macd_fast}_{macd_slow}"))
         df_slice.ta.atr(length=atr_period, append=True, col_names=f'atr_{atr_period}')
+        df_slice.columns = [col.lower() for col in df_slice.columns]
         df_slice.dropna(inplace=True)
 
         if df_slice.empty: return {'signal': 'WAIT', 'reason': 'Data error after calculating indicators.'}
@@ -99,24 +107,41 @@ class MichaAdvisor:
             buy_conditions_met += 1
             reasons.append(f"✅ Price > {sma_short}-day SMA & {sma_short} > {sma_long}-day SMA.")
         else:
+            _self.log(f"MICO: {symbol} failed trend check.", "DEBUG")
             reasons.append(f"❌ Price not in uptrend (SMA {sma_short}/{sma_long}).")
 
         if latest[f'rsi_{rsi_period}'] < rsi_threshold:
             buy_conditions_met += 1
             reasons.append(f"✅ RSI ({latest[f'rsi_{rsi_period}']:.1f}) < {rsi_threshold}.")
         else:
+            _self.log(f"MICO: {symbol} failed RSI check ({latest[f'rsi_{rsi_period}']:.1f}).", "DEBUG")
             reasons.append(f"❌ RSI ({latest[f'rsi_{rsi_period}']:.1f}) >= {rsi_threshold}.")
 
         if latest[f"macd_{macd_fast}_{macd_slow}"] > latest[f"macd_signal_{macd_fast}_{macd_slow}"]:
             buy_conditions_met += 1
             reasons.append("✅ MACD > signal line.")
         else:
+            _self.log(f"MICO: {symbol} failed MACD check.", "DEBUG")
             reasons.append("❌ MACD < signal line.")
 
         # --- All 3 conditions must be met ---
         if buy_conditions_met == 3:
+            _self.log(f"MICO: BUY signal triggered for {symbol}.", "INFO")
             current_price = latest['close']
             atr_value = latest[f'atr_{atr_period}']
+
+            # --- ADD FUNDAMENTALS ---
+            pe_ratio, ps_ratio, de_ratio = None, None, None
+
+            try:
+                info = _self.dm.get_fundamental_info(symbol)  # Call the new method
+                if info:
+                    pe_ratio = info.get('trailingPE')
+                    ps_ratio = info.get('priceToSalesTrailing12Months')
+                    de_ratio = info.get('debtToEquity')
+                    _self.log(f"MICO: Fetched fundamentals for {symbol}. PE: {pe_ratio}", "DEBUG")
+            except Exception as e:
+                _self.log(f"MICO: Could not fetch fundamentals for {symbol}. Error: {e}", "WARN")
 
             # --- This is the correct logic for a "BUY" signal ---
             # Stop-loss should be BELOW the current price
@@ -132,8 +157,12 @@ class MichaAdvisor:
                 'current_price': current_price,
                 'stop_loss_price': stop_loss_price,
                 'profit_target_price': profit_target_price,
-                'debug_rsi': latest[f'rsi_{rsi_period}']
+                'debug_rsi': latest[f'rsi_{rsi_period}'],
+                'PE Ratio': pe_ratio,  # Add to output
+                'P/S Ratio': ps_ratio,  # Add to output
+                'Debt/Equity': de_ratio  # Add to output
             }
+        _self.log(f"MICO: {symbol} did not meet all conditions. Signal: WAIT.", "DEBUG")
         return {'signal': 'WAIT', 'reason': "\n".join(reasons)}
 
     def run_screener(self, stock_universe: list):
