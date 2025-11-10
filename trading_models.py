@@ -14,8 +14,9 @@ class MeanReversionAdvisor:
     Signal 1: Price touches the lower Bollinger Band.
     Signal 2: RSI is below the oversold threshold.
     """
-    def __init__(self, data_manager):
+    def __init__(self, data_manager, logger=None):
         self.dm = data_manager
+        self.log = logger if logger else lambda msg, level="INFO": None
 
     @st.cache_data(ttl=900)
     def analyze(_self, symbol: str, analysis_date, params: dict = None) -> dict:
@@ -58,8 +59,9 @@ class MeanReversionAdvisor:
 class BreakoutAdvisor:
     """Buys stocks that break above their 20-day high, indicating strong momentum."""
 
-    def __init__(self, data_manager):
+    def __init__(self, data_manager, logger=None):
         self.dm = data_manager
+        self.log = logger if logger else lambda msg, level="INFO": None
 
     @st.cache_data(ttl=900)
     def analyze(_self, symbol: str, analysis_date, params: dict = None) -> dict:
@@ -98,8 +100,9 @@ class SuperTrendAdvisor:
     Buys on pullbacks to the SuperTrend line *while* in an uptrend.
     """
 
-    def __init__(self, data_manager):
+    def __init__(self, data_manager, logger=None):
         self.dm = data_manager
+        self.log = logger if logger else lambda msg, level="INFO": None
 
     @st.cache_data(ttl=900)
     def analyze(_self, symbol: str, analysis_date, params: dict = None) -> dict:
@@ -151,8 +154,9 @@ class MovingAverageCrossoverAdvisor:
     Buys on pullbacks *after* a "Golden Cross" is already active.
     This is a "Buy the Dip in an Uptrend" strategy.
     """
-    def __init__(self, data_manager):
+    def __init__(self, data_manager, logger=None):
         self.dm = data_manager
+        self.log = logger if logger else lambda msg, level="INFO": None
 
     @st.cache_data(ttl=900)
     def analyze(_self, symbol: str, analysis_date, params: dict = None) -> dict:
@@ -196,8 +200,9 @@ class MovingAverageCrossoverAdvisor:
 class VolumeMomentumAdvisor:
     """Buys when On-Balance Volume (OBV) shows strong momentum, confirming the price trend."""
 
-    def __init__(self, data_manager):
+    def __init__(self, data_manager, logger=None):
         self.dm = data_manager
+        self.log = logger if logger else lambda msg, level="INFO": None
 
     @st.cache_data(ttl=900)
     def analyze(_self, symbol: str, analysis_date, params: dict = None) -> dict:
