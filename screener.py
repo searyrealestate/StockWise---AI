@@ -33,6 +33,7 @@ import pandas as pd
 import streamlit as st
 from utils import clean_raw_data
 import json
+import concurrent.futures
 
 
 def run_unified_screener(active_advisors: dict, stock_universe: list,
@@ -55,53 +56,94 @@ def run_unified_screener(active_advisors: dict, stock_universe: list,
         except FileNotFoundError:
             st.warning("⚠️ `best_params.json` not found. Running with default model parameters.")
 
-    for i, symbol in enumerate(stock_universe):
-        scan_models = '/'.join(active_advisors.keys())
-        progress_text = f"Scanning ({scan_models})... ({i + 1}/{total_stocks}): {symbol}"
-        progress_placeholder.progress((i + 1) / total_stocks, text=progress_text)
+    # --- SET UP THE THREAD POOL ---
+    # More workers = faster, but more API requests at once.
+    # 10-15 is a good, safe number for yfinance to avoid rate limits.
+    MAX_WORKERS = 10
 
-        for advisor_name, advisor_instance in active_advisors.items():
-            # Get the specific optimized params for this model, or an empty dict if none exist
-            # Note: The key for the dictionary is the Class Name (e.g., "MichaAdvisor")
-            model_class_name = type(advisor_instance).__name__
-            params_for_model = best_params.get(model_class_name, {})
+    futures_map = {}  # This will track {future: (symbol, advisor_name)}
+    total_jobs = 0
 
-            result = advisor_instance.analyze(symbol, analysis_date, params=params_for_model)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        st.info(f"Submitting {total_stocks * len(active_advisors)} analysis jobs to {MAX_WORKERS} parallel workers...")
 
-            if result and (result.get('signal') or result.get('action')) == 'BUY':
-                buy_price = result.get('current_price', 0)
-                profit_target_price = result.get('profit_target_price', 0)
+        # --- 3. SUBMIT ALL JOBS TO THE QUEUE ---
+        for symbol in stock_universe:
+            for advisor_name, advisor_instance in active_advisors.items():
+                model_class_name = type(advisor_instance).__name__
+                params_for_model = best_params.get(model_class_name, {})
 
-                net_profit_dollars = 0
-                if buy_price > 0 and profit_target_price > 0:
-                    shares = investment_amount / buy_price
-                    gross_profit = (profit_target_price - buy_price) * shares
-                    net_profit_dollars, _ = st.session_state.advisor.apply_israeli_fees_and_tax(gross_profit, shares)
+                # executor.submit schedules the function call to run in a thread
+                future = executor.submit(
+                    advisor_instance.analyze,
+                    symbol=symbol,
+                    analysis_date=analysis_date,
+                    params=params_for_model
+                )
+                futures_map[future] = (symbol, advisor_name)
+                total_jobs += 1
 
-                trade_info = {
-                    'Symbol': symbol,
-                    'Source': advisor_name,
-                    'Entry Price': buy_price if buy_price > 0 else None,
-                    'Profit Target ($)': profit_target_price if profit_target_price > 0 else None,
-                    'Stop-Loss': result.get('stop_loss_price'),
-                    'Est. Net Profit ($)': net_profit_dollars if net_profit_dollars > 0 else None,
-                    # BUG FIX: Always add the Analysis Date, regardless of debug mode.
-                    'Analysis Date': analysis_date.strftime('%Y-%m-%d')
-                }
+        # --- 4. PROCESS RESULTS AS THEY COMPLETE ---
+        processed_count = 0
+        for future in concurrent.futures.as_completed(futures_map):
+            symbol, advisor_name = futures_map[future]
+            processed_count += 1
 
-                if debug_mode:
-                    trade_info['RSI'] = result.get('debug_rsi')
+            try:
+                # Get the result from the completed thread
+                result = future.result()
 
-                recommended_trades.append(trade_info)
+                # --- 5. PROCESS THE RESULT (Same logic as before) ---
+                if result and (result.get('signal') or result.get('action')) == 'BUY':
+                    buy_price = result.get('current_price', 0)
+                    profit_target_price = result.get('profit_target_price', 0)
 
+                    net_profit_dollars = 0
+                    if buy_price > 0 and profit_target_price > 0:
+                        shares = investment_amount / buy_price
+                        gross_profit = (profit_target_price - buy_price) * shares
+                        net_profit_dollars, _ = st.session_state.advisor.apply_israeli_fees_and_tax(gross_profit,
+                                                                                                    shares)
+
+                    trade_info = {
+                        'Symbol': symbol,
+                        'Source': advisor_name,
+                        'Entry Price': buy_price if buy_price > 0 else None,
+                        'Profit Target ($)': profit_target_price if profit_target_price > 0 else None,
+                        'Stop-Loss': result.get('stop_loss_price'),
+                        'Est. Net Profit ($)': net_profit_dollars if net_profit_dollars > 0 else None,
+                        'PE Ratio': result.get('PE Ratio'),
+                        'P/S Ratio': result.get('P/S Ratio'),
+                        'Debt/Equity': result.get('Debt/Equity'),
+                        'Analysis Date': analysis_date.strftime('%Y-%m-%d')
+                    }
+
+                    if debug_mode:
+                        trade_info['RSI'] = result.get('debug_rsi')
+
+                    recommended_trades.append(trade_info)
+
+            except Exception as e:
+                # Log an error if one stock fails, but don't crash the whole screener
+                # We can use the central advisor's logger
+                st.session_state.advisor.log(f"Screener failed for {symbol} ({advisor_name}): {e}", "ERROR")
+
+            # Update progress bar
+            progress_text = f"Scanning... (Processed {processed_count}/{total_jobs} tasks): {symbol}"
+            progress_placeholder.progress(processed_count / total_jobs, text=progress_text)
+
+    # --- 6. ALL JOBS DONE (Same logic as before) ---
     progress_placeholder.empty()
     if not recommended_trades:
         return pd.DataFrame()
 
     final_df = pd.DataFrame(recommended_trades)
-    formatter = {
-        'Entry Price': '${:.2f}', 'Profit Target ($)': '${:.2f}', 'Stop-Loss': '${:.2f}',
-        'Est. Net Profit ($)': '${:.2f}', 'RSI': '{:.2f}'
-    }
+    # formatter = {
+    #     'Entry Price': '${:.2f}', 'Profit Target ($)': '${:.2f}', 'Stop-Loss': '${:.2f}',
+    #     'Est. Net Profit ($)': '${:.2f}', 'RSI': '{:.2f}',
+    #     'PE Ratio': '{:.2f}',
+    #     'P/S Ratio': '{:.2f}',
+    #     'Debt/Equity': '{:.2f}'
+    # }
 
     return final_df

@@ -152,6 +152,7 @@ def load_contextual_data(_data_manager):
         'tlt': tlt_clean
     }
 
+
 @st.cache_data
 def load_nasdaq_tickers(max_stocks=None):
     """Loads NASDAQ ticker symbols from a CSV file."""
@@ -203,12 +204,14 @@ def calculate_stochastic(high, low, close, window=14, smooth_window=3):
 # --- Feature Engineering Pipeline (for Gen-3 Model) ---
 class FeatureCalculator:
     """A dedicated class to handle all feature calculations for the Gen-3 model."""
-    def __init__(self, data_manager, contextual_data, is_cloud):
-        self.data_manager = data_manager
+
+    def __init__(self, data_manager, contextual_data, is_cloud, logger=None):
         self.qqq_data = contextual_data['qqq']
         self.vix_data = contextual_data['vix']
         self.tlt_data = contextual_data['tlt']
         self.is_cloud = is_cloud
+        # 2. ADD this line to store the logger
+        self.log = logger if logger else lambda msg, level="INFO": None
 
     def get_dominant_cycle(self, data, min_period=3, max_period=100) -> float:
         data = pd.Series(data).dropna()
@@ -288,10 +291,10 @@ class FeatureCalculator:
                     qqq_close = self.qqq_data['close'].reindex(df.index, method='ffill')
                     df['correlation_50d_qqq'] = df['close'].rolling(50).corr(qqq_close)
                 else:
-                    st.write("WARNING: Pre-loaded QQQ data is empty. Correlation feature will be zero.")
+                    self.log("Pre-loaded QQQ data is empty. Correlation feature will be zero.", "WARNING")
                     df['correlation_50d_qqq'] = 0.0
             except Exception as e:
-                st.write(f"--- An exception occurred during QQQ data processing: {e} ---")
+                self.log(f"An exception occurred during QQQ data processing: {e}", "ERROR")
                 df['correlation_50d_qqq'] = 0.0
             # try:
             #     # VIX Data
@@ -311,8 +314,10 @@ class FeatureCalculator:
                     aligned_vix = self.vix_data['close'].reindex(df.index, method='ffill')
                     df['vix_close'] = aligned_vix
                 else:
+                    self.log("Pre-loaded VIX data is empty.", "WARNING")
                     df['vix_close'] = 0.0
             except Exception:
+                self.log(f"VIX data processing error: {e}", "ERROR")
                 df['vix_close'] = 0.0
             # try:
             #     # TLT Data
@@ -332,9 +337,12 @@ class FeatureCalculator:
                     aligned_tlt = self.tlt_data['close'].reindex(df.index, method='ffill')
                     df['corr_tlt'] = df['close'].rolling(50).corr(aligned_tlt)
                 else:
+                    self.log("Pre-loaded TLT data is empty.", "WARNING")
                     df['corr_tlt'] = 0.0
             except Exception:
+                self.log(f"TLT data processing error: {e}", "ERROR")
                 df['corr_tlt'] = 0.0
+
             # --- 4. Final Processing (NOW PROTECTED) ---
             df['volatility_90d'] = df['daily_return'].rolling(90).std()
             low_thresh, high_thresh = 0.015, 0.030
@@ -397,18 +405,23 @@ class FeatureCalculator:
             # --- THIS IS THE DEBUG PRINTER ---
             # If ANY error occurs (like missing 'volume'), we catch it here
             # st.error(f"--- DEBUG: Feature calculation FAILED. Error: {e}. Skipping this stock. ---")
+            self.log(f"Feature calculation FAILED. Error: {e}. Skipping this stock.", "ERROR")
             st.exception(e)  # This prints the full error traceback
             return pd.DataFrame()  # Return an empty frame so the screener can continue
 
 
 # --- Main Application Class (with Gen-3 Architecture) ---
 class ProfessionalStockAdvisor:
-    def __init__(self, model_dir: str, data_source_manager=None, debug=False, testing_mode=False, download_log=False):
-        self.log_entries = []
+    def __init__(self, model_dir: str, data_source_manager=None, debug=False, testing_mode=False, download_log=False,
+                 logger=None):
+        # self.log_entries = []
         self.debug = debug
         self.model_dir = model_dir
         self.download_log = download_log
         self.testing_mode = testing_mode
+
+        # 3. Use the central logger
+        self.log = logger if logger else lambda msg, level="INFO": None
 
         if data_source_manager:
             self.data_source_manager = data_source_manager
@@ -500,7 +513,7 @@ class ProfessionalStockAdvisor:
             model_files = glob.glob(os.path.join(self.model_dir, "*.pkl"))
             if not model_files:
                 self.log(f"No local models found in {self.model_dir}.", "ERROR")
-                return None, None
+                return models, feature_names
 
             for model_path in model_files:
                 model_name = os.path.basename(model_path).replace(".pkl", "")
@@ -514,7 +527,7 @@ class ProfessionalStockAdvisor:
             return models, feature_names
         except Exception as e:
             self.log(f"Error loading local models: {e}", "ERROR")
-            return None, None
+            return models, feature_names
 
     @st.cache_resource(ttl=3600)  # Cache for 1 hour
     def _load_gen3_models_v2(_self):
@@ -524,16 +537,19 @@ class ProfessionalStockAdvisor:
         If it fails, it falls back to loading from the local disk.
         """
         try:
-            # --- 1. TRY CLOUD (st.secrets) ---
+            if 'IS_CLOUD' not in st.session_state or not st.session_state.IS_CLOUD:
+                # This is a local run. Raise an exception to jump to the 'except' block.
+                raise Exception("Local run detected (IS_CLOUD=False). Skipping GCS.")
+
+            # --- 2. TRY CLOUD (st.secrets) ---
             # --- DEBUGGING PRINTS START ---
             # st.write("--- DEBUG: Attempting to load models from GCS (Cloud Mode)... ---")
             _self.log("Attempting to load models from GCS (Cloud Mode)...")
-
             creds_json = st.secrets["gcs_service_account"]
             credentials = service_account.Credentials.from_service_account_info(creds_json)
             storage_client = storage.Client(credentials=credentials)
 
-            # *** IMPORTANT: Change this to your bucket name ***
+            # *** bucket name ***
             bucket_name = "stockwise-gen3-models-public"
             bucket = storage_client.bucket(bucket_name)
             # st.write(f"--- DEBUG: Successfully connected to bucket: {bucket_name} ---")
@@ -552,7 +568,7 @@ class ProfessionalStockAdvisor:
 
             if not blobs:
                 _self.log(f"No models found in GCS at gs://{bucket.name}/{_self.model_dir}/", "ERROR")
-                return None, None
+                return models, feature_names
 
             # st.write("--- DEBUG: 'blobs' list is NOT empty. Starting to load models... ---")
 
@@ -580,29 +596,29 @@ class ProfessionalStockAdvisor:
 
             # This will print the full, real error to the screen
             # st.error(f"--- DEBUG: GCS load FAILED. The hidden error is: {e} ---")
-            st.exception(e)  # This will print the full traceback
+            # st.exception(e)  # This will print the full traceback
             # --- END NEW DEBUG ---
 
             # st.write(f"--- DEBUG: GCS load FAILED. Error: {e}. Falling back to local disk... ---")
             return _self._load_models_from_disk()
 
-    def log(self, message, level="INFO"):
-        timestamp = datetime.now().strftime('%H:%M:%S')
-        entry = f"[{timestamp}] [{level}] {message}"
-        if not hasattr(self, 'log_entries'):
-            self.log_entries = []
-        self.log_entries.append(entry)
-        if self.download_log and hasattr(self, 'log_file') and self.log_file:
-            try:
-                with open(self.log_file, "a", encoding='utf-8') as f:
-                    f.write(entry + "\n")
-            except Exception as e:
-                st.error(f"Failed to write to log file: {e}")
+    # def log(self, message, level="INFO"):
+    #     timestamp = datetime.now().strftime('%H:%M:%S')
+    #     entry = f"[{timestamp}] [{level}] {message}"
+    #     if not hasattr(self, 'log_entries'):
+    #         self.log_entries = []
+    #     self.log_entries.append(entry)
+    #     if self.download_log and hasattr(self, 'log_file') and self.log_file:
+    #         try:
+    #             with open(self.log_file, "a", encoding='utf-8') as f:
+    #                 f.write(entry + "\n")
+    #         except Exception as e:
+    #             st.error(f"Failed to write to log file: {e}")
 
-    def setup_log_file(self):
-        log_dir = "logs"
-        os.makedirs(log_dir, exist_ok=True)
-        return os.path.join(log_dir, f"stockwise_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+    # def setup_log_file(self):
+    #     log_dir = "logs"
+    #     os.makedirs(log_dir, exist_ok=True)
+    #     return os.path.join(log_dir, f"stockwise_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
 
     def validate_symbol_professional(self, symbol):
         self.log(f"Using yfinance for validation of {symbol}", "INFO")
@@ -1188,9 +1204,15 @@ def create_enhanced_interface(IS_CLOUD = False):
 
     selected_agent_name = st.sidebar.selectbox("🧠 Select AI Agent", options=list(AGENT_CONFIGS.keys()))
     investment_amount = st.sidebar.number_input(
-        "Hypothetical Investment per Trade ($)",
-        min_value=100, value=1000, step=50,
-        help="Set the amount to use for calculating hypothetical net profit in the screener."
+        "Initial Portfolio Value ($)",  # Renamed label
+        min_value=10, value=1000, step=10,
+        help="The total starting capital for the backtest."
+    )
+
+    risk_per_trade_percent = st.sidebar.slider(
+        "Risk per Trade (%)",
+        min_value=0.5, max_value=5.0, value=1.0, step=0.1,
+        help="The maximum percentage of the portfolio to risk on a single trade."
     )
     stock_symbol = st.sidebar.text_input("📊 Stock Symbol", value="NVDA").upper().strip()
 
@@ -1211,6 +1233,14 @@ def create_enhanced_interface(IS_CLOUD = False):
     analyze_btn = st.sidebar.button("🚀 Run Professional Analysis", type="primary", use_container_width=True)
     use_market_filter = st.sidebar.checkbox("Enable Market Health Filter (SPY)", value=True)
     st.sidebar.checkbox("Show Mico System Lines", key="show_mico_lines", value=False)
+
+    st.sidebar.markdown("---")
+    st.sidebar.header("⚙️ System & Logging")
+    # This checkbox will control the logging
+    st.session_state.enable_logging = st.sidebar.checkbox("Enable Detailed Logging", value=False)
+
+    # Placeholder for the log download button
+    log_download_placeholder = st.sidebar.empty()
 
     # todo: this should run in parallel to the main UI, the user can work in parallel with the screener
     # todo: check of an option to save the data or now to the delete the information to the user until
@@ -1298,8 +1328,18 @@ def create_enhanced_interface(IS_CLOUD = False):
 
         ai_result, mico_result, stock_data = None, None, None
         with st.spinner(f"Running full analysis for {stock_symbol}..."):
-            stock_data, ai_result = advisor.run_analysis(stock_symbol, analysis_date, use_market_filter)
-            mico_result = st.session_state.mico_advisor.analyze(stock_symbol, analysis_date, params={})
+            ai_result, mico_result = {}, {}  # Init empty dicts
+
+            if run_ai:
+                stock_data, ai_result = advisor.run_analysis(stock_symbol, analysis_date, use_market_filter)
+            else:
+                # If AI is off, just get the data for MICO
+                stock_data = st.session_state.data_manager.get_stock_data(stock_symbol)
+                if stock_data is not None and not stock_data.empty:
+                    stock_data = clean_raw_data(stock_data)
+
+            if run_mico:
+                mico_result = st.session_state.mico_advisor.analyze(stock_symbol, analysis_date, params={})
 
             show_mico_lines = st.session_state.get("show_mico_lines", False)
 
@@ -1312,8 +1352,6 @@ def create_enhanced_interface(IS_CLOUD = False):
                 advisor,
                 show_mico_lines=show_mico_lines
             )
-
-
 
     # --- Optimizer Logic (Now separate and functional) ---
     if optimize_btn:
@@ -1401,10 +1439,26 @@ def create_enhanced_interface(IS_CLOUD = False):
         final_df = st.session_state.screener_results
         formatter = {
             'Entry Price': '${:.2f}', 'Profit Target ($)': '${:.2f}', 'Stop-Loss': '${:.2f}',
-            'Est. Net Profit ($)': '${:.2f}', 'RSI': '{:.2f}'
+            'Est. Net Profit ($)': '${:.2f}', 'RSI': '{:.2f}', 'PE Ratio': '{:.2f}',
+            'P/S Ratio': '{:.2f}',
+            'Debt/Equity': '{:.2f}'
         }
 
         st.dataframe(final_df.style.format(formatter, na_rep='-'), use_container_width=True)
+
+        # --- CSV Download Button ---
+        @st.cache_data
+        def convert_df_to_csv(df):
+            return df.to_csv(index=False).encode('utf-8')
+
+        csv_data = convert_df_to_csv(final_df)
+        st.download_button(
+            label="📥 Download Results as CSV",
+            data=csv_data,
+            file_name=f"screener_results_{screener_analysis_date}.csv",
+            mime="text/csv",
+            key="csv_download_btn"  # Add a key for stability
+        )
 
         if st.session_state.screener_date_input == datetime.now().date():
             analyze_screener_btn = st.button("🔬 Analyze Screener Results", type="primary", use_container_width=True)
@@ -1416,11 +1470,22 @@ def create_enhanced_interface(IS_CLOUD = False):
                 results_analyzer.run_backtest(
                     trades_df=st.session_state.screener_results,
                     data_manager=st.session_state.data_manager,
-                    investment_amount=investment_amount
+                    initial_portfolio_value=investment_amount,
+                    risk_per_trade_percent=risk_per_trade_percent
                 )
 
     if not analyze_btn and not scan_btn and not optimize_btn:
         st.info("Select an action from the sidebar to begin.")
+
+    if st.session_state.enable_logging and st.session_state.log_entries:
+        log_data = "\n".join(st.session_state.log_entries)
+        log_download_placeholder.download_button(
+            label="📥 Download Log File",
+            data=log_data,
+            file_name=f"stockwise_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log",
+            mime="text/plain",
+            key="log_download_btn"
+        )
 
 
 # --- Main Execution ---
@@ -1461,6 +1526,15 @@ if __name__ == "__main__":
         # Define the default agent to load on the very first run
         DEFAULT_AGENT_MODEL_DIR = "models/NASDAQ-gen3-dynamic"
 
+        if 'log_entries' not in st.session_state:
+            st.session_state.log_entries = []
+
+        def log_message(message, level="INFO"):
+            """A central logging function that respects the UI checkbox."""
+            if st.session_state.get('enable_logging', False):
+                entry = f"[{pd.Timestamp.now()}] [{level}] {message}"
+                st.session_state.log_entries.append(entry)
+
         # Initialize the DataSourceManager ONCE and store it in the session state
         # --- Smart Data Manager Initialization ---
         if 'IS_CLOUD' not in st.session_state:
@@ -1491,41 +1565,48 @@ if __name__ == "__main__":
         if 'advisor' not in st.session_state:
             st.session_state.advisor = ProfessionalStockAdvisor(
                 model_dir=DEFAULT_AGENT_MODEL_DIR,
-                data_source_manager=st.session_state.data_manager
-            )
+                data_source_manager=st.session_state.data_manager, logger=log_message)
 
         # Pass the context data to the advisor's calculator
         st.session_state.advisor.calculator = FeatureCalculator(
             data_manager=st.session_state.data_manager,
             contextual_data=st.session_state.contextual_data,
-            is_cloud=st.session_state.IS_CLOUD
-        )
+            is_cloud=st.session_state.IS_CLOUD, logger=log_message)
+
         # Initialize the Micha Stock advisor in the session state ONCE if it doesn't exist
         if 'mico_advisor' not in st.session_state:
             # Pass the same data manager to the MicoAdvisor
-            st.session_state.mico_advisor = MichaAdvisor(data_manager=st.session_state.data_manager)
+            st.session_state.mico_advisor = MichaAdvisor(
+                data_manager=st.session_state.data_manager,
+                logger=log_message)
 
         # Initialize the new trading models and store them in the session state
         if 'mean_reversion_advisor' not in st.session_state:
-            st.session_state.mean_reversion_advisor = MeanReversionAdvisor(data_manager=st.session_state.data_manager)
+            st.session_state.mean_reversion_advisor = MeanReversionAdvisor(data_manager=st.session_state.data_manager,
+                                                                           logger=log_message)
 
         if 'breakout_advisor' not in st.session_state:
-            st.session_state.breakout_advisor = BreakoutAdvisor(data_manager=st.session_state.data_manager)
+            st.session_state.breakout_advisor = BreakoutAdvisor(data_manager=st.session_state.data_manager,
+                                                                logger=log_message)
 
         if 'supertrend_advisor' not in st.session_state:
-            st.session_state.supertrend_advisor = SuperTrendAdvisor(data_manager=st.session_state.data_manager)
+            st.session_state.supertrend_advisor = SuperTrendAdvisor(data_manager=st.session_state.data_manager,
+                                                                    logger=log_message)
 
         if 'ma_crossover_advisor' not in st.session_state:
             st.session_state.ma_crossover_advisor = MovingAverageCrossoverAdvisor(
-                data_manager=st.session_state.data_manager)
+                data_manager=st.session_state.data_manager, logger=log_message)
+
         if 'volume_momentum_advisor' not in st.session_state:
-            st.session_state.volume_momentum_advisor = VolumeMomentumAdvisor(data_manager=st.session_state.data_manager)
+            st.session_state.volume_momentum_advisor = VolumeMomentumAdvisor(data_manager=st.session_state.data_manager,
+                                                                             logger=log_message)
 
         # Check if models were loaded successfully before running the UI
-        if st.session_state.advisor.models:
-            create_enhanced_interface(st.session_state.IS_CLOUD)
-        else:
-            st.error(f"FATAL: Default models could not be loaded from '{DEFAULT_AGENT_MODEL_DIR}'.")
+        if not st.session_state.advisor.models:
+            st.warning("⚠️ AI (Gen-3) models failed to load. Only MICO and other systems will be available.")
+
+        # Always run the UI
+        create_enhanced_interface(st.session_state.IS_CLOUD)
 
     elif authentication_status is None:
         st.warning('Please enter your username and password')
