@@ -38,25 +38,40 @@ import yfinance as yf
 import logging
 import time
 import threading
-try:
-    # Try to import the real ibapi
-    from ibapi.client import EClient
-    from ibapi.wrapper import EWrapper
-    from ibapi.contract import Contract
-except ImportError:
-    # If it fails (like on Streamlit Cloud), create dummy classes
-    # This stops the app from crashing
-    class EClient:
-        pass
-    class EWrapper:
-        pass
-    class Contract:
-        pass
 import datetime
 import os
 import traceback
 from utils import clean_raw_data
 import streamlit as st
+
+# --- Alpaca SDK Imports ---
+try:
+    from alpaca.data.historical import StockHistoricalDataClient
+    from alpaca.data.requests import StockBarsRequest
+    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+    from alpaca.common.exceptions import APIError
+except ImportError:
+    # If the user doesn't have alpaca-py installed, we create dummies
+    class TimeFrame: Day, Minute15, Hour = '1D', '15M', '1H'
+    class StockBarsRequest:
+        def __init__(self, **kwargs): pass
+    class APIError(Exception): pass
+    class StockHistoricalDataClient:
+        def __init__(self, **kwargs): pass
+
+    class TradingClient:
+        def __init__(self, **kwargs): pass
+
+
+# --- IBAPI Imports ---
+try:
+    from ibapi.client import EClient
+    from ibapi.wrapper import EWrapper
+    from ibapi.contract import Contract
+except ImportError:
+    class EClient: pass
+    class EWrapper: pass
+    class Contract: pass
 
 
 class Stock(Contract):
@@ -87,6 +102,20 @@ class DataSourceManager(EWrapper, EClient):
         self.port = port
         self.allow_fallback = allow_fallback
 
+        # --- Add Alpaca API Key setup ---
+        self.api_key = st.secrets.get('APCA_API_KEY_ID')
+        self.api_secret = st.secrets.get('APCA_API_SECRET_KEY')
+
+        # --- Initialize Alpaca REST client for historical data ---
+        # We use paper=True for the free IEX data
+        # self.stock_client = StockHistoricalDataClient(api_key=self.api_key, secret_key=self.api_secret)
+        try:
+            self.stock_client = StockHistoricalDataClient(api_key=self.api_key, secret_key=self.api_secret)
+        except Exception as e:
+            # st.error("Failed to initialize StockHistoricalDataClient")
+            logging.error(f"Alpaca client initialization error: {e}", exc_info=True)
+            self.stock_client = None
+
         # 2. NOW, conditionally initialize EClient
         if self.use_ibkr:
             EClient.__init__(self, self)
@@ -96,27 +125,8 @@ class DataSourceManager(EWrapper, EClient):
             DataSourceManager._client_id_counter += 1
 
         # --- Correct Logger Setup ---
-        self.logger = logging.getLogger(f"Client_{self.client_id}")
-        self.logger.setLevel(logging.INFO)
-        self.logger.propagate = False # Prevents duplicate messages in parent loggers
-
-        if not self.logger.handlers:
-            # Formatter for both console and file
-            formatter = logging.Formatter('%(asctime)s | %(levelname)s | (Client ID: %(client_id)s) %(message)s')
-            # 1. File Handler: Saves logs to a unique file for each client ID
-            log_dir = "logs"
-            os.makedirs(log_dir, exist_ok=True)
-            log_file = os.path.join(log_dir, f"data_manager_client_{self.client_id}.log")
-            fh = logging.FileHandler(log_file, encoding='utf-8')
-            fh.setLevel(logging.INFO)
-            fh.setFormatter(formatter)
-            self.logger.addHandler(fh)
-
-            # 2. Console Handler: Prints logs to the console
-            ch = logging.StreamHandler()
-            ch.setLevel(logging.INFO)
-            ch.setFormatter(formatter)
-            self.logger.addHandler(ch)
+        self.logger = logging.getLogger(f"{type(self).__name__}.Client_{self.client_id}")
+        self.logger.info(f"--- DataSourceManager initialized with Client ID {self.client_id} ---")
 
         self.connection_event = threading.Event()
         self.data_event = threading.Event()
@@ -125,17 +135,25 @@ class DataSourceManager(EWrapper, EClient):
         self.historical_data = []
         self.next_req_id = int(time.time())
 
-    def _log(self, message, level="INFO"):
+    def data_source(self):
+        if getattr(self, 'useibkr', False):
+            return "ibkr"
+        elif getattr(self, 'stockclient', None) is not None:
+            return "alpaca"
+        else:
+            return "yfinance"
+
+    def _log(self, message, level="INFO", exc_info=False):
         """Internal helper for logging with client ID."""
-        extra = {'client_id': self.client_id}
+        extra_data = {'client_id': self.client_id}
         if level.upper() == "INFO":
-            self.logger.info(message, extra=extra)
+            self.logger.info(message, extra=extra_data, exc_info=exc_info)
         elif level.upper() == "WARNING":
-            self.logger.warning(message, extra=extra)
+            self.logger.warning(message, extra=extra_data, exc_info=exc_info)
         elif level.upper() == "ERROR":
-            self.logger.error(message, extra=extra)
+            self.logger.error(message, extra=extra_data, exc_info=exc_info)
         elif level.upper() == "SUCCESS":
-            self.logger.info(f"{message}", extra=extra)
+            self.logger.info(message, extra=extra_data, exc_info=exc_info)  # Treat SUCCESS as INFO
 
     def set_socket_logging(self, enabled=True):
         """Enables or disables low-level IBAPI socket logging."""
@@ -145,11 +163,18 @@ class DataSourceManager(EWrapper, EClient):
     def connect_to_ibkr(self):
         """Establishes a connection to the TWS/Gateway API."""
         if self.isConnected(): return True
+
+        if not self.host: self.host = '127.0.0.1'
+        if not self.port: self.port = 7497
+
         self._log(f"Connecting to TWS on {self.host}:{self.port}...")
         try:
             self.connect(self.host, self.port, self.client_id)
+
+            # Start the socket thread
             api_thread = threading.Thread(target=self.run, daemon=True)
             api_thread.start()
+
             self._log("Waiting for connection handshake...")
             if self.connection_event.wait(timeout=20):
                 self._log("Connection to TWS is active.", "SUCCESS")
@@ -159,7 +184,7 @@ class DataSourceManager(EWrapper, EClient):
                 self.disconnect()
                 return False
         except Exception as e:
-            self._log(f"Could not connect to TWS: {e}", "ERROR")
+            self._log(f"IBKR connection failed: {e}", "ERROR", exc_info=True)
             return False
 
     def nextValidId(self, orderId: int):
@@ -220,184 +245,380 @@ class DataSourceManager(EWrapper, EClient):
                 'marketCap': info.get('marketCap')
             }
         except Exception as e:
-            _self._log(f"Failed to get yfinance info for {symbol}: {e}", "WARNING")
+            _self._log(f"Error fetching fundamental info for {symbol}: {e}", "ERROR", exc_info=True)
             return {}
+
+    @st.cache_data(ttl=86400)  # Cache for 1 day
+    def get_earnings_calendar(_self, symbol: str) -> pd.Timestamp:
+        """
+        Fetches the next earnings date for a symbol using yfinance.
+        """
+        _self._log(f"Fetching earnings calendar for {symbol} via yfinance...")
+        try:
+            ticker = yf.Ticker(symbol)
+            earnings_date = ticker.calendar.get('Earnings Date')
+
+            if earnings_date and isinstance(earnings_date, pd.Timestamp):
+                # yfinance often returns a date, not a range. We'll use the start.
+                return earnings_date
+            elif earnings_date and isinstance(earnings_date, (list, tuple)):
+                # If it's a range, return the start of the range
+                return earnings_date[0]
+
+            _self._log(f"No earnings date found for {symbol}.", "WARNING")
+            return None
+        except Exception as e:
+            _self._log(f"Error fetching earnings calendar for {symbol}: {e}", "ERROR", exc_info=True)
+            return None
+
+    def _download_from_ibkr(self, symbol, days_back, bar_size, start_date=None, end_date=None):
+        """
+        Internal method to request and collect data from IBKR TWS.
+        """
+        self._log(f"Requesting data for {symbol} from IBKR (Interval: {bar_size})...")
+
+        contract = Contract()
+        contract.currency = 'USD'
+
+        # --- FIX: Intelligent Contract Handling for Indices (e.g., ^VIX) ---
+        if symbol.startswith('^'):
+            contract.secType = 'IND'
+            contract.symbol = symbol.lstrip('^')  # IBKR uses 'VIX', not '^VIX'
+
+            # Specific exchange rules for common indices
+            if contract.symbol == 'VIX':
+                contract.exchange = 'CBOE'
+            else:
+                contract.exchange = 'SMART'  # Or CBOE, depending on the index
+        else:
+            contract.secType = 'STK'
+            contract.symbol = symbol
+            contract.exchange = 'SMART'
+
+        # 1. Reset accumulation variables for this request
+        self.historical_data = []
+        self.data_event.clear()
+        self.error_occurred = False
+        self.error_message = ""
+
+        # 2. Calculate End Date String
+        # IBKR format example: "20231122 23:59:59"
+        if end_date:
+            # Ensure end_date includes time if it's just a date object
+            if isinstance(end_date, datetime.date) and not isinstance(end_date, datetime.datetime):
+                query_time = end_date.strftime("%Y%m%d 23:59:59")
+            else:
+                query_time = pd.to_datetime(end_date).strftime("%Y%m%d %H:%M:%S")
+        else:
+            query_time = ""  # Empty string means "now"
+
+        # 3. Calculate Duration String
+        # Logic: IBKR uses specific formats "1 Y", "1 M", "1 D", "1 W", "1 S"
+        if days_back > 365:
+            years = int(days_back / 365) + 1
+            duration_str = f"{years} Y"
+        elif days_back > 30:
+            months = int(days_back / 30) + 1
+            duration_str = f"{months} M"
+        else:
+            duration_str = f"{days_back} D"
+
+        # 4. Thread-safe Request ID
+        req_id = self.next_req_id
+        self.next_req_id += 1
+
+        # 5. Send Request
+        self.reqHistoricalData(
+            req_id,
+            contract,
+            query_time,  # End Date/Time
+            duration_str,  # Duration
+            bar_size,  # Bar size
+            "TRADES",  # What to show
+            1,  # Use RTH (Regular Trading Hours)
+            1,  # Date Format (1 = string)
+            False,  # Keep up to date
+            []  # Options
+        )
+
+        # 6. Wait for Data (Timeout 60s)
+        if self.data_event.wait(timeout=60):
+            if self.error_occurred:
+                self._log(f"IBKR returned error: {self.error_message}", "ERROR")
+                return None
+
+            if not self.historical_data:
+                self._log("IBKR returned no data rows.", "WARNING")
+                return None
+
+            # 7. Convert to DataFrame
+            df = pd.DataFrame(self.historical_data)
+
+            # 8. Clean and Format
+            if not df.empty:
+                # Standardize Date Index
+                # IBKR returns string dates, sometimes with timezone
+                df['Date'] = pd.to_datetime(df['Date'])
+                df.set_index('Date', inplace=True)
+
+                # Ensure numeric types
+                cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+                for c in cols:
+                    if c in df.columns:
+                        df[c] = pd.to_numeric(df[c])
+
+                # Rename columns to lowercase to match system standard (open, high, etc.)
+                df.columns = df.columns.str.lower()
+
+            return df
+        else:
+            self._log("IBKR Request timed out (no response in 60s).", "ERROR")
+            return None
+
+    def _download_from_alpaca(self, symbol, days_back, interval, end_date):
+        """
+        Internal method to download data from Alpaca using StockHistoricalDataClient.
+        This is much more reliable for historical data than yfinance.
+        """
+        if self.stock_client is None:
+            self._log(f"Alpaca client not initialized. Cannot download {symbol} from Alpaca.", "ERROR")
+            return pd.DataFrame()
+
+        self._log(f"Downloading {symbol} from Alpaca (Interval: {interval})...")
+
+        # --- Clean Symbol for Alpaca (Remove ^ for VIX/Indices) ---
+        clean_symbol = symbol.lstrip('^')
+
+        try:
+            # 1. Define the time range
+            end_date_dt = pd.to_datetime(end_date).tz_localize('UTC') if end_date else datetime.datetime.now(
+                tz=datetime.timezone.utc)
+            start_date_dt = end_date_dt - pd.Timedelta(days=days_back)
+
+            # --- Robust TimeFrame Mapping ---
+            # Handles different versions of alpaca-py SDK
+            try:
+                if interval in ['1d', '1 day']:
+                    tf = TimeFrame.Day
+                elif interval in ['1h', '1 hour']:
+                    tf = TimeFrame.Hour
+                elif interval in ['15m', '15 mins']:
+                    if hasattr(TimeFrame, 'Minute15'):
+                        tf = TimeFrame.Minute15
+                    else:
+                        tf = TimeFrame(15, TimeFrameUnit.Minute)
+                elif interval in ['5m', '5 mins']:
+                    tf = TimeFrame(5, TimeFrameUnit.Minute)
+                else:
+                    tf = TimeFrame.Day
+            except Exception as e:
+                # Fallback to Daily if anything goes wrong with TimeFrame construction
+                self._log(f"Alpaca TimeFrame construction error: {e}. Defaulting to Daily.", "WARNING")
+                tf = TimeFrame.Day
+
+            request_params = StockBarsRequest(
+                symbol_or_symbols=[clean_symbol],
+                timeframe=tf,
+                start=start_date_dt,
+                end=end_date_dt,
+                feed="iex"  # Use 'iex' for free tier, 'sip' for paid
+            )
+
+            # 2. Make the single API call
+            data = self.stock_client.get_stock_bars(request_params)
+
+            # 3. Convert to DataFrame and clean
+            df_raw = data.df
+            if df_raw.empty:
+                self._log(f"Alpaca returned no data for {clean_symbol}.", "WARNING")
+                return pd.DataFrame()
+
+            # Alpaca returns a MultiIndex. We must flatten it.
+            df_raw = df_raw.reset_index(level=0, drop=True)
+            df_raw.index.name = 'Date'
+
+            self._log(f"Successfully retrieved {len(df_raw)} bars for {clean_symbol} from Alpaca.", "SUCCESS")
+            return df_raw  # Return raw data for cleaning outside
+
+        except APIError as e:
+            self._log(f"Alpaca download failed for {clean_symbol}: {e}", "WARNING")
+            return pd.DataFrame()
 
     def get_stock_data(self, symbol: str, days_back: int = 1825, interval: str = '1 day', start_date=None,
                        end_date=None):
+        """
+        Fetches stock data with strict priority: IBKR -> Alpaca -> YFinance.
+        """
+        clean_symbol = symbol.upper().strip()
 
-        # --- Master Retry Loop as requested by user ---
-        max_attempts = 10
-        pause_duration = 5  # 5 seconds
+        # --- PRIORITY 1: IBKR ---
+        if self.use_ibkr:
+            # 1. Auto-Connect if not connected
+            if not self.isConnected():
+                self._log(f"IBKR enabled but not connected. Attempting auto-connect...", "WARNING")
+                self.connect_to_ibkr()
 
-        for attempt in range(1, max_attempts + 1):
-            # We log the attempt number
-            self._log(f"Data attempt {attempt}/{max_attempts} for {symbol}...")
+            # 2. If Connected, try download
+            if self.isConnected():
+                self._log(f"Attempting IBKR download for {clean_symbol}...")
 
-            clean_symbol = symbol.upper().strip()
-            df_raw = None
+                # IBKR Interval Map
+                ibkr_interval_map = {
+                    '1d': '1 day', '15 mins': '15 mins', '5 mins': '5 mins',
+                    '30 mins': '30 mins', '1 hour': '1 hour'
+                }
+                ibkr_bar_size = ibkr_interval_map.get(interval, interval)
 
-            if self.use_ibkr and self.isConnected():
-                    # --- VERIFIED IBKR Interval Translation Map ---
-                    ibkr_interval_map = {
-                        '1d': '1 day',
-                        '15 mins': '15 mins',
-                        '5 mins': '5 mins',
-                        '30 mins': '30 mins',
-                        '1 hour': '1 hour'
-                    }
-                    ibkr_bar_size = ibkr_interval_map.get(interval, interval)
-                    df_raw = self._download_from_ibkr(clean_symbol, days_back, ibkr_bar_size, start_date, end_date)
+                # Attempt Download
+                df_raw = self._download_from_ibkr(clean_symbol, days_back, ibkr_bar_size,
+                                                  start_date=start_date, end_date=end_date)
 
-                    # --- 1. Success on IBKR ---
-                    if df_raw is not None and not df_raw.empty:
-                        self._log(f"Successfully got data for {symbol} from IBKR on attempt {attempt}.", "SUCCESS")
-                        return clean_raw_data(df_raw)  # <-- Successful exit
-
-                    # --- 2. IBKR Failed, Fallback Allowed ---
-                    if self.allow_fallback:
-                        self._log(f"IBKR data retrieval failed for {clean_symbol}, falling back to yfinance.", "WARNING")
-
-                    # --- 3. IBKR Failed, Fallback NOT Allowed ---
-                    else:
-                        self._log(
-                            f"IBKR failed for {clean_symbol} on attempt {attempt}. Fallback disabled. Retrying...",
-                            "ERROR")
-                        time.sleep(pause_duration)
-                        continue  # <-- This is a retry on IBKR fail
-
-            # --- 4. IBKR Not Connected, Fallback NOT Allowed ---
-            elif self.use_ibkr and not self.isConnected():
-                if not self.allow_fallback:
-                    self._log(f"IBKR not connected (Attempt {attempt}). Fallback disabled. Retrying...",
-                              "ERROR")
-                    time.sleep(pause_duration)
-                    continue  # <-- This is a retry on IBKR connection fail
-
-                self._log(f"IBKR not connected (Attempt {attempt}). "
-                          f"Falling back directly to yfinance.", "WARNING")
-
-            # --- 5. Use yfinance (either as primary or fallback) ---
-            if self.allow_fallback or not self.use_ibkr:
-                df_raw = self._download_from_yfinance(
-                    clean_symbol, days_back=days_back, interval=interval,
-                    start_date=start_date, end_date=end_date
-                )
-
-                # --- 6. Success on yfinance ---
                 if df_raw is not None and not df_raw.empty:
-                    self._log(f"Successfully got data for {symbol} via yfinance on attempt {attempt}.", "SUCCESS")
-                    return clean_raw_data(df_raw)  # <-- Successful exit
+                    self._log(f"✅ Success: Data retrieved from IBKR.", "SUCCESS")
+                    return clean_raw_data(df_raw)
+                else:
+                    self._log(f"⚠️ IBKR returned no data or failed. Proceeding to fallback.", "WARNING")
+            else:
+                self._log(f"⚠️ IBKR connection failed. Proceeding to fallback.", "WARNING")
 
-            # --- 7. All attempts failed for this loop ---
-            self._log(
-                f"Data attempt {attempt}/{max_attempts} for {symbol} failed. Retrying in {pause_duration} sec...",
-                "WARNING")
-            time.sleep(pause_duration)
+        # --- Check if fallback is allowed ---
+        if not self.allow_fallback and self.use_ibkr:
+            self._log("Fallback is disabled. Returning empty DataFrame.", "ERROR")
+            st.error(f"Data Error: IBKR failed and fallback is disabled.")
+            return pd.DataFrame()
 
-        # --- If loop finishes, all 10 attempts failed ---
-        self._log(f"CRITICAL: All {max_attempts} data attempts for {symbol} failed. Returning empty DataFrame.",
-                  "ERROR")
+        # --- PRIORITY 2: ALPACA ---
+        # Only runs if IBKR failed/disabled AND we have an Alpaca client
+        if self.stock_client is not None:
+            self._log(f"Attempting Alpaca fallback for {clean_symbol}...")
+            df_raw = self._download_from_alpaca(
+                clean_symbol, days_back=days_back, interval=interval, end_date=end_date
+            )
 
-        # This is the alert to the user you requested
-        st.error(
-            f"Network Failure: Could not download data for {symbol} after {max_attempts} attempts. The script will skip this stock.")
+            if df_raw is not None and not df_raw.empty:
+                self._log(f"✅ Success: Data retrieved from Alpaca.", "SUCCESS")
+                return clean_raw_data(df_raw)
 
+        # --- PRIORITY 3: YFINANCE ---
+        self._log(f"Attempting YFinance fallback for {clean_symbol}...", "WARNING")
+        df_raw = self._download_from_yfinance(
+            clean_symbol, days_back=days_back, interval=interval,
+            start_date=start_date, end_date=end_date
+        )
+
+        if df_raw is not None and not df_raw.empty:
+            self._log(f"✅ Success: Data retrieved from YFinance.", "SUCCESS")
+            return clean_raw_data(df_raw)
+
+        # --- FAILURE ---
+        self._log(f"❌ CRITICAL: All data sources failed for {clean_symbol}.", "ERROR")
         return pd.DataFrame()
 
-    def _download_from_ibkr(self, symbol: str, days_back: int, barSizeSetting: str = "1 day",
-                            start_date=None, end_date=None):
+    def get_screener_data_bulk(self, symbols_list: list, days_back: int = 250, end_date=None):
         """
-        Final robust version for downloading data from TWS using ibapi.
-        Handles chunking for large intraday requests and gracefully manages chunks with no data.
+        Fetches EOD bars for a list of symbols in a single batch request.
+        This is much faster for screening than one-by-one requests.
         """
-        self._log(f"Requesting {days_back} days of '{barSizeSetting}' data for {symbol} from TWS...")
-        try:
-            contract = Contract()
-            if symbol == '^VIX':
-                contract.symbol = 'VIX'
-                contract.secType = 'IND'
-                contract.exchange = 'CBOE'
-                contract.currency = 'USD'
-            else:
-                contract.symbol = symbol
-                contract.secType = 'STK'
-                contract.exchange = 'SMART'
-                contract.currency = 'USD'
-
-            is_intraday_request = "min" in barSizeSetting or "hour" in barSizeSetting
-
-            if is_intraday_request and days_back > 30:
-                all_bars = []
-                any_chunk_succeeded = False
-                # Use 'ME' for month-end frequency to avoid FutureWarning
-                date_range = pd.date_range(end=datetime.datetime.now(), periods=round(days_back / 30), freq='-1ME')
-                self._log(f"Large intraday request detected. Fetching in {len(date_range)} monthly chunks...")
-
-                for end_date in reversed(date_range):
-                    self.historical_data = []
-                    self.data_event.clear()
-                    self.error_occurred = False
-                    req_id = self.next_req_id
-                    self.next_req_id += 1
-                    # FIX: Explicitly add the required timezone to the request string
-                    end_date_str = end_date.strftime('%Y%m%d %H:%M:%S') + " US/Eastern"
-                    self._log(f"Fetching chunk for {symbol} ending {end_date_str}...")
-
-                    self.reqHistoricalData(reqId=req_id, contract=contract, endDateTime=end_date_str, durationStr="1 M",
-                                           barSizeSetting=barSizeSetting, whatToShow="TRADES", useRTH=1, formatDate=1,
-                                           keepUpToDate=False, chartOptions=[])
-
-                    if self.data_event.wait(timeout=20):
-                        if not self.error_occurred and self.historical_data:
-                            all_bars.extend(self.historical_data)
-                            any_chunk_succeeded = True
-                    else:
-                        self._log(f"Data chunk request for {symbol} timed out.", "WARNING")
-                        self.cancelHistoricalData(req_id)
-                    time.sleep(2.1)  # Adhere to API pacing requirements
-
-                if not any_chunk_succeeded:
-                    self._log(f"IBKR returned no data for {symbol} across all chunks.", "WARNING")
-                    return pd.DataFrame()
-                self.historical_data = all_bars
-            else:
-                duration = f'{round(days_back / 365)} Y' if days_back > 365 else f'{days_back} D'
-                self.historical_data = []
-                self.data_event.clear()
-                self.error_occurred = False
-                req_id = self.next_req_id
-                self.next_req_id += 1
-
-                self.reqHistoricalData(reqId=req_id, contract=contract, endDateTime="", durationStr=duration,
-                                       barSizeSetting=barSizeSetting, whatToShow="TRADES", useRTH=1, formatDate=1,
-                                       keepUpToDate=False, chartOptions=[])
-
-                if not self.data_event.wait(timeout=60):
-                    self._log(f"Data request for {symbol} timed out.", "ERROR")
-                    self.cancelHistoricalData(req_id)
-                    return pd.DataFrame()
-
-            if self.error_occurred:
-                self._log(f"Failed to get data for {symbol}: {self.error_message}", "ERROR")
-                return pd.DataFrame()
-
-            if not self.historical_data:
-                self._log(f"No historical data received for {symbol} from IBKR.", "WARNING")
-                return pd.DataFrame()
-
-            df = pd.DataFrame(self.historical_data)
-            df.drop_duplicates(subset=['Date'], inplace=True)
-            # FIX: Correctly parse the Unix timestamp returned by the API
-            df['Date'] = pd.to_datetime(pd.to_numeric(df['Date']), unit='s')
-            df.set_index('Date', inplace=True)
-            self._log(f"Successfully retrieved {len(df)} bars for {symbol} from IBKR.", "SUCCESS")
-            return df
-        except Exception as e:
-            # FIX: Ensure the full traceback is logged for easier debugging
-            error_message = f"Exception during IBKR download for {symbol}: {e}\n{traceback.format_exc()}"
-            self._log(error_message, "ERROR")
+        if not self.api_key or not self.api_secret:
+            self._log("Alpaca API keys not found. Cannot perform bulk download.", "ERROR")
             return pd.DataFrame()
+
+        self._log(f"Alpaca: Performing bulk data request for {len(symbols_list)} symbols...")
+
+        try:
+            # 1. Define the time range
+            if end_date is None:
+                end_date_dt = datetime.datetime.now(tz=datetime.timezone.utc)
+            else:
+                # Ensure the analysis_date is a timezone-aware datetime
+                end_date_dt = pd.to_datetime(end_date).tz_localize('UTC')
+
+            start_date_dt = end_date_dt - pd.Timedelta(days=days_back + 50)  # Get extra data for SMA warmup
+            self._log(f"Alpaca: Bulk request from {start_date_dt.date()} to {end_date_dt.date()}", "DEBUG")
+
+            # 2. Build the batch request
+            request_params = StockBarsRequest(
+                symbol_or_symbols=symbols_list,
+                timeframe=TimeFrame.Day,
+                start=start_date_dt,
+                end=end_date_dt,
+                feed="iex"
+            )
+
+            # 3. Make the single API call
+            data = self.stock_client.get_stock_bars(request_params)
+
+            # 4. Convert to DataFrame and return
+            # The .df attribute converts the data into a multi-index DataFrame
+            # with 'symbol' and 'timestamp' as the index.
+            self._log(f"Alpaca: Successfully retrieved bulk data.", "SUCCESS")
+            return data.df
+
+        except APIError as e:
+            self._log(f"Alpaca API Error during bulk request: {e}", "ERROR", exc_info=True)
+            return pd.DataFrame()
+        except Exception as e:
+            self._log(f"Unexpected error during bulk request: {e}", "ERROR", exc_info=True)
+            return pd.DataFrame()
+
+    # def _download_from_yfinance(self, symbol, days_back, interval='1d', start_date=None, end_date=None,
+    #                             retries=3, delay=5):
+    #     """Internal method to download data from yfinance."""
+    #     self._log(f"Downloading {symbol} from yfinance...")
+    #
+    #     # --- VERIFIED yfinance Interval Translation Map ---
+    #     yfinance_interval_map = {
+    #         '1 day': '1d',
+    #         '15 mins': '15m',  # Short form with no space is correct for yfinance
+    #         '5 mins': '5m',
+    #         '30 mins': '30m',
+    #         '1 hour': '1h'
+    #     }
+    #     yfinance_interval = yfinance_interval_map.get(interval, interval)
+    #
+    #     # --- Handle yfinance intraday limit ---
+    #     is_intraday = 'm' in yfinance_interval or 'h' in yfinance_interval
+    #     if is_intraday and days_back > 60:
+    #         self._log(f"Request for {days_back} days of intraday data exceeds yfinance limit. Capping at 60 days.",
+    #                   "WARNING")
+    #         days_back = 60
+    #
+    #     for i in range(retries):
+    #         try:
+    #             # --- THIS IS THE FIX ---
+    #             if end_date:
+    #                 # Use start/end dates if end_date is provided
+    #                 end_date_dt = pd.to_datetime(end_date)
+    #                 # Use pd.Timedelta instead of the missing 'timedelta'
+    #                 start_date_dt = end_date_dt - pd.Timedelta(days=days_back)
+    #
+    #                 # yfinance 'end' is exclusive, so add one day
+    #                 df = yf.download(symbol, start=start_date_dt, end=(end_date_dt + pd.Timedelta(days=1)),
+    #                                  interval=yfinance_interval, auto_adjust=False, progress=False)
+    #             # --- END FIX ---
+    #             elif start_date:
+    #                 df = yf.download(symbol, start=start_date, end=end_date, interval=yfinance_interval,
+    #                                  auto_adjust=False, progress=False)
+    #             else:
+    #                 # Original logic (for calls that don't need a specific end date)
+    #                 df = yf.download(symbol, period=f"{days_back}d", interval=yfinance_interval, auto_adjust=False,
+    #                                  progress=False)
+    #
+    #             if not df.empty:
+    #                 self._log(f"Successfully retrieved {len(df)} bars for {symbol} from yfinance.", "SUCCESS")
+    #                 return df
+    #         except Exception as e:
+    #             if "No data found for this period" in str(e) or "No objects to concatenate" in str(e):
+    #                 self._log(
+    #                     f"yfinance returned no data for {symbol}. It may be delisted or have no data for the period.",
+    #                     "WARNING")
+    #             else:
+    #                 self._log(f"yfinance download attempt {i + 1}/{retries} for {symbol} failed: {e}", "WARNING",
+    #                           exc_info=True)
+    #                 time.sleep(delay)
+    #
+    #     self._log(f"All yfinance download attempts failed for {symbol}.", "ERROR")
+    #     return pd.DataFrame()
 
     def _download_from_yfinance(self, symbol, days_back, interval='1d', start_date=None, end_date=None,
                                 retries=3, delay=5):
@@ -423,10 +644,24 @@ class DataSourceManager(EWrapper, EClient):
 
         for i in range(retries):
             try:
-                if start_date:
+                if end_date:
+                    # Use start/end dates if end_date is provided
+                    end_date_dt = pd.to_datetime(end_date)
+                    start_date_dt = end_date_dt - pd.Timedelta(days=days_back)
+
+                    # yfinance 'end' is exclusive, so add one day
+                    self._log(f"yfinance: Requesting {symbol} from {start_date_dt.date()} "
+                              f"to {end_date_dt.date()}", "DEBUG")
+                    df = yf.download(symbol, start=start_date_dt, end=(end_date_dt + pd.Timedelta(days=1)),
+                                     interval=yfinance_interval, auto_adjust=False, progress=False)
+
+                elif start_date:
+                    # This is for a different use case, but good to keep
                     df = yf.download(symbol, start=start_date, end=end_date, interval=yfinance_interval,
                                      auto_adjust=False, progress=False)
                 else:
+                    # Original logic (for calls that don't need a specific end date, e.g., single stock analysis)
+                    self._log(f"yfinance: Requesting {symbol} for last {days_back} days.", "DEBUG")
                     df = yf.download(symbol, period=f"{days_back}d", interval=yfinance_interval, auto_adjust=False,
                                      progress=False)
 
@@ -439,8 +674,9 @@ class DataSourceManager(EWrapper, EClient):
                         f"yfinance returned no data for {symbol}. It may be delisted or have no data for the period.",
                         "WARNING")
                 else:
-                    self._log(f"yfinance download attempt {i + 1}/{retries} for {symbol} failed: {e}", "WARNING")
-                time.sleep(delay)
+                    self._log(f"yfinance download attempt {i + 1}/{retries} for {symbol} failed: {e}", "WARNING",
+                              exc_info=True)
+                    time.sleep(delay)
 
         self._log(f"All yfinance download attempts failed for {symbol}.", "ERROR")
         return pd.DataFrame()
