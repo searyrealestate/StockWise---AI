@@ -40,7 +40,39 @@ import pandas as pd
 import streamlit as st
 import itertools
 import json
-from results_analyzer import run_backtest  # We'll reuse the backtester
+import concurrent.futures
+import logging
+
+
+def _process_combination(params_tuple, param_names, advisor_instance, symbol, start_date, end_date, full_data_df):
+    """
+    Worker function to process a single parameter combination.
+    This will be run in a separate thread.
+    """
+    params = dict(zip(param_names, params_tuple))
+
+    all_signals = []
+    for analysis_date in pd.date_range(start_date, end_date):
+        # The advisor's analyze method is thread-safe because
+        # its data manager is cached and handles its own client IDs.
+        signal = advisor_instance.analyze(symbol, analysis_date, params=params)
+        if signal and signal.get('signal') == 'BUY':
+            signal['Analysis Date'] = analysis_date.strftime('%Y-%m-%d')
+            signal['Symbol'] = symbol
+            signal['Entry Price'] = signal['current_price']
+            signal['Profit Target ($)'] = signal['profit_target_price']
+            signal['Stop-Loss'] = signal['stop_loss_price']
+            all_signals.append(signal)
+
+    if all_signals:
+        trades_df = pd.DataFrame(all_signals)
+        # We pass the pre-fetched data, so this is fast
+        performance = _simulate_trades_for_performance(trades_df, full_data_df)
+
+        # Return the params and its score
+        return {**params, 'Profit Factor': performance}
+
+    return None  # No signals found
 
 
 def save_best_params(model_name, params):
@@ -57,7 +89,7 @@ def save_best_params(model_name, params):
     st.success(f"Saved best parameters for {model_name} to `best_params.json`.")
 
 
-def run_full_optimization(optimizer_advisors: dict, parameter_grids: dict, symbol: str, start_date, end_date):
+def run_full_optimization(optimizer_advisors, parameter_grids, symbol, start_date, end_date, pre_fetched_data=None):
     """
     Runs an optimization for EVERY model, finds the best params for each,
     saves them all, and displays a final summary.
@@ -66,35 +98,55 @@ def run_full_optimization(optimizer_advisors: dict, parameter_grids: dict, symbo
 
     all_best_results = []
 
-    # Loop through each advisor the user passed in
-    for model_name, advisor_instance in optimizer_advisors.items():
-        if model_name not in parameter_grids:
-            st.warning(f"Skipping {model_name}: No parameter grid defined.")
-            continue
+    # --- Overall Progress Bar ---
+    # Get a list of models that actually have parameters to test
+    models_to_optimize = [
+        name for name in optimizer_advisors
+        if name in parameter_grids
+    ]
+    total_models = len(models_to_optimize)
+    if total_models == 0:
+        st.error("No models are configured for optimization.")
+        return
 
-        st.markdown(f"---")
-        st.subheader(f"Optimizing: {model_name}")
+    # Create the progress bar
+    overall_progress = st.progress(0, text="Starting optimization...")
 
-        # Run the optimization for this one model
-        best_params, best_performance, results_df = _optimize_single_model(
-            advisor_instance, symbol, start_date, end_date,
-            parameter_grids[model_name]
-        )
+    # 1. GET DATA (Use pre-fetched if available, otherwise download)
+    if pre_fetched_data is not None and not pre_fetched_data.empty:
+        print(f"Optimizer: Using pre-fetched data for {symbol} ({len(pre_fetched_data)} rows).")
+        df = pre_fetched_data
+    else:
+        print(f"Optimizer: Downloading data for {symbol}...")
+        # Loop through each advisor the user passed in
+        for i, model_name in enumerate(models_to_optimize):
+            advisor_instance = optimizer_advisors[model_name]
 
-        # Display the detailed results for this specific model
-        st.dataframe(results_df.style.format({'Profit Factor': '{:.2f}'}), use_container_width=True)
+            # Run the optimization for this one model
+            # We need to call the internal helper with the correct arguments
+            best_params, best_performance, results_df = _optimize_single_model(
+                advisor_instance, symbol, start_date, end_date,
+                parameter_grids[model_name]
+            )
 
-        if best_params:
-            st.success(f"🏆 Best for {model_name}: `{best_params}` (Profit Factor: {best_performance:.2f})")
-            all_best_results.append({
-                "Model": model_name,
-                "Best Profit Factor": best_performance,
-                "Best Parameters": json.dumps(best_params)
-            })
-            # Save the params for this model to the file
-            save_best_params(model_name, best_params)
-        else:
-            st.error(f"No successful trades found for {model_name}.")
+            # Display the detailed results for this specific model
+            if not results_df.empty:
+                st.dataframe(results_df.style.format({'Profit Factor': '{:.2f}'}), use_container_width=True)
+
+            if best_params:
+                st.success(f"🏆 Best for {model_name}: `{best_params}` (Profit Factor: {best_performance:.2f})")
+                all_best_results.append({
+                    "Model": model_name,
+                    "Best Profit Factor": best_performance,
+                    "Best Parameters": json.dumps(best_params)
+                })
+                # Save the params for this model to the file
+                save_best_params(model_name, best_params)
+            else:
+                st.error(f"No successful trades found for {model_name}.")
+
+    # --- Clean up the overall progress bar ---
+    overall_progress.empty()
 
     st.markdown("---")
     st.header("Calibration Complete")
@@ -116,38 +168,67 @@ def _optimize_single_model(advisor_instance, symbol, start_date, end_date, param
     param_names = parameter_grid.keys()
     param_values = parameter_grid.values()
     param_combinations = list(itertools.product(*param_values))
+    total_combinations = len(param_combinations)
 
-    st.write(f"Testing {len(param_combinations)} parameter combinations...")
+    st.write(f"Testing {total_combinations} parameter combinations...")
+
+    # We get data for the full period plus extra days for indicator warm-up.
+    # We use the advisor's data manager to respect the cache.
+    sim_start_date = pd.to_datetime(start_date) - pd.Timedelta(days=250)
+    full_data_df = advisor_instance.dm.get_stock_data(
+        symbol,
+        start_date=sim_start_date,
+        end_date=end_date
+    )
+    if full_data_df.empty:
+        st.error(f"Could not download data for {symbol}. Skipping optimization.")
+        return None, -float('inf'), pd.DataFrame()
 
     best_performance = -float('inf')
     best_params = None
     results = []
 
+    # --- Add text to the progress bar ---
+    progress_bar = st.progress(0, text="Starting parameter test...")
+
     progress_bar = st.progress(0)
-    for i, params_tuple in enumerate(param_combinations):
-        params = dict(zip(param_names, params_tuple))
 
-        all_signals = []
-        for analysis_date in pd.date_range(start_date, end_date):
-            signal = advisor_instance.analyze(symbol, analysis_date, params=params)
-            if signal and signal.get('signal') == 'BUY':
-                signal['Analysis Date'] = analysis_date.strftime('%Y-%m-%d')
-                signal['Symbol'] = symbol
-                signal['Entry Price'] = signal['current_price']
-                signal['Profit Target ($)'] = signal['profit_target_price']
-                signal['Stop-Loss'] = signal['stop_loss_price']
-                all_signals.append(signal)
+    # We set max_workers to a reasonable number to avoid high CPU.
+    # 4-8 is a good choice.
+    MAX_WORKERS = 8
 
-        if all_signals:
-            trades_df = pd.DataFrame(all_signals)
-            performance = _simulate_trades_for_performance(trades_df, advisor_instance.dm)
-            results.append({**params, 'Profit Factor': performance})
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        # Create a map of futures to track progress
+        futures = {
+            executor.submit(
+                _process_combination,
+                params_tuple, param_names, advisor_instance, symbol, start_date, end_date, full_data_df
+            ): params_tuple
+            for params_tuple in param_combinations
+        }
 
-            if performance > best_performance:
-                best_performance = performance
-                best_params = params
+        processed_count = 0
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            processed_count += 1
 
-        progress_bar.progress((i + 1) / len(param_combinations))
+            if result:
+                results.append(result)
+
+                # Track Best Performance
+                current_performance = result.get('Profit Factor', -float('inf'))
+                if current_performance > best_performance:
+                    best_performance = current_performance
+                    # Remove the 'Profit Factor' key to get only the parameters
+                    temp_params = result.copy()
+                    del temp_params['Profit Factor']
+                    best_params = temp_params
+
+                # --- Update progress bar with descriptive text ---
+                progress_bar.progress(
+                    processed_count / total_combinations,
+                    text=f"Tested {processed_count}/{total_combinations} combinations"
+                )
 
     progress_bar.empty()
 
@@ -158,23 +239,30 @@ def _optimize_single_model(advisor_instance, symbol, start_date, end_date, param
         return None, -float('inf'), pd.DataFrame()
 
     results_df = pd.DataFrame(results).sort_values(by='Profit Factor', ascending=False)
+    # Return the calculated best_params/performance
     return best_params, best_performance, results_df
 
 
-def _simulate_trades_for_performance(trades_df, data_manager):
+def _simulate_trades_for_performance(trades_df, full_data_df: pd.DataFrame):
     """
     A lightweight backtester that returns a single performance metric (Profit Factor).
     Profit Factor = (Sum of all P/L % from wins) / (Absolute Sum of all P/L % from losses)
     """
     all_pl_percents = []
+
+    # --- Use the passed-in DataFrame ---
+    if full_data_df.empty or not isinstance(full_data_df.index, pd.DatetimeIndex):
+        st.error("Simulator received invalid data.")
+        return 0
+
     for _, trade in trades_df.iterrows():
         entry_date = pd.to_datetime(trade['Analysis Date'])
-        df_raw = data_manager.get_stock_data(trade['Symbol'], start_date=entry_date)
 
-        if df_raw.empty or not isinstance(df_raw.index, pd.DatetimeIndex):
+        # SLICE the data instead of re-fetching. This is instantaneous.
+        trade_period_df = full_data_df[full_data_df.index >= entry_date].copy()
+
+        if trade_period_df.empty:
             continue
-
-        trade_period_df = df_raw[df_raw.index >= entry_date].copy()
 
         exit_price = None
         for day_index in range(1, len(trade_period_df)):
