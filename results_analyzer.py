@@ -53,10 +53,13 @@ import plotly.graph_objects as go
 from data_source_manager import DataSourceManager
 from utils import clean_raw_data
 from datetime import datetime
+from risk_manager import RiskManager
+import pandas_ta as ta
 
 
 def run_backtest(trades_df: pd.DataFrame, data_manager: DataSourceManager,
-                 initial_portfolio_value: int = 100000, risk_per_trade_percent: float = 1.0):
+                 initial_portfolio_value: int = 100000, risk_per_trade_percent: float = 1.0,
+                 use_trailing_stop: bool = False, atr_trailing_mult: float = 2.5):
     """
     Simulates trades based on screener recommendations and analyzes the results.
     """
@@ -65,63 +68,129 @@ def run_backtest(trades_df: pd.DataFrame, data_manager: DataSourceManager,
         return
 
     trade_results = []
-    total_trades = len(trades_df)
     progress_bar = st.progress(0, text="Backtesting recommended trades...")
 
-    # Calculate the dollar amount to risk per trade
-    risk_per_trade_dollars = initial_portfolio_value * (risk_per_trade_percent / 100.0)
+    # --- 1. INITIALIZE THE RISK MANAGER ---
+    risk_manager = RiskManager(
+        portfolio_value=initial_portfolio_value,
+        global_risk_pct=risk_per_trade_percent
+    )
+    current_portfolio_value = initial_portfolio_value
 
-    # Get today's date ONCE, outside the loop
     today_str = datetime.now().strftime('%Y-%m-%d')
 
     for i, trade in trades_df.iterrows():
+        # --- Update Risk Manager with current capital ---
+        risk_manager.update_portfolio_value(current_portfolio_value)
+
         symbol = trade['Symbol']
         entry_date = pd.to_datetime(trade['Analysis Date'])
         entry_price = trade['Entry Price']
         stop_loss = trade['Stop-Loss']
         profit_target = trade['Profit Target ($)']
-        est_net_profit = trade['Est. Net Profit ($)']
+        initial_atr = trade.get('ATR')  # Get ATR from screener
+        if pd.isna(initial_atr):
+            # If the ATR from the screener is NaN, set a reasonable default (e.g., 5.0)
+            # A value like 0.0 would cause division by zero or nonsensical SL/TP.
+            initial_atr = 5.0
 
-        progress_bar.progress((i + 1) / total_trades, text=f"Analyzing {symbol}...")
+        # --- 2. CALCULATE POSITION SIZE ---
+        num_shares = risk_manager.calculate_position_size(
+            entry_price=entry_price,
+            stop_loss_price=stop_loss
+        )
 
-        # --- NEW: Position Sizing ---
-        per_share_risk = entry_price - stop_loss
-        if per_share_risk <= 0:
-            st.warning(f"Skipping {symbol}: Invalid risk (Entry: {entry_price}, SL: {stop_loss}).")
+        if num_shares == 0:
+            st.warning(f"Skipping {symbol}: Risk parameters result in 0 shares.")
             continue
 
-        num_shares = risk_per_trade_dollars / per_share_risk
-        investment_amount = num_shares * entry_price  # This is now dynamic
+        investment_amount = num_shares * entry_price
 
-        # Fetch historical data starting from the entry date
-        df_raw = data_manager.get_stock_data(symbol, start_date=entry_date,end_date=today_str)
+        # Fetch data for simulation
+        # --- MODIFICATION: Need 200 days warmup for 150SMA ---
+        warmup_start_date = entry_date - pd.Timedelta(days=200)
+        df_raw = data_manager.get_stock_data(symbol, start_date=warmup_start_date, end_date=today_str)
 
-        # 1. Check if the DataFrame is empty
-        # 2. Check if the index is a DatetimeIndex
-        if df_raw.empty or not isinstance(df_raw.index, pd.DatetimeIndex):
+        # Use the cleaning function
+        df_clean = clean_raw_data(df_raw)
+
+        if df_clean.empty or not isinstance(df_clean.index, pd.DatetimeIndex):
             st.error(f"Data for {symbol} is invalid. Skipping.")
             continue
 
-        # Filter data to the simulation period (entry date onwards)
-        trade_period_df = df_raw[df_raw.index >= entry_date].copy()
+        # --- 1. Calculate ALL indicators on the FULL (warmed-up) dataframe ---
+        df_clean.ta.atr(length=14, append=True, col_names='atr_14')
+        # --- Add SMA_150 for the Risk Manager ---
+        df_clean['sma_150'] = df_clean['close'].rolling(150).mean()
+
+        # 2. Fill NaNs using the initial_atr from the screener
+        df_clean['atr_14'] = df_clean['atr_14'].fillna(initial_atr)
+
+        # --- bfill to fill NaNs at the start for sma_150 ---
+        df_clean.bfill(inplace=True)
+
+        # 3. NOW slice the dataframe to the trade period
+        trade_period_df = df_clean[df_clean.index >= entry_date].copy()
+
+        # 4. Check if the slice is empty
+        if trade_period_df.empty:
+            st.warning(f"Skipping {symbol}: No data found after entry date {entry_date.strftime('%Y-%m-%d')}.")
+            continue
+
+        # --- 3. SETUP LIVE TRADE MANAGEMENT DATA ---
+        position_data = {
+            'entry_price': entry_price,
+            'current_stop_loss': stop_loss,  # This will be updated
+            'use_trailing_stop': use_trailing_stop,
+            'atr_multiplier': atr_trailing_mult
+        }
 
         outcome = "Expired"
         exit_price = None
         exit_date = None
 
-        # Simulate the trade over the next 60 trading days
-        for current_exit_date, current_day in trade_period_df.iloc[1:].iterrows():   # Start from day after entry
-            if (current_exit_date - entry_date).days > 85:  # Using calendar days is safer
+        # Simulate day-by-day
+        for current_exit_date, current_day in trade_period_df.iloc[1:].iterrows():
+            if (current_exit_date - entry_date).days > 85:  # Using calendar days
                 break
 
-            # Check for stop-loss hit
-            if current_day['low'] <= stop_loss:
+            # --- 4. CALL RISK MANAGER TO MANAGE THE TRADE ---
+            signal, position_data = risk_manager.manage_open_position(
+                current_day_data=current_day,  # Pass the full row
+                position_data=position_data
+            )
+
+            if signal == "EXIT_SIGNAL":
                 outcome = "FAILED (Stop-Loss)"
-                exit_price = stop_loss
+
+                # Check for Structural Stop (price closed below 150 SMA)
+                is_structural_stop = current_day['close'] < current_day.get('sma_150', float('-inf'))
+
+                if is_structural_stop:
+                    # If Structural SL, exit at the closing price of the day that triggered it
+                    exit_price = current_day['close']
+                    # Log the exit reason clearly
+                    logger.debug(f"[{symbol}] Exit Structural SL @ Close: {exit_price:.2f}")
+
+
+                else:
+
+                    # Trailing or Static SL hit (low breached the stop)
+
+                    exit_price = position_data['current_stop_loss']
+
+                    # Failsafe for gaps
+
+                    if exit_price < current_day['low'] or exit_price > current_day['high']:
+                        exit_price = current_day['open']
+
+                        logger.debug(f"[{symbol}] Exit Trailing/Static SL @ Price: {exit_price:.2f}")
+
                 exit_date = current_day.name
                 break
-            # Check for profit-target hit
-            elif current_day['high'] >= profit_target:
+
+            # Check for profit-target hit (RiskManager doesn't do this)
+            if current_day['high'] >= profit_target:
                 outcome = "PASS (Take-Profit)"
                 exit_price = profit_target
                 exit_date = current_day.name
@@ -133,20 +202,27 @@ def run_backtest(trades_df: pd.DataFrame, data_manager: DataSourceManager,
             exit_date = trade_period_df.index[-1] if not trade_period_df.empty else entry_date
             outcome = "FAILED (Expired)"
 
+        # --- 5. CALCULATE P/L BASED ON DYNAMIC SHARES ---
+        gross_profit_dollars = (exit_price - entry_price) * num_shares
+
+        # --- Apply taxes and fees to get NET profit ---
+        try:
+            net_profit_dollars, _ = st.session_state.advisor.apply_israeli_fees_and_tax(
+                gross_profit_dollars,
+                num_shares
+            )
+        except Exception:
+            # Failsafe if st.session_state.advisor isn't available
+            net_profit_dollars = gross_profit_dollars
+
+            # Update portfolio value for the next trade's calculation
+        current_portfolio_value += net_profit_dollars
+
         pl_percent = ((exit_price - entry_price) / entry_price) * 100
-
-        # --- Calculate P/L based on dynamic shares ---
-        actual_profit_dollars = (exit_price - entry_price) * num_shares
-
-        # --- Verification Logic ---
-        actual_trade_df = trade_period_df.loc[entry_date:exit_date]
-        max_price = actual_trade_df['high'].max() if not actual_trade_df.empty else entry_price
-        min_price = actual_trade_df['low'].min() if not actual_trade_df.empty else entry_price
-        status_indicator = "(+)" if pl_percent > 0 else "(-)"
 
         trade_results.append({
             "Symbol": symbol,
-            "Status": status_indicator,
+            "Status": "(+)" if pl_percent > 0 else "(-)",
             "P/L %": pl_percent,
             "Outcome": outcome,
             "Entry Date": entry_date.strftime('%Y-%m-%d'),
@@ -155,12 +231,9 @@ def run_backtest(trades_df: pd.DataFrame, data_manager: DataSourceManager,
             "Exit Price": exit_price,
             "Stop-Loss": stop_loss,
             "Profit Target": profit_target,
-            "Max Price": max_price,
-            "Min Price": min_price,
-            "Est. Net Profit ($)": est_net_profit,
-            "Actual P/L ($)": actual_profit_dollars,
-            "Shares": num_shares,  # Added for info
-            "Investment ($)": investment_amount  # Added for info
+            "Actual P/L ($)": net_profit_dollars,
+            "Shares": num_shares,
+            "Investment ($)": investment_amount
         })
 
     progress_bar.empty()
@@ -168,11 +241,37 @@ def run_backtest(trades_df: pd.DataFrame, data_manager: DataSourceManager,
         st.error("Could not process any trades for backtesting.")
         return
 
+    # Pass the *final* portfolio value to the dashboard
     results_df = pd.DataFrame(trade_results)
-    display_backtest_dashboard(results_df, data_manager, initial_portfolio_value)
+
+    # 1. Create a series of portfolio values after each trade
+    equity_series = results_df['Actual P/L ($)']
+    # Calculate the cumulative sum starting from the initial value
+    equity_curve = initial_portfolio_value + equity_series.cumsum()
+
+    # 2. Calculate Rolling Peak
+    rolling_max = equity_curve.expanding(min_periods=1).max()
+
+    # 2. Calculate Drawdown
+    drawdown = (rolling_max - equity_curve) / rolling_max
+    max_drawdown = drawdown.max() * 100
+
+    display_backtest_dashboard(
+        results_df,
+        data_manager,
+        initial_portfolio_value,
+        current_portfolio_value,
+        max_drawdown
+    )
+
+    st.session_state['backtest_drawdown_pct'] = max_drawdown
+
+    # Return the results DF for continued use by the screener (e.g., Finetuning)
+    return results_df
 
 
-def display_backtest_dashboard(results_df: pd.DataFrame, data_manager: DataSourceManager, initial_portfolio_value: int):
+def display_backtest_dashboard(results_df: pd.DataFrame, data_manager: DataSourceManager,
+                               initial_portfolio_value: int, final_portfolio_value: float,max_drawdown: float):
     """Renders the performance metrics and trade analysis UI."""
     st.markdown("---")
     st.header("🔬 Backtest Analysis Results")
@@ -180,26 +279,35 @@ def display_backtest_dashboard(results_df: pd.DataFrame, data_manager: DataSourc
     # --- Performance Metrics ---
     st.subheader("Key Performance Metrics")
 
-    wins = results_df[results_df['Outcome'].str.startswith("PASS")]
-    losses = results_df[results_df['Outcome'].str.startswith("FAILED")]
-    win_rate = (len(wins) / len(results_df)) * 100 if len(results_df) > 0 else 0
+    wins = results_df[results_df['Actual P/L ($)'] > 0]  # Use P/L $ for net profit
+    losses = results_df[results_df['Actual P/L ($)'] <= 0]
+    num_trades = len(results_df)
+    win_rate = (len(wins) / num_trades) * 100 if num_trades > 0 else 0
     avg_gain = wins['P/L %'].mean() if not wins.empty else 0
     avg_loss = losses['P/L %'].mean() if not losses.empty else 0
-    profit_factor = wins['P/L %'].sum() / abs(losses['P/L %'].sum()) if not losses.empty and losses[
-        'P/L %'].sum() != 0 else float('inf')
+
+    # Calculate Profit Factor using the NET profit column
+    total_gains = wins['Actual P/L ($)'].sum()
+    total_losses = abs(losses['Actual P/L ($)'].sum())
+    profit_factor = total_gains / total_losses if total_losses != 0 else float('inf')
 
     total_profit_dollars = results_df['Actual P/L ($)'].sum()
+    total_return_percent = ((final_portfolio_value - initial_portfolio_value) / initial_portfolio_value) * 100
 
-    # --- Add Portfolio Metrics ---
-    final_portfolio_value = initial_portfolio_value + total_profit_dollars
-    total_return_percent = (total_profit_dollars / initial_portfolio_value) * 100
-
-    col1, col2, col3, col4, col5 = st.columns(5)
+    # --- NEW: Metrics split into two rows ---
+    st.markdown("##### Trade Statistics")
+    col1, col2, col3, col4 = st.columns(4)
     col1.metric("Win Rate", f"{win_rate:.2f}%")
     col2.metric("Profit Factor", f"{profit_factor:.2f}")
-    col3.metric("Total P/L ($)", f"{total_profit_dollars:.2f}")
-    col4.metric("Total Return %", f"{total_return_percent:.2f}%")
-    col5.metric("Final Portfolio ($)", f"{final_portfolio_value:.2f}")
+    col3.metric("Avg. Gain %", f"{avg_gain:.2f}%")
+    col4.metric("Avg. Loss %", f"{avg_loss:.2f}%")
+
+    st.markdown("##### Portfolio Statistics")
+    col5, col6, col7, col8 = st.columns(4)
+    col5.metric("Total Net P/L ($)", f"{total_profit_dollars:.2f}")
+    col6.metric("Total Return %", f"{total_return_percent:.2f}%")
+    col7.metric("Final Portfolio ($)", f"{final_portfolio_value:.2f}")
+    col8.metric("Max Drawdown %", f"{-max_drawdown:.2f}%")
 
     # --- Trade Log & Chart Visualization ---
     st.subheader("Trade Log & Verification")
@@ -232,7 +340,7 @@ def create_trade_chart(trade_data: pd.Series, data_manager: DataSourceManager, f
     entry_date = pd.to_datetime(trade_data['Entry Date'])
     exit_date = pd.to_datetime(trade_data['Exit Date'])
 
-    chart_start_date = entry_date - pd.Timedelta(days=250)
+    chart_start_date = entry_date - pd.Timedelta(days=50)
     chart_end_date = exit_date + pd.Timedelta(days=10)
     df = data_manager.get_stock_data(symbol, start_date=chart_start_date, end_date=chart_end_date)
     fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['open'], high=df['high'],
@@ -273,68 +381,3 @@ def create_trade_chart(trade_data: pd.Series, data_manager: DataSourceManager, f
     fig.update_layout(title=f"Trade Analysis for {symbol} ({trade_data['Outcome']})", xaxis_rangeslider_visible=False,
                       legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     return fig
-
-
-
-# def create_trade_chart(trade_data: pd.Series, data_manager: DataSourceManager, full_trade_row: pd.Series = None):
-#     """Generates a Plotly chart visualizing a single simulated trade."""
-#     symbol = trade_data['Symbol']
-#     entry_date = pd.to_datetime(trade_data['Entry Date'])
-#     exit_date = pd.to_datetime(trade_data['Exit Date'])
-#
-#     # Use a wider date range to ensure SMAs are calculated
-#     chart_start_date = entry_date - pd.Timedelta(days=250)
-#     chart_end_date = exit_date + pd.Timedelta(days=10)
-#     df = data_manager.get_stock_data(symbol, start_date=chart_start_date, end_date=chart_end_date)
-#
-#     fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['open'], high=df['high'],
-#                                          low=df['low'], close=df['close'], name='Price')])
-#
-#     # --- NEW: Add Mico System Lines ---
-#     if full_trade_row is not None and full_trade_row.get('Source') == 'MICO':
-#         # Add Mico SMAs
-#         if len(df) >= 50:
-#             sma_50 = df['close'].rolling(50).mean()
-#             fig.add_trace(
-#                 go.Scatter(x=df.index, y=sma_50, mode='lines', name='SMA 50', line=dict(color='blue', width=1)))
-#         if len(df) >= 200:
-#             sma_200 = df['close'].rolling(200).mean()
-#             fig.add_trace(
-#                 go.Scatter(x=df.index, y=sma_200, mode='lines', name='SMA 200', line=dict(color='purple', width=1)))
-#
-#         # Add Mico Stop-Loss and Profit-Target Lines (which are already in trade_data)
-#         fig.add_hline(y=trade_data['Stop-Loss'], line_dash="dash", line_color="red", name="Mico Stop-Loss")
-#         fig.add_hline(y=trade_data['Profit Target'], line_dash="dash", line_color="green", name="Mico Profit Target")
-#     else:
-#         # --- This is the OLD logic, which runs for AI trades ---
-#         fig.add_hline(y=trade_data['Stop-Loss'], line_dash="dash", line_color="red", name="Stop-Loss")
-#         fig.add_hline(y=trade_data['Profit Target'], line_dash="dash", line_color="green", name="Profit Target")
-#     # --- END NEW ---
-#
-#     # Add Entry Marker
-#     fig.add_trace(go.Scatter(x=[entry_date], y=[trade_data['Entry Price']], mode='markers',
-#                              marker=dict(color='blue', size=12, symbol='circle'), name='Entry'))
-#
-#     # Chart will now correctly show the icon based on P/L %
-#     exit_marker_symbol = 'star-diamond' if trade_data['P/L %'] > 0 else 'x'
-#     exit_marker_color = 'green' if trade_data['P/L %'] > 0 else 'red'
-#
-#     fig.add_trace(go.Scatter(x=[exit_date], y=[trade_data['Exit Price']], mode='markers',
-#                              marker=dict(color=exit_marker_color, size=14, symbol=exit_marker_symbol), name='Exit'))
-#
-#     # Set the x-axis range to focus on the trade
-#     zoom_start_date = entry_date - pd.Timedelta(days=30)
-#     fig.update_layout(
-#         title=f"Trade Analysis for {symbol} ({trade_data['Outcome']})",
-#         xaxis_rangeslider_visible=False,
-#         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-#         xaxis_range=[zoom_start_date, chart_end_date]  # Focus the chart on the trade
-#     )
-#
-#     # Use template from session state for dark/light mode
-#     if st.session_state.get('template', 'plotly_dark') == 'plotly_dark':
-#         fig.update_layout(template="plotly_dark")
-#     else:
-#         fig.update_layout(template="plotly_white")
-#
-#     return fig

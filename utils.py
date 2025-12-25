@@ -1,3 +1,4 @@
+# utils.py
 """
 Comprehensive HTML Report Generator
 ===================================
@@ -43,13 +44,20 @@ Example:
     python generate_report.py --version-id "v3.2.0"
 """
 
-# utils.py
-
 import pandas as pd
+import numpy as np
 
 
 def clean_raw_data(df: pd.DataFrame) -> pd.DataFrame:
-    """A single, robust function to clean raw data immediately after fetching."""
+    """
+    Cleans and validates a DataFrame from any source.
+    - Handles empty or None DataFrames.
+    - Flattens multi-level column indexes (from yfinance).
+    - Converts all column names to lowercase.
+    - Standardizes 'adj close' to 'close'.
+    - FIX: Removes all timezone information to prevent comparison errors.
+    - Validates that essential columns are present.
+    """
     if df is None or df.empty:
         return pd.DataFrame()
 
@@ -68,7 +76,14 @@ def clean_raw_data(df: pd.DataFrame) -> pd.DataFrame:
     # Use 'adj close' as the new 'close' if it exists
     if 'adj close' in df.columns:
         df['close'] = df['adj close']
-        df = df.drop(columns=['adj close'])
+        # We drop all columns that might be 'adj close' in case of duplicates
+        df = df.drop(columns=[col for col in df.columns if col == 'adj close'])
+
+    # --- THIS IS THE FIX for the TypeError ---
+    # 4. Remove all timezone info from the index
+    if pd.api.types.is_datetime64_any_dtype(df.index) and df.index.tz is not None:
+        df.index = df.index.tz_localize(None)
+    # --- END FIX ---
 
     standard_cols = ['open', 'high', 'low', 'close', 'volume']
     for col in standard_cols:
@@ -76,7 +91,14 @@ def clean_raw_data(df: pd.DataFrame) -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
     existing_cols = [col for col in standard_cols if col in df.columns]
+
+    # Critical check: Ensure we have the required columns *after* cleaning
+    if not all(col in df.columns for col in standard_cols):
+        # This can happen if yfinance returns a weird format
+        return pd.DataFrame()  # Return empty, not a subset
+
     if existing_cols:
         df.dropna(subset=existing_cols, inplace=True)
 
-    return df
+    # Return only the standard columns
+    return df[existing_cols]

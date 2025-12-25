@@ -4,7 +4,7 @@ import numpy as np
 from datetime import datetime
 from unittest.mock import MagicMock
 
-from stockwise_simulation_gen2 import ProfessionalStockAdvisor, FeatureCalculator
+from stockwise_simulation import ProfessionalStockAdvisor, FeatureCalculator
 
 
 class TestStockwiseGen2(unittest.TestCase):

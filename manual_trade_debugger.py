@@ -430,7 +430,7 @@ def create_debugger_report(entry_list: list):
         print("\n" + "=" * 80)
         print(f"📊 TRADE SUMMARY ({TICKER})")
         print("=" * 80)
-        print(df.to_string(index=False, col_space=12, justify='center'))
+        # print(df.to_string(index=False, col_space=12, justify='center'))
         print("-" * 80)
         print(f"💰 Total PnL: {total_pnl:.2f}%")
         print(f"📈 Total Pos PnL: {total_pos:.2f}%")

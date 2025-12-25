@@ -40,6 +40,7 @@ import pandas as pd
 import streamlit as st
 import itertools
 import json
+from results_analyzer import run_backtest  # We'll reuse the backtester
 import concurrent.futures
 import logging
 

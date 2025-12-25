@@ -22,8 +22,12 @@ import yfinance as yf
 import pytz
 import os
 import streamlit as st
-import datetime
+# import datetime (Removed to avoid conflict with 'from datetime import datetime')
 import system_config as cfg
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 # --- IBKR IMPORT ---
 # Check imports
@@ -36,7 +40,7 @@ except ImportError:
     class EClient: pass
     class EWrapper: pass
     class Contract: pass
-    print("❌ IBKR API (ibapi) not found. Install with: pip install ibapi")
+    logger.debug("[X] IBKR API (ibapi) not found. Install with: pip install ibapi")
     IBKR_AVAILABLE = False
 
 # --- ALPACA IMPORT ---
@@ -54,7 +58,7 @@ except ImportError:
     class APIError(Exception): pass
     class StockHistoricalDataClient:
         def __init__(self, **kwargs): pass
-    print("⚠️ Alpaca SDK not found. Alpaca fallback disabled.")
+    logger.debug("[!] Alpaca SDK not found. Alpaca fallback disabled.")
     ALPACA_AVAILABLE = False
 
 
@@ -165,7 +169,7 @@ class DataSourceManager(EWrapper, EClient):
 
             for _ in range(50):
                 if self.app.isConnected():
-                    self._log("✅ Connected to IBKR.")
+                    self._log("[OK] Connected to IBKR.")
                     return True
                 time.sleep(0.1)
             return False
@@ -180,6 +184,48 @@ class DataSourceManager(EWrapper, EClient):
 
     def isConnected(self):
         return self.app is not None and self.app.isConnected()
+
+    def get_fundamentals(self, ticker):
+        """
+        Fetches fundamental data for a given ticker using yfinance.
+        Returns a dictionary with key metrics or None if failed.
+        """
+        try:
+            stock = yf.Ticker(ticker)
+            info = stock.info
+            
+            # Extract key metrics safely
+            fundamentals = {
+                "trailingPE": info.get("trailingPE"),
+                "forwardPE": info.get("forwardPE"),
+                "pegRatio": info.get("pegRatio"),
+                "revenueGrowth": info.get("revenueGrowth"),
+                "profitMargins": info.get("profitMargins"),
+                "returnOnEquity": info.get("returnOnEquity"),
+                "sector": info.get("sector"),
+                "industry": info.get("industry")
+            }
+            logger.info(f"Fundamentals for {ticker}: {fundamentals}")
+            return fundamentals
+        except Exception as e:
+            logger.error(f"Failed to fetch fundamentals for {ticker}: {e}")
+            return None
+
+    def fetch_data_sequential(self, tickers: list):
+        """
+        Sequentially fetches data for a list of tickers.
+        Returns a dictionary {ticker: dataframe}.
+        """
+        data_map = {}
+        for ticker in tickers:
+            logger.info(f"[>] Fetching {ticker}...")
+            df = self.get_stock_data(ticker, days_back=None) # Rely on system config default
+            if not df.empty:
+                data_map[ticker] = df
+            else:
+                logger.warning(f"Failed to fetch data for {ticker}")
+        
+        return data_map
 
     # --- MAIN DATA METHOD (WATERFALL LOGIC) ---
     def get_stock_data(self, symbol, start_date=None, end_date=None, days_back=None, interval='1d'):
@@ -199,22 +245,22 @@ class DataSourceManager(EWrapper, EClient):
                 except Exception as e:
                     logging.info(f"IBKR Failed for {symbol}: {e}", "WARNING")
             else:
-                self._log("⚠️ IBKR not connected. Skipping IBKR download.", "WARNING")
+                self._log("[!] IBKR not connected. Skipping IBKR download.", "WARNING")
         else:
-            self._log("⚠️ IBKR disabled. Skipping IBKR download.", "INFO")
+            self._log("[!] IBKR disabled. Skipping IBKR download.", "INFO")
 
         # 2. Attempt Alpaca (Fallback #1)
         logging.info(f"--- IBKR failed or disabled. Proceeding to Alpaca for {symbol} ---")
         if self.allow_fallback and self.stock_client:
             try:
-                logging.info(f"⚠️ Attempting Alpaca fallback for {symbol}...")
+                logging.info(f"[!] Attempting Alpaca fallback for {symbol}...")
                 df = self._download_from_alpaca(clean_symbol, start_date, end_date, days_back, interval)
                 self._log(f"Alpaca download attempt completed for {symbol}.")
                 # self._log(f"DEBUG#12 stock_df range: {df.index.min()} to {df.index.max()}")
                 # self._log(f"DEBUG#12 stock_df Data: \n{df.head(3)} ...\n{df.tail(3)}")
                 # self._log(df[0:5].to_string())
                 if not df.empty:
-                    logging.info(f"✅ Success: Data retrieved from Alpaca.")
+                    logging.info(f"[OK] Success: Data retrieved from Alpaca.")
                     return df
             except Exception as e:
                 self._log(f"Alpaca Failed: {e}", "WARNING")
@@ -225,12 +271,12 @@ class DataSourceManager(EWrapper, EClient):
         logging.info(f"--- Alpaca failed or disabled. Proceeding to YFinance for {symbol} ---")
         if self.allow_fallback:
             try:
-                self._log(f"⚠️ Attempting YFinance fallback for {symbol}...")
+                self._log(f"[!] Attempting YFinance fallback for {symbol}...")
                 df = self._download_from_yfinance(clean_symbol, days_back, interval, start_date, end_date)
                 self._log(f"YFinance download attempt completed for {symbol}.")
                 # self._log(df[0:5].to_string())
                 if not df.empty:
-                    self._log(f"✅ Success: Data retrieved from YFinance.")
+                    self._log(f"[OK] Success: Data retrieved from YFinance.")
                     return df
             except Exception as e:
                 self._log(f"YFinance Failed: {e}", "ERROR")
@@ -359,19 +405,7 @@ class DataSourceManager(EWrapper, EClient):
             df.index.name = "Date"
 
             self._log(f"Successfully retrieved {len(df)} bars for {clean_symbol} from Alpaca.", "SUCCESS")
-            return df
-
-            # df_raw = bars.df
-            # df = df_raw.reset_index(level=0, drop=True)  # Drop symbol index
-            # df.rename(columns={'timestamp': 'Date', 'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close',
-            #                    'volume': 'Volume'}, inplace=True)
-            # df['Date'] = pd.to_datetime(df.index).dt.tz_localize(None)  # Index is already timestamp from alpaca usually
-            # if 'Date' not in df.columns:
-            #     df['Date'] = df.index
-            # df.set_index('Date', inplace=True)
-            #
-            # self._log(f"Successfully retrieved {len(df)} bars for {clean_symbol} from Alpaca.", "SUCCESS")
-            # return df
+            return pd.DataFrame()
 
         except APIError as e:
             self._log(f"Alpaca download failed for {clean_symbol}: {e}", "WARNING")
@@ -488,4 +522,55 @@ def normalize_and_validate_data(df: pd.DataFrame) -> pd.DataFrame:
     # Capitalize for consistency with other tools
     df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'},
               inplace=True)
+    return df
+
+
+def clean_raw_data(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Ensures data consistency for all downstream technical analysis.
+    This is often needed when switching between YF, Alpaca, and IBKR formats.
+    """
+    if df is None or df.empty: return pd.DataFrame()
+
+    # Ensure the input is a DataFrame before accessing 'columns'
+    if not isinstance(df, pd.DataFrame):
+        logging.error(f"Input to clean_raw_data is not a DataFrame: {type(df)}")
+        return pd.DataFrame()  # Return empty DataFrame to avoid AttributeError
+
+    # 1. Standardize column case (lowercase for pandas_ta)
+    if isinstance(df.columns, pd.MultiIndex):
+        # Flatten each tuple, drop empty parts, then lowercase
+        df.columns = [
+            "_".join([str(part) for part in col if part is not None and part != ""]).lower()
+            for col in df.columns
+        ]
+    else:
+        df.columns = [str(c).lower() for c in df.columns]
+
+    # 2. Drop duplicates (crucial after concatenation/merging data sources)
+    if isinstance(df.index, pd.MultiIndex):
+        df = df.droplevel(0)  # Drop symbol index from multi-index
+
+    df = df[~df.index.duplicated(keep='last')]
+    df.index.name = "Date"
+
+    # 3. Ensure index is timezone-naive datetime
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index)
+    if df.index.tz is not None:
+        df.index = df.index.tz_localize(None)
+
+    # 4. Filter for required columns (must have OHLCV)
+    required = {'open', 'high', 'low', 'close', 'volume'}
+    if not required.issubset(df.columns):
+        # We try to rename if YF/Alpaca capitalization was lost
+        df.rename(columns={'adj close': 'close'}, inplace=True)
+        if not required.issubset(df.columns):
+            logging.warning("Clean raw data failed: Missing OHLCV columns.")
+            return pd.DataFrame()
+
+    # Final cleanup (Forward fill then backward fill NaNs, usually from splits)
+    df.ffill(inplace=True)
+    df.bfill(inplace=True)
+
     return df

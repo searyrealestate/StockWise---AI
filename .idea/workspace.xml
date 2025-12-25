@@ -4,20 +4,27 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="3acaacc8-020f-4c5a-b82f-11a15b326b39" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/.idea/StockWise.iml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/Project_Default.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/profiles_settings.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/api_manager.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/data_fetcher.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/test_api_manager.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/test_data_fetch.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/train_model.py" afterDir="false" />
+    <list default="true" id="3acaacc8-020f-4c5a-b82f-11a15b326b39" name="Changes" comment="perf(optimizer): Parallelize grid search and optimize data handling&#10;&#10;This commit introduces a major performance overhaul to the strategy optimizer.&#10;&#10;Key improvements include:&#10;&#10;- **Parallel Processing**: The optimizer now uses a `ThreadPoolExecutor` to test multiple parameter combinations simultaneously, significantly reducing the total runtime for grid searches.&#10;- **Data Pre-fetching**: Historical market data is now downloaded once per model optimization and passed to worker threads. This eliminates thousands of redundant data fetches during the backtesting phase.&#10;- **Refactored Architecture**: The core optimization logic has been extracted into a `_process_combination` worker function to support concurrent execution.&#10;- **Real-time Progress**: The progress bar logic has been updated to accurately track the completion of parallel tasks.">
+      <change afterPath="$PROJECT_DIR$/notification_manager.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/signal_processor.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/stockwise_scanner.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/strategy_engine.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/system_config.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/test_ablation.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/continuous_learning_analyzer.py" beforeDir="false" afterPath="$PROJECT_DIR$/continuous_learning_analyzer.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/data_source_manager.py" beforeDir="false" afterPath="$PROJECT_DIR$/data_source_manager.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/feature_engine.py" beforeDir="false" afterPath="$PROJECT_DIR$/feature_engine.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/mico_optimizer.py" beforeDir="false" afterPath="$PROJECT_DIR$/mico_optimizer.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/mico_system.py" beforeDir="false" afterPath="$PROJECT_DIR$/mico_system.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/nasdaq_stocks.csv" beforeDir="false" afterPath="$PROJECT_DIR$/nasdaq_stocks.csv" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/results_analyzer.py" beforeDir="false" afterPath="$PROJECT_DIR$/results_analyzer.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/screener.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/stockwise_simulation.py" beforeDir="false" afterPath="$PROJECT_DIR$/stockwise_simulation.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_stockwise_gen2.py" beforeDir="false" afterPath="$PROJECT_DIR$/test_stockwise_gen2.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading_models.py" beforeDir="false" afterPath="$PROJECT_DIR$/trading_models.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/utils.py" beforeDir="false" afterPath="$PROJECT_DIR$/utils.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -34,9 +41,27 @@
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
-  <component name="ProjectColorInfo"><![CDATA[{
-  "associatedIndex": 4
-}]]></component>
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;searyrealestate&quot;
+  }
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;git@github.com:/searyrealestate/StockWise.git&quot;,
+    &quot;accountId&quot;: &quot;9745097e-b986-40cd-9155-7984abf8fa18&quot;
+  }
+}</component>
+  <component name="HighlightingSettingsPerFile">
+    <setting file="file://$PROJECT_DIR$/orchestrate_tuning.py" root0="FORCE_HIGHLIGHTING" />
+  </component>
+  <component name="ProblemsViewState">
+    <option name="selectedTabId" value="CurrentFile" />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 4
+}</component>
   <component name="ProjectId" id="2ywqpd3R6kmKAuWnqdOucFMZOFd" />
   <component name="ProjectLevelVcsManager" settingsEditedManually="true" />
   <component name="ProjectViewState">
@@ -45,7 +70,87 @@
   </component>
   <component name="PropertiesComponent"><![CDATA[{
   "keyToString": {
+    "Python tests.Python tests for ibkr_connection_manager.test_enhanced_ibkr_connection.executor": "Run",
+    "Python tests.Python tests for test_algo_configurator.TestStockWiseAutoCalibrator.executor": "Run",
+    "Python tests.Python tests for test_algo_configurator.TestStockWiseAutoCalibrator.test_calculate_actual_return_negative.executor": "Run",
+    "Python tests.Python tests for test_algo_configurator.TestStockWiseAutoCalibrator.test_generate_param_grid.executor": "Run",
+    "Python tests.Python tests for test_algo_configurator.TestStockWiseAutoCalibrator.test_normalize_numeric_values.executor": "Run",
+    "Python tests.Python tests for test_create_parquet_NASDAQ_file.TestDataSourcing.executor": "Run",
+    "Python tests.Python tests for test_create_parquet_NASDAQ_file.TestDataSourcing.test_ibkr_success_path.executor": "Run",
+    "Python tests.Python tests for test_create_parquet_NASDAQ_file.TestDataSourcing.test_ibkr_to_yfinance_fallback.executor": "Run",
+    "Python tests.Python tests for test_create_parquet_NASDAQ_file.TestDataSourcing.test_ibkr_to_yfinance_fallback.test_process_ticker_list_uses_ibkr_successfully.executor": "Run",
+    "Python tests.Python tests for test_create_parquet_NASDAQ_file.test_all_expected_features_exist.executor": "Run",
+    "Python tests.Python tests for test_create_parquet_NASDAQ_file.test_feature_correlation_to_qqq.executor": "Run",
+    "Python tests.Python tests for test_create_parquet_NASDAQ_file.test_feature_volatility_cluster.executor": "Run",
+    "Python tests.Python tests for test_create_parquet_NASDAQ_file.test_new_feature_dominant_cycle.executor": "Run",
+    "Python tests.Python tests for test_create_parquet_NASDAQ_file.test_new_feature_stochastic.executor": "Run",
+    "Python tests.Python tests for test_create_parquet_NASDAQ_file.test_triple_barrier_labeling.executor": "Run",
+    "Python tests.Python tests for test_create_parquet_NASDAQ_file.test_triple_barrier_logic_scenario.executor": "Run",
+    "Python tests.Python tests for test_data_source_manager.TestDataSourceManager.test_ibkr_connection_failure_scenario.executor": "Run",
+    "Python tests.Python tests for test_data_source_manager.TestDataSourceManager.test_total_failure_scenario.executor": "Run",
+    "Python tests.Python tests for test_data_source_manager.TestDataSourceManager.test_yfinance_fallback_scenario.executor": "Run",
+    "Python tests.Python tests for test_integration_connections.TestLiveConnections.executor": "Run",
+    "Python tests.Python tests for test_integration_connections.TestLiveConnections.test_ibkr_real_connection.executor": "Run",
+    "Python tests.Python tests for test_integration_connections.TestLiveConnections.test_yfinance_real_connection.test_ibkr_real_connection.executor": "Run",
+    "Python tests.Python tests for test_integration_connections.TestLiveTwsConnection.executor": "Run",
+    "Python tests.Python tests for test_integration_connections.TestLiveTwsConnection.test_ibkr_to_yfinance_fallback.executor": "Run",
+    "Python tests.Python tests for test_integration_connections.TestLiveTwsConnection.test_tws_api_real_connection.executor": "Run",
+    "Python tests.Python tests for test_integration_connections.TestLiveTwsConnection.test_yfinance_real_connection.executor": "Run",
+    "Python tests.Python tests for test_system_performance.TestFinancialBacktesting.executor": "Run",
+    "Python tests.Python tests for test_system_performance.TestFinancialBacktesting.test_overall_performance.executor": "Run",
+    "Python tests.Python tests for test_system_performance.TestFinancialBacktesting.test_stress_test_bear_market.executor": "Run",
+    "Python tests.Python tests for unit_test_model_evaluator.test_evaluator_handles_empty_test_data.executor": "Run",
+    "Python tests.Python tests for unit_test_model_trainer.test_train_single_model_saves_correctly.executor": "Run",
+    "Python tests.Python tests for unit_test_model_trainer.test_trained_model_meets_kpi.executor": "Run",
+    "Python tests.Python tests for unit_test_model_trainer.test_trainer_handles_insufficient_labels.executor": "Run",
+    "Python tests.Python tests in IBKR_connection_test.py.executor": "Run",
+    "Python tests.Python tests in ibkr_connection_manager.py.executor": "Run",
+    "Python tests.Python tests in stockwise_simulation.py.executor": "Run",
+    "Python tests.Python tests in test_ablation.py.executor": "Debug",
+    "Python tests.Python tests in test_algo_configurator.py.executor": "Run",
+    "Python tests.Python tests in test_create_parquet_NASDAQ_file.py.executor": "Run",
+    "Python tests.Python tests in test_data_source_manager.py.executor": "Run",
+    "Python tests.Python tests in test_integration_connections.py.executor": "Run",
+    "Python tests.Python tests in test_stockwise_gen2.py.executor": "Run",
+    "Python tests.Python tests in test_system_performance.py.executor": "Run",
+    "Python tests.Python tests in unit_test_model_evaluator.py.executor": "Run",
+    "Python tests.Python tests in unit_test_model_trainer.py.executor": "Run",
+    "Python.Create_parquet_file_NASDAQ.executor": "Run",
+    "Python.IBKR_connection_test.executor": "Run",
+    "Python.TWS_connect_test.executor": "Run",
+    "Python.advanced_testing_features.executor": "Run",
+    "Python.algo_configurator.executor": "Run",
+    "Python.algo_testing_script.executor": "Run",
+    "Python.algorithm_debug_system.executor": "Run",
+    "Python.analyze_model.executor": "Run",
+    "Python.analyze_test_results.executor": "Run",
+    "Python.api_manager.executor": "Run",
+    "Python.build_nasdaq_market_cap.executor": "Run",
+    "Python.continuous_learning_analyzer.executor": "Debug",
+    "Python.create_list_of_stocks.executor": "Run",
+    "Python.data_manager.executor": "Run",
+    "Python.data_source_manager.executor": "Run",
+    "Python.merge_intraday_with_context.executor": "Run",
+    "Python.model_evaluator.executor": "Run",
+    "Python.model_trainer.executor": "Run",
+    "Python.nasdaq_full_download.executor": "Run",
+    "Python.nvda_debug_implementation.executor": "Run",
+    "Python.orchestrate_tuning.executor": "Run",
+    "Python.results_compiler.executor": "Run",
+    "Python.run_all_tests.executor": "Run",
+    "Python.run_master_test.executor": "Run",
+    "Python.run_optimization.executor": "Run",
+    "Python.run_unit_tests.executor": "Run",
+    "Python.sanity_test (1).executor": "Run",
+    "Python.stockwise_simulation-gen2.executor": "Run",
+    "Python.stockwise_simulation.executor": "Run",
+    "Python.test_ablation.executor": "Debug",
+    "Python.testing.executor": "Run",
+    "Python.train_models_from_pkl (1).executor": "Run",
+    "Python.train_sp500_model.executor": "Run",
+    "Python.tune_hyperparameters.executor": "Run",
     "RunOnceActivity.ChatTagsLlmMigration": "true",
+    "RunOnceActivity.ClientConfigCleanupMigration": "true",
     "RunOnceActivity.CodyAccountHistoryMigration": "true",
     "RunOnceActivity.CodyAccountsIdsRefresh": "true",
     "RunOnceActivity.CodyAssignOrphanedChatsToActiveAccount": "true",
@@ -56,11 +161,138 @@
     "RunOnceActivity.DeprecatedChatLlmMigration": "true",
     "RunOnceActivity.ShowReadmeOnStart": "true",
     "RunOnceActivity.ToggleCodyToolWindowAfterMigration": "true",
+    "SHARE_PROJECT_CONFIGURATION_FILES": "true",
     "com.codeium.enabled": "true",
     "didalgo.chatgpt.ToolWindow.ACTIVE": "GPT_4",
-    "git-widget-placeholder": "master"
+    "git-widget-placeholder": "master",
+    "ignore.virus.scanning.warn.message": "true",
+    "settings.editor.selected.configurable": "preferences.pluginManager"
   }
 }]]></component>
+  <component name="RunManager" selected="Python.test_ablation">
+    <configuration name="continuous_learning_analyzer" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="StockWise" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/continuous_learning_analyzer.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <configuration name="run_master_test" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="StockWise" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <EXTENSION ID="net.ashald.envfile">
+        <option name="IS_ENABLED" value="false" />
+        <option name="IS_SUBST" value="false" />
+        <option name="IS_PATH_MACRO_SUPPORTED" value="false" />
+        <option name="IS_IGNORE_MISSING_FILES" value="false" />
+        <option name="IS_ENABLE_EXPERIMENTAL_INTEGRATIONS" value="false" />
+        <ENTRIES>
+          <ENTRY IS_ENABLED="true" PARSER="runconfig" IS_EXECUTABLE="false" />
+        </ENTRIES>
+      </EXTENSION>
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/run_master_test.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <configuration name="test_ablation" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="StockWise" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/test_ablation.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <configuration name="Python tests in IBKR_connection_test.py" type="tests" factoryName="Autodetect" temporary="true" nameIsGenerated="true">
+      <module name="StockWise" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="_new_additionalArguments" value="&quot;&quot;" />
+      <option name="_new_target" value="&quot;$PROJECT_DIR$/IBKR_connection_test.py&quot;" />
+      <option name="_new_targetType" value="&quot;PATH&quot;" />
+      <method v="2" />
+    </configuration>
+    <configuration name="Python tests in test_ablation.py" type="tests" factoryName="Autodetect" temporary="true" nameIsGenerated="true">
+      <module name="StockWise" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="_new_additionalArguments" value="&quot;&quot;" />
+      <option name="_new_target" value="&quot;$PROJECT_DIR$/test_ablation.py&quot;" />
+      <option name="_new_targetType" value="&quot;PATH&quot;" />
+      <method v="2" />
+    </configuration>
+    <list>
+      <item itemvalue="Python.test_ablation" />
+      <item itemvalue="Python.continuous_learning_analyzer" />
+      <item itemvalue="Python.run_master_test" />
+      <item itemvalue="Python tests.Python tests in test_ablation.py" />
+      <item itemvalue="Python tests.Python tests in IBKR_connection_test.py" />
+    </list>
+    <recent_temporary>
+      <list>
+        <item itemvalue="Python.test_ablation" />
+        <item itemvalue="Python tests.Python tests in test_ablation.py" />
+        <item itemvalue="Python.continuous_learning_analyzer" />
+        <item itemvalue="Python tests.Python tests in IBKR_connection_test.py" />
+        <item itemvalue="Python.run_master_test" />
+      </list>
+    </recent_temporary>
+  </component>
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
@@ -77,6 +309,532 @@
       <option name="presentableId" value="Default" />
       <updated>1750756167678</updated>
     </task>
+    <task id="LOCAL-00148" summary="create config.yaml - use and passwords">
+      <option name="closed" value="true" />
+      <created>1762222167724</created>
+      <option name="number" value="00148" />
+      <option name="presentableId" value="LOCAL-00148" />
+      <option name="project" value="LOCAL" />
+      <updated>1762222167724</updated>
+    </task>
+    <task id="LOCAL-00149" summary="fix bug - the application tried to connect IBKR while running over cloud.">
+      <option name="closed" value="true" />
+      <created>1762222465746</created>
+      <option name="number" value="00149" />
+      <option name="presentableId" value="LOCAL-00149" />
+      <option name="project" value="LOCAL" />
+      <updated>1762222465746</updated>
+    </task>
+    <task id="LOCAL-00150" summary="fix bug - the application tried to connect IBKR while running over cloud.">
+      <option name="closed" value="true" />
+      <created>1762222761347</created>
+      <option name="number" value="00150" />
+      <option name="presentableId" value="LOCAL-00150" />
+      <option name="project" value="LOCAL" />
+      <updated>1762222761347</updated>
+    </task>
+    <task id="LOCAL-00151" summary="fix bug - the application tried to connect IBKR while running over cloud.">
+      <option name="closed" value="true" />
+      <created>1762335832814</created>
+      <option name="number" value="00151" />
+      <option name="presentableId" value="LOCAL-00151" />
+      <option name="project" value="LOCAL" />
+      <updated>1762335832814</updated>
+    </task>
+    <task id="LOCAL-00152" summary="fix bug - the application tried to connect IBKR while running over cloud.">
+      <option name="closed" value="true" />
+      <created>1762336962082</created>
+      <option name="number" value="00152" />
+      <option name="presentableId" value="LOCAL-00152" />
+      <option name="project" value="LOCAL" />
+      <updated>1762336962082</updated>
+    </task>
+    <task id="LOCAL-00153" summary="fix bug - change the Google Cloud Storage bucket path">
+      <option name="closed" value="true" />
+      <created>1762338394926</created>
+      <option name="number" value="00153" />
+      <option name="presentableId" value="LOCAL-00153" />
+      <option name="project" value="LOCAL" />
+      <updated>1762338394926</updated>
+    </task>
+    <task id="LOCAL-00154" summary="print debug log">
+      <option name="closed" value="true" />
+      <created>1762339099495</created>
+      <option name="number" value="00154" />
+      <option name="presentableId" value="LOCAL-00154" />
+      <option name="project" value="LOCAL" />
+      <updated>1762339099495</updated>
+    </task>
+    <task id="LOCAL-00155" summary="debug apps issue (apps not running) - add print logs">
+      <option name="closed" value="true" />
+      <created>1762341446001</created>
+      <option name="number" value="00155" />
+      <option name="presentableId" value="LOCAL-00155" />
+      <option name="project" value="LOCAL" />
+      <updated>1762341446001</updated>
+    </task>
+    <task id="LOCAL-00156" summary="debug apps issue (apps not running) - add print logs&#10;add more debug prints">
+      <option name="closed" value="true" />
+      <created>1762341589421</created>
+      <option name="number" value="00156" />
+      <option name="presentableId" value="LOCAL-00156" />
+      <option name="project" value="LOCAL" />
+      <updated>1762341589432</updated>
+    </task>
+    <task id="LOCAL-00157" summary="update the requirements.txt file - add lightgbm&#10;&#10;chan ge in stockwise_simulation.py rename the function name from _load_gen3_models to _load_gen3_models_v2">
+      <option name="closed" value="true" />
+      <created>1762342018719</created>
+      <option name="number" value="00157" />
+      <option name="presentableId" value="LOCAL-00157" />
+      <option name="project" value="LOCAL" />
+      <updated>1762342018719</updated>
+    </task>
+    <task id="LOCAL-00158" summary="add nasdaq_full_list.csv">
+      <option name="closed" value="true" />
+      <created>1762344047120</created>
+      <option name="number" value="00158" />
+      <option name="presentableId" value="LOCAL-00158" />
+      <option name="project" value="LOCAL" />
+      <updated>1762344047120</updated>
+    </task>
+    <task id="LOCAL-00159" summary="update requirements.txt file">
+      <option name="closed" value="true" />
+      <created>1762344289497</created>
+      <option name="number" value="00159" />
+      <option name="presentableId" value="LOCAL-00159" />
+      <option name="project" value="LOCAL" />
+      <updated>1762344289497</updated>
+    </task>
+    <task id="LOCAL-00160" summary="add nasdaq_stocks.csv file&#10;&#10;remove debug prints from stockwise_simulation.py">
+      <option name="closed" value="true" />
+      <created>1762344491046</created>
+      <option name="number" value="00160" />
+      <option name="presentableId" value="LOCAL-00160" />
+      <option name="project" value="LOCAL" />
+      <updated>1762344491046</updated>
+    </task>
+    <task id="LOCAL-00161" summary="update calculate_all_features to work in cloud">
+      <option name="closed" value="true" />
+      <created>1762346185506</created>
+      <option name="number" value="00161" />
+      <option name="presentableId" value="LOCAL-00161" />
+      <option name="project" value="LOCAL" />
+      <updated>1762346185506</updated>
+    </task>
+    <task id="LOCAL-00162" summary="Add best_params.json file">
+      <option name="closed" value="true" />
+      <created>1762349847865</created>
+      <option name="number" value="00162" />
+      <option name="presentableId" value="LOCAL-00162" />
+      <option name="project" value="LOCAL" />
+      <updated>1762349847865</updated>
+    </task>
+    <task id="LOCAL-00163" summary="update the stockwise_simulation.py function:&#10;update calculate_all_features funcion to run on the cloud&#10;The bug was that your try...except block only protected the pandas-ta calculations, but not the manual calculations (like df['volume_ma_20']). This new version wraps all calculations in one main try...except block.">
+      <option name="closed" value="true" />
+      <created>1762379195569</created>
+      <option name="number" value="00163" />
+      <option name="presentableId" value="LOCAL-00163" />
+      <option name="project" value="LOCAL" />
+      <updated>1762379195569</updated>
+    </task>
+    <task id="LOCAL-00164" summary="open debug prints on calculate_all_features function">
+      <option name="closed" value="true" />
+      <created>1762379402619</created>
+      <option name="number" value="00164" />
+      <option name="presentableId" value="LOCAL-00164" />
+      <option name="project" value="LOCAL" />
+      <updated>1762379402619</updated>
+    </task>
+    <task id="LOCAL-00165" summary="fix error mange while running the screener">
+      <option name="closed" value="true" />
+      <created>1762381246322</created>
+      <option name="number" value="00165" />
+      <option name="presentableId" value="LOCAL-00165" />
+      <option name="project" value="LOCAL" />
+      <updated>1762381246322</updated>
+    </task>
+    <task id="LOCAL-00166" summary="update stockwise_simulation.py,&#10;maped the model parameters correctly">
+      <option name="closed" value="true" />
+      <created>1762382933768</created>
+      <option name="number" value="00166" />
+      <option name="presentableId" value="LOCAL-00166" />
+      <option name="project" value="LOCAL" />
+      <updated>1762382933768</updated>
+    </task>
+    <task id="LOCAL-00167" summary="update stockwise_simulation.py,&#10;mapped the model parameters correctly - update parameters">
+      <option name="closed" value="true" />
+      <created>1762384255994</created>
+      <option name="number" value="00167" />
+      <option name="presentableId" value="LOCAL-00167" />
+      <option name="project" value="LOCAL" />
+      <updated>1762384255994</updated>
+    </task>
+    <task id="LOCAL-00168" summary="update stockwise_simulation.py,&#10;mapped the model parameters correctly - update parameters">
+      <option name="closed" value="true" />
+      <created>1762385022539</created>
+      <option name="number" value="00168" />
+      <option name="presentableId" value="LOCAL-00168" />
+      <option name="project" value="LOCAL" />
+      <updated>1762385022539</updated>
+    </task>
+    <task id="LOCAL-00169" summary="update stockwise_simulation.py,&#10;mapped the model parameters correctly - update parameters&#10;to:&#10;'dominant_cycle': 'Dominant_Cycle_126D'&#10;addiing:&#10;df['smoothed_close_5d'] = df['close'].rolling(5).mean()&#10;        df['rsi_14_smoothed'] = df['rsi_14'].rolling(5).mean()">
+      <option name="closed" value="true" />
+      <created>1762414221929</created>
+      <option name="number" value="00169" />
+      <option name="presentableId" value="LOCAL-00169" />
+      <option name="project" value="LOCAL" />
+      <updated>1762414221929</updated>
+    </task>
+    <task id="LOCAL-00170" summary="update stockwise_simulation.py,&#10;mapped the model parameters correctly - update parameters&#10;from: &#10;stop_loss_price = latest_row['close'] - (latest_row['atr_14'] * 2.5)&#10;to:&#10;stop_loss_price = latest_row['close'] - (latest_row['ATR_14'] * 2.5)">
+      <option name="closed" value="true" />
+      <created>1762415073924</created>
+      <option name="number" value="00170" />
+      <option name="presentableId" value="LOCAL-00170" />
+      <option name="project" value="LOCAL" />
+      <updated>1762415073924</updated>
+    </task>
+    <task id="LOCAL-00171" summary="fix bugs:&#10;1. checkboxes in expander - put all check boxed in Select Models to Run expander&#10;2. hide the Strategy Optimizer while running it running on cloud, this should run only on PC and uploaded to the GitHub">
+      <option name="closed" value="true" />
+      <created>1762416404651</created>
+      <option name="number" value="00171" />
+      <option name="presentableId" value="LOCAL-00171" />
+      <option name="project" value="LOCAL" />
+      <updated>1762416404651</updated>
+    </task>
+    <task id="LOCAL-00172" summary="fix bugs:&#10;hide the Strategy Optimizer while running it running on cloud, this should run only on PC and uploaded to the GitHub - change it to IS_CLOUD == False">
+      <option name="closed" value="true" />
+      <created>1762416518210</created>
+      <option name="number" value="00172" />
+      <option name="presentableId" value="LOCAL-00172" />
+      <option name="project" value="LOCAL" />
+      <updated>1762416518210</updated>
+    </task>
+    <task id="LOCAL-00173" summary="fix bugs in optimize_btn, add optimize_btn = False befor the if not IS_CLOUD:">
+      <option name="closed" value="true" />
+      <created>1762418384822</created>
+      <option name="number" value="00173" />
+      <option name="presentableId" value="LOCAL-00173" />
+      <option name="project" value="LOCAL" />
+      <updated>1762418384822</updated>
+    </task>
+    <task id="LOCAL-00174" summary="update files:&#10;mico_system.py&#10;stockwise_simulation.py&#10;&#10;fix bugs:&#10;fix memory issues.&#10;fix model naming conventions">
+      <option name="closed" value="true" />
+      <created>1762423677150</created>
+      <option name="number" value="00174" />
+      <option name="presentableId" value="LOCAL-00174" />
+      <option name="project" value="LOCAL" />
+      <updated>1762423677150</updated>
+    </task>
+    <task id="LOCAL-00175" summary="the was an naming convention error when the script running on cloud and on my local PC.&#10;this solved now.">
+      <option name="closed" value="true" />
+      <created>1762424558731</created>
+      <option name="number" value="00175" />
+      <option name="presentableId" value="LOCAL-00175" />
+      <option name="project" value="LOCAL" />
+      <updated>1762424558731</updated>
+    </task>
+    <task id="LOCAL-00176" summary="change naming in UI">
+      <option name="closed" value="true" />
+      <created>1762464693806</created>
+      <option name="number" value="00176" />
+      <option name="presentableId" value="LOCAL-00176" />
+      <option name="project" value="LOCAL" />
+      <updated>1762464693806</updated>
+    </task>
+    <task id="LOCAL-00177" summary="style(mico): Add comments to clarify risk/reward logic&#10;&#10;This commit makes no functional changes to the mico_system.py file.&#10;&#10;It adds several explanatory comments inside the `analyze` method to clarify the existing logic for calculating the `stop_loss_price`, `risk`, and `profit_target_price`.">
+      <option name="closed" value="true" />
+      <created>1762464909656</created>
+      <option name="number" value="00177" />
+      <option name="presentableId" value="LOCAL-00177" />
+      <option name="project" value="LOCAL" />
+      <updated>1762464909656</updated>
+    </task>
+    <task id="LOCAL-00178" summary="Update Mico chart">
+      <option name="closed" value="true" />
+      <created>1762472625618</created>
+      <option name="number" value="00178" />
+      <option name="presentableId" value="LOCAL-00178" />
+      <option name="project" value="LOCAL" />
+      <updated>1762472625618</updated>
+    </task>
+    <task id="LOCAL-00179" summary="change MAX_WORKERS to 10">
+      <option name="closed" value="true" />
+      <created>1762611026358</created>
+      <option name="number" value="00179" />
+      <option name="presentableId" value="LOCAL-00179" />
+      <option name="project" value="LOCAL" />
+      <updated>1762611026358</updated>
+    </task>
+    <task id="LOCAL-00180" summary="change MAX_WORKERS to 7">
+      <option name="closed" value="true" />
+      <created>1762611522103</created>
+      <option name="number" value="00180" />
+      <option name="presentableId" value="LOCAL-00180" />
+      <option name="project" value="LOCAL" />
+      <updated>1762611522103</updated>
+    </task>
+    <task id="LOCAL-00181" summary="removed pandas-ta==0.4.71b0 to pandas-ta">
+      <option name="closed" value="true" />
+      <created>1762613871608</created>
+      <option name="number" value="00181" />
+      <option name="presentableId" value="LOCAL-00181" />
+      <option name="project" value="LOCAL" />
+      <updated>1762613871608</updated>
+    </task>
+    <task id="LOCAL-00182" summary="Update the model_trainer.py&#10;- to from data_source_manager import DataSourceManager">
+      <option name="closed" value="true" />
+      <created>1762614440856</created>
+      <option name="number" value="00182" />
+      <option name="presentableId" value="LOCAL-00182" />
+      <option name="project" value="LOCAL" />
+      <updated>1762614440856</updated>
+    </task>
+    <task id="LOCAL-00183" summary="Update orchestrate_tuning.py&#10;- remove from data_source_manager import DataSourceManager - not in use">
+      <option name="closed" value="true" />
+      <created>1762614716486</created>
+      <option name="number" value="00183" />
+      <option name="presentableId" value="LOCAL-00183" />
+      <option name="project" value="LOCAL" />
+      <updated>1762614716486</updated>
+    </task>
+    <task id="LOCAL-00184" summary="Update orchestrate_tuning.py&#10;- option for Custom run &#10;- add new log output with unique study_name">
+      <option name="closed" value="true" />
+      <created>1762635561153</created>
+      <option name="number" value="00184" />
+      <option name="presentableId" value="LOCAL-00184" />
+      <option name="project" value="LOCAL" />
+      <updated>1762635561153</updated>
+    </task>
+    <task id="LOCAL-00185" summary="update numbers of MAX_WORKERS = 2">
+      <option name="closed" value="true" />
+      <created>1762778729018</created>
+      <option name="number" value="00185" />
+      <option name="presentableId" value="LOCAL-00185" />
+      <option name="project" value="LOCAL" />
+      <updated>1762778729018</updated>
+    </task>
+    <task id="LOCAL-00186" summary="fix(trainer): Remove DataManager dependency and fix feature name typo&#10;&#10;This commit refactors the `model_trainer.py` script to remove its dependency on `DataManager` for loading training data. It also corrects a typo in the feature list.&#10;&#10;Key changes include:&#10;&#10;- **Removed `DataManager` Dependency**: The `run_training_job` function no longer uses the `DataManager` class. Instead, it now uses `glob` to find all `_daily_context.parquet` files in the specified directory and loads them directly with `pandas.concat`. This change simplifies the script and aligns it with the new data pipeline, which no longer produces the intraday `_features.parquet` files at this stage.&#10;&#10;- **Feature Name Typo Fix**: Corrected a typo in the `gen3_feature_cols` list, changing `st_och_d` to the correct `stoch_d` (Stochastic %D). This is a critical fix to prevent `KeyError` exceptions during model training.">
+      <option name="closed" value="true" />
+      <created>1762780258612</created>
+      <option name="number" value="00186" />
+      <option name="presentableId" value="LOCAL-00186" />
+      <option name="project" value="LOCAL" />
+      <updated>1762780258612</updated>
+    </task>
+    <task id="LOCAL-00187" summary="feat(analysis): Add system-aware indicators to backtest charts&#10;&#10;This commit upgrades the `create_trade_chart` function in the results analyzer to be &quot;system-aware,&quot; allowing it to display different indicators based on the source of the trade.&#10;&#10;Key changes include:&#10;&#10;- **System-Aware Charting**: The `create_trade_chart` function now accepts the `full_trade_row` to check the trade's `Source`.&#10;- **MICO Indicator Plotting**: If the trade `Source` is 'MICO', the chart now plots the 50-day and 200-day SMAs and labels the horizontal lines as &quot;Mico Stop-Loss&quot; and &quot;Mico Profit Target&quot; for clear visual distinction.&#10;- **Extended Chart History**: The chart's historical lookback has been extended from 30 days to 250 days. This is a necessary change to ensure there is enough data to calculate and display the new 200-day SMA for MICO trades.&#10;- **Dashboard Update**: The `display_backtest_dashboard` function has been updated to pass the `full_trade_row` to the chart function, enabling this new logic.">
+      <option name="closed" value="true" />
+      <created>1762780376260</created>
+      <option name="number" value="00187" />
+      <option name="presentableId" value="LOCAL-00187" />
+      <option name="project" value="LOCAL" />
+      <updated>1762780376260</updated>
+    </task>
+    <task id="LOCAL-00188" summary="create the script:&#10;StockWise Gen-4: The Orchestra Architecture (With Binary Prediction Chart)&#10;==========================================================================&#10;1. Feature Calculator: Computes SMAs, ADX, RSI, and Donchian Channels.&#10;2. MarketRegimeDetector: Determines if we are in a TREND, RANGE, or BEAR market.&#10;3. StrategyOrchestra: Selects the correct sub-strategy.&#10;4. Visualization: Adds a specific 'Prediction Signal' (0/1) panel synced to T+1.&#10;5. Logic: Adds a 'WAIT' state.&#10;6. Visualization: -1/0/1 scale for clear decision tracking.&#10;7. Logic Update: Adds 'Early Breakout' override to catch fast rallies.&#10;8. Visualization Upgrade: Replaced Line Chart with Japanese Candlesticks&#10;9. Data Logic: Captures OHLC data for precise visualization.&#10;10. Logic Update: Maintains 'Early Breakout' and Tri-State prediction.">
+      <option name="closed" value="true" />
+      <created>1764362133508</created>
+      <option name="number" value="00188" />
+      <option name="presentableId" value="LOCAL-00188" />
+      <option name="project" value="LOCAL" />
+      <updated>1764362133508</updated>
+    </task>
+    <task id="LOCAL-00189" summary="create the script:&#10;StockWise Gen-4: The Orchestra Architecture (With Binary Prediction Chart)&#10;==========================================================================&#10;1. Feature Calculator: Computes SMAs, ADX, RSI, and Donchian Channels.&#10;2. MarketRegimeDetector: Determines if we are in a TREND, RANGE, or BEAR market.&#10;3. StrategyOrchestra: Selects the correct sub-strategy.&#10;4. Visualization: Adds a specific 'Prediction Signal' (0/1) panel synced to T+1.&#10;5. Logic: Adds a 'WAIT' state.&#10;6. Visualization: -1/0/1 scale for clear decision tracking.&#10;7. Logic Update: Adds 'Early Breakout' override to catch fast rallies.&#10;8. Visualization Upgrade: Replaced Line Chart with Japanese Candlesticks&#10;9. Data Logic: Captures OHLC data for precise visualization.&#10;10. Logic Update: Maintains 'Early Breakout' and Tri-State prediction.">
+      <option name="closed" value="true" />
+      <created>1764362153233</created>
+      <option name="number" value="00189" />
+      <option name="presentableId" value="LOCAL-00189" />
+      <option name="project" value="LOCAL" />
+      <updated>1764362153233</updated>
+    </task>
+    <task id="LOCAL-00190" summary="feat(core): Add AdaptiveLearner for dynamic threshold adjustment&#10;&#10;This commit introduces the `AdaptiveLearner` class, a persistent engine designed to auto-tune the trading system's strictness based on recent performance.&#10;&#10;Key features include:&#10;- **Persistent State**: Uses `system_brain_state.json` to store trade history and pending signals across sessions.&#10;- **Dynamic Logic**: Implements a `get_threshold()` method that raises entry requirements (to 65) if recent accuracy is low (&lt;40%) and lowers them (to 40) if accuracy is high (&gt;70%).&#10;- **Trade Tracking**: Adds methods to register new trades and record boolean feedback (Hit/Miss) to update the rolling accuracy window.">
+      <option name="closed" value="true" />
+      <created>1764362363794</created>
+      <option name="number" value="00190" />
+      <option name="presentableId" value="LOCAL-00190" />
+      <option name="project" value="LOCAL" />
+      <updated>1764362363794</updated>
+    </task>
+    <task id="LOCAL-00191" summary="feat(data): Integrate Alpaca for robust historical data&#10;&#10;This commit introduces a major enhancement to the data management layer by integrating the Alpaca API as a secondary, high-quality data source.&#10;&#10;Key changes include:&#10;&#10;- **Alpaca Integration**: The `DataSourceManager` now initializes an Alpaca `StockHistoricalDataClient` if API keys are present in Streamlit secrets. This provides a reliable fallback for historical data when IBKR is unavailable, significantly better than yfinance for bulk requests.&#10;- **Priority Logic**: The `get_stock_data` method has been updated to follow a strict priority: IBKR -&gt; Alpaca -&gt; YFinance.&#10;- **Bulk Download Support**: A new `get_screener_data_bulk` method has been added. This leverages Alpaca's ability to fetch data for hundreds of symbols in a single API call, which will drastically speed up the market screener.&#10;- **Earnings Calendar**: A new `get_earnings_calendar` method (using yfinance) has been added to support future event-driven strategies.&#10;- **Robustness Improvements**: Added better error handling for API initialization and data parsing across all sources.">
+      <option name="closed" value="true" />
+      <created>1764362556924</created>
+      <option name="number" value="00191" />
+      <option name="presentableId" value="LOCAL-00191" />
+      <option name="project" value="LOCAL" />
+      <updated>1764362556924</updated>
+    </task>
+    <task id="LOCAL-00192" summary="create the scripts">
+      <option name="closed" value="true" />
+      <created>1764362629872</created>
+      <option name="number" value="00192" />
+      <option name="presentableId" value="LOCAL-00192" />
+      <option name="project" value="LOCAL" />
+      <updated>1764362629872</updated>
+    </task>
+    <task id="LOCAL-00193" summary="feat(gen5): Upgrade architecture to Gen-5 with Sector Awareness&#10;&#10;This commit introduces the Gen-5 Orchestra Architecture, significantly enhancing the simulation engine with sector-specific logic and improved data handling.&#10;&#10;Key features include:&#10;&#10;- **Sector Awareness**: The `RobustFeatureCalculator` now integrates sector benchmark data (loaded via `load_data_sequential`) to calculate relative strength. This allows the strategy to filter trades based on sector performance.&#10;- **Dynamic Parameter Loading**: The system now attempts to load optimized parameters from a JSON file (e.g., `optimization_results_NVDA.json`) before falling back to defaults, enabling asset-specific tuning.&#10;- **Enhanced Logic**: The `StrategyOrchestra` has been updated with new rules, including a &quot;slope angle&quot; check for velocity and sector divergence logic for dip buying.&#10;- **Split/Merge Visualization**: The chart generator now detects and marks potential stock splits (drops &gt; 50%) and reverse merges (jumps &gt; 50%) on the price chart for better historical accuracy.&#10;- **Sequential Data Loading**: Replaced the parallel data loader with `load_data_sequential` to improve stability and avoid potential thread-pool conflicts during data fetching.">
+      <option name="closed" value="true" />
+      <created>1764585273240</created>
+      <option name="number" value="00193" />
+      <option name="presentableId" value="LOCAL-00193" />
+      <option name="project" value="LOCAL" />
+      <updated>1764585273240</updated>
+    </task>
+    <task id="LOCAL-00194" summary="feat(data): Add SectorMapper and refine IBKR logic&#10;&#10;This commit enhances the `DataSourceManager` with sector-mapping capabilities and refines the core data fetching logic for improved robustness.&#10;&#10;Key changes include:&#10;&#10;- **New `SectorMapper` Class**: A new class has been added to intelligently map a stock symbol to its corresponding sector or industry ETF (e.g., NVDA -&gt; SMH, AAPL -&gt; XLK). This enables sector-relative analysis.&#10;- **Improved IBKR Data Fetching**: The `_download_from_ibkr` method has been updated with better contract resolution logic, specifically handling index symbols (like `^VIX`) correctly. It also includes more robust date and duration string formatting to prevent API errors.&#10;- **Refined Data Normalization**: The `normalize_and_validate_data` function now standardizes column names to Title Case ('Open', 'High', etc.) for consistency across the application, and ensures the index is a timezone-naive DatetimeIndex.&#10;- **YFinance Optimization**: The `_download_from_yfinance` method now includes logic to handle long-term daily data requests more efficiently by switching to 'years' duration when appropriate.">
+      <option name="closed" value="true" />
+      <created>1764585379490</created>
+      <option name="number" value="00194" />
+      <option name="presentableId" value="LOCAL-00194" />
+      <option name="project" value="LOCAL" />
+      <updated>1764585379490</updated>
+    </task>
+    <task id="LOCAL-00195" summary="refactor(core): Extract feature engineering into dedicated module&#10;&#10;This commit extracts the feature calculation logic from `continuous_learning_analyzer.py` into a new, standalone module `feature_engine.py`. This promotes code reuse and cleaner architecture.&#10;&#10;Key changes:&#10;- **Centralized Logic**: The `RobustFeatureCalculator` class now handles all indicator generation (SMA, RSI, ATR, ADX, Slope).&#10;- **Robustness Improvements**: Added explicit duplicate column removal (`~df.columns.duplicated()`) to prevent errors during `pd.concat`.&#10;- **Context Handling**: The calculator now accepts an optional `context_data` dictionary to compute relative strength against QQQ and sector benchmarks.&#10;- **Dynamic Parameters**: SMA window lengths are now fully configurable via the `params` dictionary.">
+      <option name="closed" value="true" />
+      <created>1764585495283</created>
+      <option name="number" value="00195" />
+      <option name="presentableId" value="LOCAL-00195" />
+      <option name="project" value="LOCAL" />
+      <updated>1764585495283</updated>
+    </task>
+    <task id="LOCAL-00196" summary="perf(optimizer): Parallelize grid search and optimize data handling&#10;&#10;This commit introduces a major performance overhaul to the strategy optimizer.&#10;&#10;Key improvements include:&#10;&#10;- **Parallel Processing**: The optimizer now uses a `ThreadPoolExecutor` to test multiple parameter combinations simultaneously, significantly reducing the total runtime for grid searches.&#10;- **Data Pre-fetching**: Historical market data is now downloaded once per model optimization and passed to worker threads. This eliminates thousands of redundant data fetches during the backtesting phase.&#10;- **Refactored Architecture**: The core optimization logic has been extracted into a `_process_combination` worker function to support concurrent execution.&#10;- **Real-time Progress**: The progress bar logic has been updated to accurately track the completion of parallel tasks.">
+      <option name="closed" value="true" />
+      <created>1764585637403</created>
+      <option name="number" value="00196" />
+      <option name="presentableId" value="LOCAL-00196" />
+      <option name="project" value="LOCAL" />
+      <updated>1764585637403</updated>
+    </task>
+    <option name="localTasksCounter" value="197" />
     <servers />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="fix bugs:&#10;1. checkboxes in expander - put all check boxed in Select Models to Run expander&#10;2. hide the Strategy Optimizer while running it running on cloud, this should run only on PC and uploaded to the GitHub" />
+    <MESSAGE value="fix bugs:&#10;hide the Strategy Optimizer while running it running on cloud, this should run only on PC and uploaded to the GitHub - change it to IS_CLOUD == False" />
+    <MESSAGE value="fix bugs in optimize_btn, add optimize_btn = False befor the if not IS_CLOUD:" />
+    <MESSAGE value="update files:&#10;mico_system.py&#10;stockwise_simulation.py&#10;&#10;fix bugs:&#10;fix memory issues.&#10;fix model naming conventions" />
+    <MESSAGE value="the was an naming convention error when the script running on cloud and on my local PC.&#10;this solved now." />
+    <MESSAGE value="change naming in UI" />
+    <MESSAGE value="style(mico): Add comments to clarify risk/reward logic&#10;&#10;This commit makes no functional changes to the mico_system.py file.&#10;&#10;It adds several explanatory comments inside the `analyze` method to clarify the existing logic for calculating the `stop_loss_price`, `risk`, and `profit_target_price`." />
+    <MESSAGE value="Update Mico chart" />
+    <MESSAGE value="change MAX_WORKERS to 10" />
+    <MESSAGE value="change MAX_WORKERS to 7" />
+    <MESSAGE value="removed pandas-ta==0.4.71b0 to pandas-ta" />
+    <MESSAGE value="Update the model_trainer.py&#10;- to from data_source_manager import DataSourceManager" />
+    <MESSAGE value="Update orchestrate_tuning.py&#10;- remove from data_source_manager import DataSourceManager - not in use" />
+    <MESSAGE value="Update orchestrate_tuning.py&#10;- option for Custom run &#10;- add new log output with unique study_name" />
+    <MESSAGE value="update numbers of MAX_WORKERS = 2" />
+    <MESSAGE value="fix(trainer): Remove DataManager dependency and fix feature name typo&#10;&#10;This commit refactors the `model_trainer.py` script to remove its dependency on `DataManager` for loading training data. It also corrects a typo in the feature list.&#10;&#10;Key changes include:&#10;&#10;- **Removed `DataManager` Dependency**: The `run_training_job` function no longer uses the `DataManager` class. Instead, it now uses `glob` to find all `_daily_context.parquet` files in the specified directory and loads them directly with `pandas.concat`. This change simplifies the script and aligns it with the new data pipeline, which no longer produces the intraday `_features.parquet` files at this stage.&#10;&#10;- **Feature Name Typo Fix**: Corrected a typo in the `gen3_feature_cols` list, changing `st_och_d` to the correct `stoch_d` (Stochastic %D). This is a critical fix to prevent `KeyError` exceptions during model training." />
+    <MESSAGE value="feat(analysis): Add system-aware indicators to backtest charts&#10;&#10;This commit upgrades the `create_trade_chart` function in the results analyzer to be &quot;system-aware,&quot; allowing it to display different indicators based on the source of the trade.&#10;&#10;Key changes include:&#10;&#10;- **System-Aware Charting**: The `create_trade_chart` function now accepts the `full_trade_row` to check the trade's `Source`.&#10;- **MICO Indicator Plotting**: If the trade `Source` is 'MICO', the chart now plots the 50-day and 200-day SMAs and labels the horizontal lines as &quot;Mico Stop-Loss&quot; and &quot;Mico Profit Target&quot; for clear visual distinction.&#10;- **Extended Chart History**: The chart's historical lookback has been extended from 30 days to 250 days. This is a necessary change to ensure there is enough data to calculate and display the new 200-day SMA for MICO trades.&#10;- **Dashboard Update**: The `display_backtest_dashboard` function has been updated to pass the `full_trade_row` to the chart function, enabling this new logic." />
+    <MESSAGE value="create the script:&#10;StockWise Gen-4: The Orchestra Architecture (With Binary Prediction Chart)&#10;==========================================================================&#10;1. Feature Calculator: Computes SMAs, ADX, RSI, and Donchian Channels.&#10;2. MarketRegimeDetector: Determines if we are in a TREND, RANGE, or BEAR market.&#10;3. StrategyOrchestra: Selects the correct sub-strategy.&#10;4. Visualization: Adds a specific 'Prediction Signal' (0/1) panel synced to T+1.&#10;5. Logic: Adds a 'WAIT' state.&#10;6. Visualization: -1/0/1 scale for clear decision tracking.&#10;7. Logic Update: Adds 'Early Breakout' override to catch fast rallies.&#10;8. Visualization Upgrade: Replaced Line Chart with Japanese Candlesticks&#10;9. Data Logic: Captures OHLC data for precise visualization.&#10;10. Logic Update: Maintains 'Early Breakout' and Tri-State prediction." />
+    <MESSAGE value="feat(core): Add AdaptiveLearner for dynamic threshold adjustment&#10;&#10;This commit introduces the `AdaptiveLearner` class, a persistent engine designed to auto-tune the trading system's strictness based on recent performance.&#10;&#10;Key features include:&#10;- **Persistent State**: Uses `system_brain_state.json` to store trade history and pending signals across sessions.&#10;- **Dynamic Logic**: Implements a `get_threshold()` method that raises entry requirements (to 65) if recent accuracy is low (&lt;40%) and lowers them (to 40) if accuracy is high (&gt;70%).&#10;- **Trade Tracking**: Adds methods to register new trades and record boolean feedback (Hit/Miss) to update the rolling accuracy window." />
+    <MESSAGE value="feat(data): Integrate Alpaca for robust historical data&#10;&#10;This commit introduces a major enhancement to the data management layer by integrating the Alpaca API as a secondary, high-quality data source.&#10;&#10;Key changes include:&#10;&#10;- **Alpaca Integration**: The `DataSourceManager` now initializes an Alpaca `StockHistoricalDataClient` if API keys are present in Streamlit secrets. This provides a reliable fallback for historical data when IBKR is unavailable, significantly better than yfinance for bulk requests.&#10;- **Priority Logic**: The `get_stock_data` method has been updated to follow a strict priority: IBKR -&gt; Alpaca -&gt; YFinance.&#10;- **Bulk Download Support**: A new `get_screener_data_bulk` method has been added. This leverages Alpaca's ability to fetch data for hundreds of symbols in a single API call, which will drastically speed up the market screener.&#10;- **Earnings Calendar**: A new `get_earnings_calendar` method (using yfinance) has been added to support future event-driven strategies.&#10;- **Robustness Improvements**: Added better error handling for API initialization and data parsing across all sources." />
+    <MESSAGE value="create the scripts" />
+    <MESSAGE value="feat(gen5): Upgrade architecture to Gen-5 with Sector Awareness&#10;&#10;This commit introduces the Gen-5 Orchestra Architecture, significantly enhancing the simulation engine with sector-specific logic and improved data handling.&#10;&#10;Key features include:&#10;&#10;- **Sector Awareness**: The `RobustFeatureCalculator` now integrates sector benchmark data (loaded via `load_data_sequential`) to calculate relative strength. This allows the strategy to filter trades based on sector performance.&#10;- **Dynamic Parameter Loading**: The system now attempts to load optimized parameters from a JSON file (e.g., `optimization_results_NVDA.json`) before falling back to defaults, enabling asset-specific tuning.&#10;- **Enhanced Logic**: The `StrategyOrchestra` has been updated with new rules, including a &quot;slope angle&quot; check for velocity and sector divergence logic for dip buying.&#10;- **Split/Merge Visualization**: The chart generator now detects and marks potential stock splits (drops &gt; 50%) and reverse merges (jumps &gt; 50%) on the price chart for better historical accuracy.&#10;- **Sequential Data Loading**: Replaced the parallel data loader with `load_data_sequential` to improve stability and avoid potential thread-pool conflicts during data fetching." />
+    <MESSAGE value="feat(data): Add SectorMapper and refine IBKR logic&#10;&#10;This commit enhances the `DataSourceManager` with sector-mapping capabilities and refines the core data fetching logic for improved robustness.&#10;&#10;Key changes include:&#10;&#10;- **New `SectorMapper` Class**: A new class has been added to intelligently map a stock symbol to its corresponding sector or industry ETF (e.g., NVDA -&gt; SMH, AAPL -&gt; XLK). This enables sector-relative analysis.&#10;- **Improved IBKR Data Fetching**: The `_download_from_ibkr` method has been updated with better contract resolution logic, specifically handling index symbols (like `^VIX`) correctly. It also includes more robust date and duration string formatting to prevent API errors.&#10;- **Refined Data Normalization**: The `normalize_and_validate_data` function now standardizes column names to Title Case ('Open', 'High', etc.) for consistency across the application, and ensures the index is a timezone-naive DatetimeIndex.&#10;- **YFinance Optimization**: The `_download_from_yfinance` method now includes logic to handle long-term daily data requests more efficiently by switching to 'years' duration when appropriate." />
+    <MESSAGE value="refactor(core): Extract feature engineering into dedicated module&#10;&#10;This commit extracts the feature calculation logic from `continuous_learning_analyzer.py` into a new, standalone module `feature_engine.py`. This promotes code reuse and cleaner architecture.&#10;&#10;Key changes:&#10;- **Centralized Logic**: The `RobustFeatureCalculator` class now handles all indicator generation (SMA, RSI, ATR, ADX, Slope).&#10;- **Robustness Improvements**: Added explicit duplicate column removal (`~df.columns.duplicated()`) to prevent errors during `pd.concat`.&#10;- **Context Handling**: The calculator now accepts an optional `context_data` dictionary to compute relative strength against QQQ and sector benchmarks.&#10;- **Dynamic Parameters**: SMA window lengths are now fully configurable via the `params` dictionary." />
+    <MESSAGE value="perf(optimizer): Parallelize grid search and optimize data handling&#10;&#10;This commit introduces a major performance overhaul to the strategy optimizer.&#10;&#10;Key improvements include:&#10;&#10;- **Parallel Processing**: The optimizer now uses a `ThreadPoolExecutor` to test multiple parameter combinations simultaneously, significantly reducing the total runtime for grid searches.&#10;- **Data Pre-fetching**: Historical market data is now downloaded once per model optimization and passed to worker threads. This eliminates thousands of redundant data fetches during the backtesting phase.&#10;- **Refactored Architecture**: The core optimization logic has been extracted into a `_process_combination` worker function to support concurrent execution.&#10;- **Real-time Progress**: The progress bar logic has been updated to accurately track the completion of parallel tasks." />
+    <option name="LAST_COMMIT_MESSAGE" value="perf(optimizer): Parallelize grid search and optimize data handling&#10;&#10;This commit introduces a major performance overhaul to the strategy optimizer.&#10;&#10;Key improvements include:&#10;&#10;- **Parallel Processing**: The optimizer now uses a `ThreadPoolExecutor` to test multiple parameter combinations simultaneously, significantly reducing the total runtime for grid searches.&#10;- **Data Pre-fetching**: Historical market data is now downloaded once per model optimization and passed to worker threads. This eliminates thousands of redundant data fetches during the backtesting phase.&#10;- **Refactored Architecture**: The core optimization logic has been extracted into a `_process_combination` worker function to support concurrent execution.&#10;- **Real-time Progress**: The progress bar logic has been updated to accurately track the completion of parallel tasks." />
+  </component>
+  <component name="XDebuggerManager">
+    <breakpoint-manager>
+      <breakpoints>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/generate_model_performance_summary.py</url>
+          <line>446</line>
+          <option name="timeStamp" value="15" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/analyze_test_results.py</url>
+          <line>132</line>
+          <option name="timeStamp" value="16" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/api_manager.py</url>
+          <line>65</line>
+          <option name="timeStamp" value="18" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/algo_configurator.py</url>
+          <line>1973</line>
+          <option name="timeStamp" value="52" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/stockwise_simulation.py</url>
+          <line>2439</line>
+          <option name="timeStamp" value="83" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/stockwise_simulation.py</url>
+          <line>1147</line>
+          <option name="timeStamp" value="87" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/stockwise_simulation.py</url>
+          <line>1829</line>
+          <option name="timeStamp" value="88" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/test_ablation.py</url>
+          <line>46</line>
+          <option name="timeStamp" value="89" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/continuous_learning_analyzer.py</url>
+          <line>562</line>
+          <option name="timeStamp" value="93" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/feature_engine.py</url>
+          <line>244</line>
+          <option name="timeStamp" value="101" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/feature_engine.py</url>
+          <line>240</line>
+          <option name="timeStamp" value="102" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/continuous_learning_analyzer.py</url>
+          <line>615</line>
+          <option name="timeStamp" value="103" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/continuous_learning_analyzer.py</url>
+          <line>617</line>
+          <option name="timeStamp" value="104" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/continuous_learning_analyzer.py</url>
+          <line>787</line>
+          <option name="timeStamp" value="105" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/continuous_learning_analyzer.py</url>
+          <line>872</line>
+          <option name="timeStamp" value="106" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/feature_engine.py</url>
+          <line>290</line>
+          <option name="timeStamp" value="107" />
+        </line-breakpoint>
+      </breakpoints>
+    </breakpoint-manager>
+  </component>
+  <component name="github-copilot-workspace">
+    <instructionFileLocations>
+      <option value=".github/instructions" />
+    </instructionFileLocations>
+    <promptFileLocations>
+      <option value=".github/prompts" />
+    </promptFileLocations>
   </component>
 </project>
