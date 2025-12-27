@@ -41,6 +41,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("LiveTrader")
 
+import pytz
+from datetime import datetime, timedelta
+
 class LiveTrader:
     def __init__(self, symbols, interval='1d', mode='PAPER'):
         # Ensure symbols is a list
@@ -60,6 +63,42 @@ class LiveTrader:
         logger.info(f"Targets: {self.symbols} | Interval: {self.interval} | Mode: {self.mode}")
         logger.info("Strategies: Gen-9 Fusion Sniper (Deep Learning + Hard Filters)")
 
+    def is_trading_day(self, date_obj):
+        """Check if date is a valid trading day (Mon-Fri, not a holiday)."""
+        # 1. Check Weekend (5=Sat, 6=Sun)
+        if date_obj.weekday() >= 5:
+            return False
+            
+        # 2. Check Holidays
+        date_str = date_obj.strftime('%Y-%m-%d')
+        if date_str in cfg.SchedulerConfig.MARKET_HOLIDAYS:
+             return False
+             
+        return True
+
+    def get_next_run_time(self, now_dt):
+        """Calculate the next valid start time (Open - PreBuffer)."""
+        tz = now_dt.tzinfo
+        
+        # Define today's end boundary
+        today_session_end = datetime.combine(now_dt.date(), cfg.SchedulerConfig.CLOSE_TIME).replace(tzinfo=tz) + timedelta(hours=cfg.SchedulerConfig.POST_BUFFER_HOURS)
+        
+        target_date = now_dt.date()
+        
+        # If today is invalid OR we are past today's session, start checking from tomorrow
+        if not self.is_trading_day(target_date) or now_dt > today_session_end:
+            target_date += timedelta(days=1)
+            
+        # Find next valid trading day
+        while not self.is_trading_day(target_date):
+            target_date += timedelta(days=1)
+            
+        # Construct start time
+        next_open = datetime.combine(target_date, cfg.SchedulerConfig.OPEN_TIME).replace(tzinfo=tz)
+        next_start = next_open - timedelta(hours=cfg.SchedulerConfig.PRE_BUFFER_HOURS)
+        
+        return next_start
+
     def fetch_and_process(self, symbol):
         """Fetch latest data and generate features for a specific symbol."""
         logger.info(f"[>] Fetching live data for {symbol}...")
@@ -67,9 +106,6 @@ class LiveTrader:
         # 1. Fetch Data
         days_back = cfg.HISTORY_LENGTH_DAYS
         if self.interval == '1m': days_back = 5 # Speed opt
-        
-        # Ensure we define start_date relative to now for reliable fetching
-        # end_date is implicitly 'now'
         
         df = self.dsm.get_stock_data(symbol, days_back=days_back, interval=self.interval)
         
@@ -144,7 +180,7 @@ class LiveTrader:
             logger.info(f"Price: {price} | Reason: {details}")
             # Log to dedicated signals file
             with open("logs/signals.csv", "a") as f:
-                f.write(f"{datetime.datetime.now()},{symbol},{action},{price},{details}\n")
+                f.write(f"{datetime.now()},{symbol},{action},{price},{details}\n")
         elif self.mode == 'LIVE':
             logger.warning("LIVE TRADING NOT YET ENABLED. Switch to Paper Mode.")
             # Future: self.dsm.place_order(...)
@@ -153,6 +189,37 @@ class LiveTrader:
         """Main Loop."""
         try:
             while self.is_running:
+                # 1. Timezone Awareness
+                tz = pytz.timezone(cfg.SchedulerConfig.MARKET_TIMEZONE)
+                now = datetime.now(tz)
+                
+                # 2. Define Window for Today
+                today_open = datetime.combine(now.date(), cfg.SchedulerConfig.OPEN_TIME).replace(tzinfo=tz)
+                today_close = datetime.combine(now.date(), cfg.SchedulerConfig.CLOSE_TIME).replace(tzinfo=tz)
+                
+                active_start = today_open - timedelta(hours=cfg.SchedulerConfig.PRE_BUFFER_HOURS)
+                active_end = today_close + timedelta(hours=cfg.SchedulerConfig.POST_BUFFER_HOURS)
+                
+                # 3. Check Scheduler Status
+                is_active = False
+                if self.is_trading_day(now.date()):
+                    if active_start <= now <= active_end:
+                        is_active = True
+                
+                # 4. Handle Inactive State
+                if not is_active:
+                    next_run = self.get_next_run_time(now)
+                    sleep_seconds = (next_run - now).total_seconds()
+                    
+                    # Safety check for negative sleep (shouldn't happen with logic above)
+                    if sleep_seconds < 0: sleep_seconds = 60 
+                    
+                    hours = sleep_seconds / 3600
+                    logger.info(f"[SCHEDULER] Market Closed. Sleeping for {hours:.2f} hours (until {next_run.strftime('%Y-%m-%d %H:%M:%S %Z')})...")
+                    time.sleep(sleep_seconds)
+                    continue
+                
+                # --- MARKET OPEN ---
                 logger.info("\n--- Scanning Watchlist ---")
                 
                 for symbol in self.symbols:
@@ -167,9 +234,6 @@ class LiveTrader:
                             
                             if decision == "BUY":
                                  self.execute_trade(symbol, "BUY", price, f"AI_Conf: {prob:.2%} | {trace}")
-                        else:
-                            # Non-result (WAIT or FILTERED) handles itself in logs
-                            pass
                     
                     # Small delay between symbols to avoid rate limits
                     time.sleep(2)

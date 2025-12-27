@@ -176,7 +176,7 @@ if not ALPACA_KEY:
 # Telegram Bot Credentials
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-print(f"Telegram Token: {TELEGRAM_TOKEN}, Chat ID: {TELEGRAM_CHAT_ID}")
+# Telegram Token Print Removed for Security
 
 # NOTE: We need a placeholder value for investment for PnL calculation
 # INVESTMENT_AMOUNT = 1000 # Hardcoded investment for hypothetical PnL
@@ -256,6 +256,7 @@ class SniperConfig:
     # 1. Targets
     TARGET_PROFIT = 0.05        # +5% Minimum Target per trade
     MAX_DRAWDOWN = -0.02        # -2% Hard Stop Loss
+    SIMULATION_STARTING_CAPITAL = 1000.0 # Starting Capital for Verification Simulation
     
     # 2. AI Thresholds
     # Model is "Timid" (High Precision Loss suppresses probabilities).
@@ -270,6 +271,57 @@ class SniperConfig:
     
     # 5. Alerting
     ENABLE_TELEGRAM_ALERTS = True
+
+# --- 10. SCHEDULER CONFIGURATION ---
+# --- 10. SCHEDULER CONFIGURATION ---
+import pandas as pd
+from pandas.tseries.holiday import (
+    AbstractHolidayCalendar, nearest_workday, Holiday,
+    USMartinLutherKingJr, USPresidentsDay, USMemorialDay,
+    USLaborDay, USThanksgivingDay, GoodFriday
+)
+
+class NYSEHolidayCalendar(AbstractHolidayCalendar):
+    """
+    US Stock Market Holiday Calendar (NYSE).
+    Includes specific rules different from Federal holidays.
+    """
+    rules = [
+        Holiday('New Years Day', month=1, day=1, observance=nearest_workday),
+        USMartinLutherKingJr,
+        USPresidentsDay,
+        GoodFriday,
+        USMemorialDay,
+        Holiday('Juneteenth', month=6, day=19, observance=nearest_workday),
+        Holiday('Independence Day', month=7, day=4, observance=nearest_workday),
+        USLaborDay,
+        USThanksgivingDay,
+        Holiday('Christmas', month=12, day=25, observance=nearest_workday)
+    ]
+
+def get_dynamic_holidays(years=2):
+    """Generate NYSE holidays for current year + N years forward."""
+    try:
+        cal = NYSEHolidayCalendar()
+        start_year = datetime.now().year
+        end_year = start_year + years
+        # Generate range
+        holidays = cal.holidays(start=datetime(start_year, 1, 1), end=datetime(end_year, 12, 31))
+        return [d.strftime('%Y-%m-%d') for d in holidays]
+    except Exception as e:
+        logger.error(f"Failed to auto-calc holidays: {e}. using Fallback.")
+        return []
+
+class SchedulerConfig:
+    MARKET_TIMEZONE = 'US/Eastern'
+    from datetime import time
+    OPEN_TIME = time(9, 30)
+    CLOSE_TIME = time(16, 0)
+    PRE_BUFFER_HOURS = 2
+    POST_BUFFER_HOURS = 2
+    
+    # Auto-Calculate Holidays (Current Year + Next 2 Years)
+    MARKET_HOLIDAYS = get_dynamic_holidays(years=2)
 
 
 

@@ -177,7 +177,14 @@ def run_verification(symbols=None):
     logger.info(f"Losses:          {grand_stats['Losses']}")
     logger.info(f"Pending/Active:  {grand_stats['Pending']}")
     logger.info(f"Win Rate:        {win_rate:.2f}%")
+    start_cap = cfg.SniperConfig.SIMULATION_STARTING_CAPITAL
+    total_pnl_usd = start_cap * grand_stats["Total_PnL_Pct"]
+    final_balance = start_cap + total_pnl_usd
+    
+    logger.info(f"Start Capital:   ${start_cap:,.2f}")
     logger.info(f"Est. Total PnL:  {grand_stats['Total_PnL_Pct']*100:.2f}% (Simple Sum)")
+    logger.info(f"Total PnL ($):   ${total_pnl_usd:,.2f}")
+    logger.info(f"Final Balance:   ${final_balance:,.2f}")
     logger.info("=" * 40)
     
     logger.info("[DONE] All Verifications Complete.")
