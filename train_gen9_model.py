@@ -30,12 +30,7 @@ def train_model():
     all_y = []
     
     # Define Features
-    features = [
-        'close', 'volume', 'rsi_14', 'adx', 
-        'strong_bullish_reversal', 'strong_bearish_reversal', 
-        'bullish_continuation', 'bearish_continuation',
-        'ema_spread'
-    ] 
+    from stockwise_ai_core import GEN9_FEATURES as features 
     
     # --- 1. COLLECT DATA ---
     for symbol in symbols:

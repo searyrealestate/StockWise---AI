@@ -52,10 +52,10 @@ if not decision_logger.handlers:
 # --- CONFIGURATION constants ---
 # --- CONFIGURATION constants ---
 GEN9_FEATURES = [
-    'close', 'volume', 'rsi_14', 'adx', 
-    'strong_bullish_reversal', 'strong_bearish_reversal', 
-    'bullish_continuation', 'bearish_continuation',
-    'ema_spread'
+    'close', 'volume', 'rsi_14', 'adx', 'ema_spread',
+    'smart_hammer', 'smart_shooting_star', 
+    'vsa_squat_bar', 'vsa_no_demand', 
+    'bull_trap_signal', 'candle_confluence'
 ]
 
 # --- CUSTOM LOSS FUNCTION ---

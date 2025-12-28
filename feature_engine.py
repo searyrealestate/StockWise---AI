@@ -338,100 +338,93 @@ class RobustFeatureCalculator:
     @staticmethod
     def add_candlestick_patterns(df):
         """
-        Adds basic candlestick patterns with refined logic:
-        - Doji (Classic, Gravestone, Dragonfly)
-        - Hammer / Inverted Hammer / Hanging Man / Shooting Star
-        - Engulfing (Bull/Bear)
-        - Tweezers
-        - Morning/Evening Star
+        Adds 'Smart' candlestick patterns with STRICT Context Awareness.
+        Vectorized operations only.
+        
+        New Features:
+        - smart_hammer: 100 if (Lower Wick >= 2*Body) AND Downtrend AND RSI < 40
+        - smart_shooting_star: -100 if (Upper Wick >= 2*Body) AND Uptrend AND RSI > 60
+        - dragonfly_doji: 100 if Small Body + Long Low Wick + Downtrend
+        - gravestone_doji: -100 if Small Body + Long Up Wick + Uptrend
+        - candle_confluence: Sum of scores.
         """
         o = df['open']
         h = df['high']
         l = df['low']
         c = df['close']
         
+        # Safe Context Helpers
+        sma_50 = df['sma_50'] if 'sma_50' in df.columns else c.rolling(50).mean()
+        rsi = df['rsi_14'] if 'rsi_14' in df.columns else pd.Series(50, index=df.index)
+        
+        # Definitions
         body = (c - o).abs()
-        rng = (h - l).replace(0, 0.0001)
-        
-        # 1. Doji Family
-        is_doji = body <= (rng * 0.1)
-        # Gravestone: Doji + Open/Close near Low (High Upper Shadow)
-        gravestone = is_doji & (c <= l + rng * 0.1) & (o <= l + rng * 0.1)
-        # Dragonfly: Doji + Open/Close near High (High Lower Shadow)
-        dragonfly = is_doji & (c >= h - rng * 0.1) & (o >= h - rng * 0.1)
-        
-        # 2. Hammer / Hanging Man (Small body, long lower wick)
-        # Context: Hammer needs downtrend, Hanging Man needs uptrend
+        range_ = (h - l).replace(0, 0.0001)
         lower_wick = df[['open', 'close']].min(axis=1) - l
         upper_wick = h - df[['open', 'close']].max(axis=1)
         
-        small_body = body <= (rng * 0.3)
-        long_lower = lower_wick >= (2 * body)
-        small_upper = upper_wick <= (body * 0.5)
+        in_downtrend = c < sma_50
+        in_uptrend = c > sma_50
         
-        # Context (Close < SMA5 for downtrend proxy)
-        is_downtrend = c < c.rolling(5).mean()
-        is_uptrend = c > c.rolling(5).mean()
+        # 1. Smart Hammer (Bullish +100)
+        # Criteria: Long Lower Wick, Downtrend, Oversold (RSI < 40)
+        is_hammer_structure = (lower_wick >= 2 * body) & (upper_wick <= body * 0.5)
+        smart_hammer_mask = is_hammer_structure & in_downtrend & (rsi < 40)
+        df['smart_hammer'] = smart_hammer_mask.astype(int) * 100
         
-        hammer = small_body & long_lower & small_upper & is_downtrend
-        hanging_man = small_body & long_lower & small_upper & is_uptrend
+        # 2. Smart Shooting Star (Bearish -100)
+        # Criteria: Long Upper Wick, Uptrend, Overbought (RSI > 60)
+        is_star_structure = (upper_wick >= 2 * body) & (lower_wick <= body * 0.5)
+        smart_star_mask = is_star_structure & in_uptrend & (rsi > 60)
+        df['smart_shooting_star'] = smart_star_mask.astype(int) * -100
         
-        # 3. Inverted Hammer / Shooting Star (Small body, long upper wick)
-        long_upper = upper_wick >= (2 * body)
-        small_lower = lower_wick <= (body * 0.5)
+        # 3. Doji Family
+        is_doji_body = body <= (range_ * 0.1)
         
-        inv_hammer = small_body & long_upper & small_lower & is_downtrend
-        shooting_star = small_body & long_upper & small_lower & is_uptrend
+        # Dragonfly (Bullish +100): Doji + Long Lower + Downtrend
+        dragonfly_mask = is_doji_body & (lower_wick > range_ * 0.6) & in_downtrend
+        df['dragonfly_doji'] = dragonfly_mask.astype(int) * 100
         
-        # 4. Engulfing
-        # Bullish: Previous Red, Current Green, Current Body > Prev Body, Engulfs
+        # Gravestone (Bearish -100): Doji + Long Upper + Uptrend
+        gravestone_mask = is_doji_body & (upper_wick > range_ * 0.6) & in_uptrend
+        df['gravestone_doji'] = gravestone_mask.astype(int) * -100
+        
+        # 4. Standard Engulfing (Helper for Confluence)
         prev_body = (c.shift(1) - o.shift(1)).abs()
-        is_green = c > o
-        is_red = c < o
-        prev_red = c.shift(1) < o.shift(1)
-        prev_green = c.shift(1) > o.shift(1)
+        is_bull_engulf = (c > o) & (c.shift(1) < o.shift(1)) & (c > o.shift(1)) & (o < c.shift(1))
+        is_bear_engulf = (c < o) & (c.shift(1) > o.shift(1)) & (c < o.shift(1)) & (o > c.shift(1))
         
-        # Context: Previous candle should be relatively substantial or existing trend
-        bull_engulf = is_green & prev_red & (c > o.shift(1)) & (o < c.shift(1)) & is_downtrend
-        bear_engulf = is_red & prev_green & (c < o.shift(1)) & (o > c.shift(1)) & is_uptrend
+        df['bullish_engulfing'] = is_bull_engulf.astype(int) * 100
+        df['bearish_engulfing'] = is_bear_engulf.astype(int) * -100
+
+        # --- VSA Features ---
+        # 5. Squat Bar (Churning): High Volume + Small Body
+        # Logic: Vol > 1.5x Avg, Body < 0.8x Avg
+        avg_vol = df['volume'].rolling(20).mean()
+        avg_body = body.rolling(20).mean()
         
-        # 5. Tweezers (Matching Highs/Lows)
-        tweezer_btm = (l - l.shift(1)).abs() < (rng * 0.05)
-        tweezer_top = (h - h.shift(1)).abs() < (rng * 0.05)
+        df['vsa_squat_bar'] = ((df['volume'] > 1.5 * avg_vol) & (body < 0.8 * avg_body)).astype(int) * 100
         
-        # 6. Morning / Evening Star (3-Candle Pattern)
-        # Morning: Long Red -> Small Gap Down -> Strong Green
-        star_body = body.shift(1)
-        c1_long_red = (body.shift(2) > rng.shift(2) * 0.6) & (c.shift(2) < o.shift(2))
-        c2_small = star_body < (rng.shift(1) * 0.3)
-        c3_strong_green = is_green & (c > (o.shift(2) + c.shift(2))/2)
-        
-        morning_star = c1_long_red & c2_small & c3_strong_green
-        
-        # Evening: Long Green -> Small Gap Up -> Strong Red
-        c1_long_green = (body.shift(2) > rng.shift(2) * 0.6) & (c.shift(2) > o.shift(2))
-        c3_strong_red = is_red & (c < (o.shift(2) + c.shift(2))/2)
-        
-        evening_star = c1_long_green & c2_small & c3_strong_red
-        
-        # Assign to DF
-        df['doji'] = is_doji
-        df['gravestone_doji'] = gravestone
-        df['dragonfly_doji'] = dragonfly
-        df['hammer'] = hammer
-        df['hanging_man'] = hanging_man
-        df['inverted_hammer'] = inv_hammer
-        df['shooting_star'] = shooting_star
-        df['bullish_engulfing'] = bull_engulf
-        df['bearish_engulfing'] = bear_engulf
-        df['tweezer_bottom'] = tweezer_btm
-        df['tweezer_top'] = tweezer_top
-        df['morning_star'] = morning_star
-        df['evening_star'] = evening_star
-        
-        # Backwards Compat Aliases
-        df['bullish_pattern'] = hammer | bull_engulf | morning_star
-        df['bearish_pattern'] = shooting_star | bear_engulf | evening_star
+        # 6. No Demand (Weakness): Up Bar + Low Volume + Uptrend
+        df['vsa_no_demand'] = ((c > o) & (df['volume'] < 0.8 * avg_vol) & in_uptrend).astype(int) * -100
+
+        # --- Traps ---
+        # 7. Bull Trap: Breakout Attempt Fails
+        # Current High > Prev High, but Close < Prev High. On High Volume?
+        # Let's use simple logic: Close < Prev High & High > Prev High
+        prev_high = h.shift(1)
+        df['bull_trap_signal'] = ((h > prev_high) & (c < prev_high)).astype(int) * -100
+
+        # Calculate Confluence Score (Base sum)
+        df['candle_confluence'] = (
+            df['smart_hammer'] + 
+            df['smart_shooting_star'] + 
+            df['dragonfly_doji'] + 
+            df['gravestone_doji'] +
+            df['vsa_squat_bar'] +
+            df['vsa_no_demand'] +
+            df['bull_trap_signal'] 
+        )
         
         return df
 

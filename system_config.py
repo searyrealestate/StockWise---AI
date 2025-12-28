@@ -121,6 +121,8 @@ REQUIRED_YEARS = max(CHART_YEARS, MIN_WARMUP_YEARS)
 
 # Use REQUIRED_YEARS for the timedelta calculation
 _total_days = int(REQUIRED_YEARS * 365)
+if TIMEFRAME == "1h":
+    _total_days = min(_total_days, 700) # Cap at 700 days for 1h YFinance limit
 DATA_START_DATE = DATA_END_DATE - timedelta(days=_total_days)
 
 # Print warning only if chart view is smaller than minimum required warmup

@@ -237,10 +237,12 @@ def check_and_calculate_exit(df, entry_index, entry_price, entry_date, atr_value
     """
 
     # 1. Define Stops and Targets
-    # STRATEGY: DAILY SNIPER SCALP
-    # Accuracy is 89% on Daily. capture it with a 1.0 ATR target.
-    stop_atr_mult = 3.0
-    target_atr_mult = 1.0
+    # 1. Define Stops and Targets
+    # STRATEGY: DYNAMIC ATR EXIT (Risk/Reward 1:2)
+    # Stop: 1.5 ATR (Tight but fair)
+    # Target: 3.0 ATR (Let winners run)
+    stop_atr_mult = 1.5
+    target_atr_mult = 3.0
     
     risk_dollars_per_share = atr_value * stop_atr_mult
     stop_loss = entry_price - risk_dollars_per_share
@@ -560,7 +562,7 @@ def run_simulation(start_date=None, end_date=None, return_stats=False, preloaded
             df, context_data = load_data_sequential(dm, cfg.TARGET_TICKER)
 
         if df.empty:
-            logger.error("❌ Main Stock Data is Empty.")
+            logger.error("[X] Main Stock Data is Empty.")
             return {} if return_stats else None
 
         # 3. Load Optimized Params
@@ -915,23 +917,36 @@ def run_simulation(start_date=None, end_date=None, return_stats=False, preloaded
                 #
                 #                 is_correct = (net_pnl > WIN_THRESHOLD_USD) and (pnl_percent > WIN_THRESHOLD_PCT)nl >
 
+                # Sanitize features for JSON logging
+                sanitized_features = {}
+                for k, v in features.items():
+                    try:
+                        if hasattr(v, 'item'): 
+                            sanitized_features[k] = v.item() # Convert numpy scalar to python scalar
+                        elif isinstance(v, (pd.DataFrame, pd.Series)):
+                             sanitized_features[k] = str(v.iloc[0] if not v.empty else "Empty")
+                        else:
+                            sanitized_features[k] = v
+                    except:
+                        sanitized_features[k] = str(v)
+
                 log_entry = {
                     'Date': current_date.strftime('%Y-%m-%dT%H:%M:%S.000Z'),
-                    'Close': df.iloc[i]['close'],
+                    'Close': float(df.iloc[i]['close']),
                     'Regime': regime,
-                    'System_Score': score,
+                    'System_Score': float(score),
                     'Prediction': pred,
                     'Is_Correct': str(is_correct),
-                    'Entry_Price': entry_price_used,
-                    'Exit_Price': exit_price,
+                    'Entry_Price': float(entry_price_used) if entry_price_used is not None else None,
+                    'Exit_Price': float(exit_price) if exit_price is not None else None,
                     'Exit_Status': exit_status,
-                    'Net_PNL_USD': net_pnl,
-                    'Net_PNL_Percent': pnl_percent,
+                    'Net_PNL_USD': float(net_pnl),
+                    'Net_PNL_Percent': float(pnl_percent),
                     'Ground_Truth_Label': ground_truth_label,
-                    'Max_Potential_Profit': mpp,
-                    'Max_Potential_Drawdown': mpd,
+                    'Max_Potential_Profit': float(mpp),
+                    'Max_Potential_Drawdown': float(mpd),
                     'Decision_Breakdown': score_details,
-                    'Feature_Values': features  # Log ALL features
+                    'Feature_Values': sanitized_features  # Log Sanitized features
                 }
 
                 # --- VERBOSE JOURNALING ---
