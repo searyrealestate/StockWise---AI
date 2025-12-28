@@ -277,19 +277,28 @@ class DataSourceManager(EWrapper, EClient):
         else:
             self._log("[!] IBKR disabled. Skipping IBKR download.", "INFO")
 
-        # 2. Attempt Alpaca (Fallback #1)
+            # 2. Attempt Alpaca (Fallback #1)
         logging.info(f"--- IBKR failed or disabled. Proceeding to Alpaca for {symbol} ---")
         if self.allow_fallback and self.stock_client:
             try:
                 logging.info(f"[!] Attempting Alpaca fallback for {symbol}...")
                 df = self._download_from_alpaca(clean_symbol, start_date, end_date, days_back, interval)
                 self._log(f"Alpaca download attempt completed for {symbol}.")
-                # self._log(f"DEBUG#12 stock_df range: {df.index.min()} to {df.index.max()}")
-                # self._log(f"DEBUG#12 stock_df Data: \n{df.head(3)} ...\n{df.tail(3)}")
-                # self._log(df[0:5].to_string())
+                
+                # --- SUFFICIENT HISTORY CHECK ---
+                # Should we use this data? Or is it too short?
+                min_required = 0
+                if days_back:
+                    min_required = int(days_back * 0.7) # Require at least 70% of requested history
+                
                 if not df.empty:
-                    logging.info(f"[OK] Success: Data retrieved from Alpaca.")
-                    return df
+                    if len(df) >= min_required:
+                        logging.info(f"[OK] Success: Data retrieved from Alpaca ({len(df)} bars).")
+                        return df
+                    else:
+                        self._log(f"⚠️ Alpaca data insufficient ({len(df)} < {min_required} required). Falling back to YFinance for deeper history.", "WARNING")
+                        df = pd.DataFrame() # Force Fallback
+                
             except Exception as e:
                 self._log(f"Alpaca Failed: {e}", "WARNING")
         else:

@@ -312,9 +312,14 @@ class StockWiseAI:
                 stop_loss = current_price * (1 + cfg.SniperConfig.MAX_DRAWDOWN)
                 max_buy_price = current_price * 1.005 # 0.5% Slippage Tolerance
                 
+                # Calculate Profit Range
+                profit_at_entry = cfg.SniperConfig.TARGET_PROFIT
+                profit_at_max = (target_price - max_buy_price) / max_buy_price
+                
                 msg = (f"🎯 SNIPER SIGNAL: {ticker}\n"
                        f"Entry: ${current_price:.2f}\n"
                        f"Max Buy: ${max_buy_price:.2f}\n"
+                       f"Est. Profit: +{profit_at_max:.1%} - +{profit_at_entry:.1%}\n"
                        f"Target: ${target_price:.2f}\n"
                        f"Stop: ${stop_loss:.2f}\n"
                        f"Conf: {prob:.2%} | Fund: {fund_score}")
