@@ -126,8 +126,36 @@ class DataSourceManager(EWrapper, EClient):
         self.stock_client = None
         if ALPACA_AVAILABLE:
             try:
-                self.api_key = cfg.ALPACA_KEY
-                self.api_secret = cfg.ALPACA_SECRET
+                # 1. Try Config
+                self.api_key = getattr(cfg, 'ALPACA_KEY', None)
+                self.api_secret = getattr(cfg, 'ALPACA_SECRET', None)
+                
+                # 2. Try Streamlit Secrets (Runtime)
+                if not self.api_key:
+                    try:
+                        self.api_key = st.secrets["ALPACA_KEY"]
+                        self.api_secret = st.secrets["ALPACA_SECRET"]
+                    except:
+                        pass
+                
+                # 3. Try Manual TOML Parsing (Script Mode)
+                if not self.api_key:
+                    try:
+                        import toml
+                        secrets_path = os.path.join(os.getcwd(), ".streamlit", "secrets.toml")
+                        if os.path.exists(secrets_path):
+                            secrets = toml.load(secrets_path)
+                            self.api_key = secrets.get("ALPACA_KEY")
+                            self.api_secret = secrets.get("ALPACA_SECRET")
+                            if self.api_key: self._log("Loaded keys manually from secrets.toml")
+                    except Exception as e:
+                        # self._log(f"Manual TOML load failed: {e}", "DEBUG")
+                        pass
+
+                # 4. Try Environment Variables
+                if not self.api_key:
+                    self.api_key = os.getenv("ALPACA_KEY")
+                    self.api_secret = os.getenv("ALPACA_SECRET")
 
                 if self.api_key and self.api_secret:
                     self.stock_client = StockHistoricalDataClient(self.api_key, self.api_secret)
@@ -359,9 +387,8 @@ class DataSourceManager(EWrapper, EClient):
             # Fix dates
             start = start_date if start_date else datetime.now().date() - timedelta(days=days_back or 365)
             end = end_date if end_date else datetime.now().date()
-            # end = pd.to_datetime(end_date).tz_localize('UTC') if end_date else datetime.datetime.now(
-            #     tz=datetime.timezone.utc)
-            # start = end - pd.Timedelta(days=days_back)
+            
+            self._log(f"Alpaca Request: {clean_symbol} | Start: {start} | End: {end} | TF: {interval}", "INFO")
 
             try:
                 # Interval Mapping
@@ -392,12 +419,13 @@ class DataSourceManager(EWrapper, EClient):
             )
 
             # 2. Make the single API call
+            self._log(f"Sending Alpaca Request...", "INFO")
             bars = self.stock_client.get_stock_bars(req)
 
             # 3. Convert to DataFrame and clean
             df_raw = bars.df
             if df_raw.empty:
-                logging.info(f"Alpaca returned no data for {clean_symbol}.")
+                logging.info(f"Alpaca returned ZERO bars for {clean_symbol}. (Req: {req})")
                 return pd.DataFrame()
 
             # Alpaca returns a MultiIndex (symbol, timestamp). Flatten to DatetimeIndex.
@@ -405,10 +433,15 @@ class DataSourceManager(EWrapper, EClient):
             df.index.name = "Date"
 
             self._log(f"Successfully retrieved {len(df)} bars for {clean_symbol} from Alpaca.", "SUCCESS")
-            return pd.DataFrame()
+            return df
 
         except APIError as e:
-            self._log(f"Alpaca download failed for {clean_symbol}: {e}", "WARNING")
+            self._log(f"Alpaca API Error for {clean_symbol}: {e}", "ERROR")
+            return pd.DataFrame()
+        except Exception as e:
+            self._log(f"Alpaca Unknown Exception for {clean_symbol}: {e}", "ERROR")
+            import traceback
+            logger.error(traceback.format_exc())
             return pd.DataFrame()
 
     def _download_from_yfinance(self, symbol, days_back, interval='1d', start_date=None, end_date=None, retries=3,
