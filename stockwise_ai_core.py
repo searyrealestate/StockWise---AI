@@ -323,7 +323,15 @@ class StockWiseAI:
                        f"Target: ${target_price:.2f}\n"
                        f"Stop: ${stop_loss:.2f}\n"
                        f"Conf: {prob:.2%} | Fund: {fund_score}")
-                self.notifier.send_alert(msg)
+                # Prepare context for Smart Alerts
+                alert_params = {
+                    "price": current_price,
+                    "target": target_price,
+                    "stop_loss": stop_loss,
+                    "timestamp": dt.now().isoformat()
+                }
+
+                self.notifier.send_alert(msg, ticker=ticker, current_params=alert_params)
         
         trace["Final_Decision"] = final_decision
         

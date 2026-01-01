@@ -124,7 +124,11 @@ class DataSourceManager(EWrapper, EClient):
 
         # --- ALPACA SETUP (SAFE) ---
         self.stock_client = None
-        if ALPACA_AVAILABLE:
+        # Strict User Request: "change Alpaca broker to False, use only IBKR and YFinance"
+        # We only initialize Alpaca if explicitly allowed or if DATA_PROVIDER is ALPACA
+        is_alpaca_enabled = getattr(cfg, 'DATA_PROVIDER', 'ALPACA') == 'ALPACA'
+        
+        if ALPACA_AVAILABLE and is_alpaca_enabled:
             try:
                 # 1. Try Config
                 self.api_key = getattr(cfg, 'ALPACA_KEY', None)
@@ -164,6 +168,8 @@ class DataSourceManager(EWrapper, EClient):
             except Exception as e:
                 self._log(f"Alpaca Init Error: {e}", "ERROR")
                 self.stock_client = None
+        else:
+             self._log("Alpaca disabled by configuration (DATA_PROVIDER != ALPACA).", "INFO")
 
         self._log(f"--- DataSourceManager initialized (ID: {self.client_id}) ---")
 
@@ -296,13 +302,13 @@ class DataSourceManager(EWrapper, EClient):
                         logging.info(f"[OK] Success: Data retrieved from Alpaca ({len(df)} bars).")
                         return df
                     else:
-                        self._log(f"⚠️ Alpaca data insufficient ({len(df)} < {min_required} required). Falling back to YFinance for deeper history.", "WARNING")
+                        self._log(f"*** Alpaca data insufficient ({len(df)} < {min_required} required). Falling back to YFinance for deeper history.***", "WARNING")
                         df = pd.DataFrame() # Force Fallback
                 
             except Exception as e:
                 self._log(f"Alpaca Failed: {e}", "WARNING")
         else:
-            self._log("⚠️ Alpaca client not initialized or fallback disabled. Skipping Alpaca.")
+            self._log("*** Alpaca client not initialized or fallback disabled. Skipping Alpaca.***")
 
         # 3. Attempt YFinance (Fallback #2 - Last Resort)
         logging.info(f"--- Alpaca failed or disabled. Proceeding to YFinance for {symbol} ---")
@@ -314,7 +320,7 @@ class DataSourceManager(EWrapper, EClient):
                 # self._log(df[0:5].to_string())
                 if not df.empty:
                     self._log(f"[OK] Success: Data retrieved from YFinance.")
-                    return df
+                    return normalize_and_validate_data(df)
             except Exception as e:
                 self._log(f"YFinance Failed: {e}", "ERROR")
 
@@ -553,17 +559,35 @@ class SectorMapper:
 
 def normalize_and_validate_data(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty: return pd.DataFrame()
-    if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(1)
+
+    # 1. Handle MultiIndex (IBKR/Alpaca/YF common format)
+    if isinstance(df.columns, pd.MultiIndex): 
+        df.columns = df.columns.droplevel(1)
+    
+    # 2. FORCE LOWERCASE IMMEDIATELY
+    # This ensures the validation check below passes regardless of source format
     df.columns = df.columns.str.lower()
-    if not isinstance(df.index, pd.DatetimeIndex): df.index = pd.to_datetime(df.index)
-    if df.index.tz is not None: df.index = df.index.tz_localize(None)
+    
+    # # 3. Ensure datetime index
+    # if not isinstance(df.index, pd.DatetimeIndex): df.index = pd.to_datetime(df.index)
+    # if df.index.tz is not None: df.index = df.index.tz_localize(None)
 
+    # required = {'open', 'high', 'low', 'close', 'volume'}
+    # if not required.issubset(df.columns): return pd.DataFrame()
+    # 3. Validate Columns
     required = {'open', 'high', 'low', 'close', 'volume'}
-    if not required.issubset(df.columns): return pd.DataFrame()
-
-    # Capitalize for consistency with other tools
-    df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'},
-              inplace=True)
+    if not required.issubset(df.columns): 
+        # Optional: Log warning here if needed
+        return pd.DataFrame()
+    
+    # 4. Standardize Index
+    if not isinstance(df.index, pd.DatetimeIndex): 
+        df.index = pd.to_datetime(df.index)
+    
+    # Remove timezone awareness (common source of merge errors)
+    if df.index.tz is not None: 
+        df.index = df.index.tz_localize(None)
+    
     return df
 
 

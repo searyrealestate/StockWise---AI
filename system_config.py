@@ -67,7 +67,7 @@ CHART_YEARS = 2
 LOOK_AHEAD_DAYS = 20
 
 # --- 4. CONNECTIVITY ---
-EN_IBKR = False
+EN_IBKR = True
 IBKR_HOST = '127.0.0.1'
 IBKR_PORT = 7497
 IBKR_CLIENT_ID = 1
@@ -130,7 +130,7 @@ if CHART_YEARS < MIN_WARMUP_YEARS:
     logger.debug(f"⚠️ Warning: CHART_YEARS ({CHART_YEARS}) is less than MIN_WARMUP_YEARS ({MIN_WARMUP_YEARS}).")
 
 # --- API SETTINGS ---
-DATA_PROVIDER = "ALPACA"  # Options: 'ALPACA', 'IBKR', 'YFINANCE'
+DATA_PROVIDER = "IBKR"  # Options: 'ALPACA', 'IBKR', 'YFINANCE'
 # Credentials (Streamlit Secrets or Environment)
 # Credentials (Streamlit Secrets or Environment or TOML)
 ALPACA_KEY = None
@@ -263,7 +263,7 @@ class SniperConfig:
     # 2. AI Thresholds
     # Model is "Timid" (High Precision Loss suppresses probabilities).
     # We lower threshold to 0.40 to capture high-quality setups (previously peaked at ~45%).
-    MODEL_CONFIDENCE_THRESHOLD = 0.65# Minimum AI Probability to Pull Trigger
+    MODEL_CONFIDENCE_THRESHOLD = 0.65   # Minimum AI Probability to Pull Trigger
     
     # 3. Training Penalties
     LOSS_PENALTY_MULTIPLIER = 15.0     # Weighted Loss Penalty for False Positives
