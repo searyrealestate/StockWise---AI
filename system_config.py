@@ -67,7 +67,7 @@ CHART_YEARS = 2
 LOOK_AHEAD_DAYS = 20
 
 # --- 4. CONNECTIVITY ---
-EN_IBKR = True
+EN_IBKR = False
 IBKR_HOST = '127.0.0.1'
 IBKR_PORT = 7497
 IBKR_CLIENT_ID = 1
@@ -130,7 +130,7 @@ if CHART_YEARS < MIN_WARMUP_YEARS:
     logger.debug(f"⚠️ Warning: CHART_YEARS ({CHART_YEARS}) is less than MIN_WARMUP_YEARS ({MIN_WARMUP_YEARS}).")
 
 # --- API SETTINGS ---
-DATA_PROVIDER = "IBKR"  # Options: 'ALPACA', 'IBKR', 'YFINANCE'
+DATA_PROVIDER = "YFINANCE"  # Options: 'ALPACA', 'IBKR', 'YFINANCE'
 # Credentials (Streamlit Secrets or Environment)
 # Credentials (Streamlit Secrets or Environment or TOML)
 ALPACA_KEY = None

@@ -57,7 +57,7 @@ class LiveTrader:
             
         self.interval = interval
         self.mode = mode.upper()
-        self.dsm = DataSourceManager()
+        self.dsm = DataSourceManager(use_ibkr=cfg.EN_IBKR)
         self.feature_calc = RobustFeatureCalculator(params={})
         self.ai = StockWiseAI() # GEN-9 CORE
         
@@ -162,11 +162,19 @@ class LiveTrader:
         latest_bar = df.iloc[-1]
         features = latest_bar.to_dict()
         
-        # Pass current params for Smart Alerts (Smart History update happens in notifier)
+        # --- Dynamic ATR Stop Loss ---
+        # Try to get ATR (usually 'atrr_14' from pandas_ta, fallback to 2% if missing)
+        atr = features.get('atr_14') or features.get('atrr_14') or (features.get('close') * 0.02)
+
+        # Use the multiplier from system_config (Conservative = 2.0)
+        atr_multiplier = cfg.ACTIVE_PROFILE["stop_atr"] 
+        
+        stop_price = features.get('close') - (atr * atr_multiplier)
+
         current_params = {
             "price": features.get('close'),
             "target": features.get('close') * (1 + cfg.SniperConfig.TARGET_PROFIT),
-            "stop_loss": features.get('close') * (1 + cfg.SniperConfig.MAX_DRAWDOWN),
+            "stop_loss": stop_price,  # <--- NEW DYNAMIC STOP
             "timestamp": str(latest_bar.name)
         }
         
@@ -184,9 +192,56 @@ class LiveTrader:
         price = features.get('close')
         logger.info(f"[{latest_bar.name}] {symbol} | Price: {price:.2f} | Decision: {decision} | Conf: {prob:.2%}")
         
-        if decision == "BUY":
-            logger.info(f"    >>> SIGNAL TRIGGERED for {symbol}: {trace}")
-            return decision, prob, price, trace, current_params
+        # --- SWING TRADE MANAGEMENT LOGIC ---
+        
+        # 1. Check if we already have an OPEN trade for this ticker
+        active_position = self.portfolio.get_active_position(ticker)
+        
+        if active_position:
+            # WE ARE IN A TRADE -> MANAGE IT (Quiet Mode)
+            entry_price = active_position['entry_price']
+            current_stop = active_position['stop_loss']
+            current_target = active_position['target_price']
+            
+            # A. Check for EXIT (Target Hit)
+            if current_price >= current_target:
+                self.portfolio.close_position(ticker, current_price, "TARGET")
+                self.ai.notifier.send_sell_alert(ticker, current_price, (current_price - entry_price)/entry_price, "TARGET 🎯")
+                return # Done for this cycle
+
+            # B. Check for EXIT (Stop Loss Hit)
+            elif current_price <= current_stop:
+                self.portfolio.close_position(ticker, current_price, "STOP")
+                self.ai.notifier.send_sell_alert(ticker, current_price, (current_price - entry_price)/entry_price, "STOP 🛑")
+                return # Done for this cycle
+
+            # C. Trailing Stop Logic (Only update if significant move)
+            # Only send an alert if we move the stop up by at least 1%
+            new_suggested_stop = current_params['stop_loss']
+            if new_suggested_stop > (current_stop * 1.01): 
+                # Update the position in the file
+                self.portfolio.update_stop_loss(ticker, new_suggested_stop)
+                # Send Quiet Update
+                self.ai.notifier.send_risk_update(ticker, new_suggested_stop, current_target, current_price, "Trailing Stop 🛡️")
+            
+            # DO NOT SEND "BUY" SIGNALS IF WE ARE ALREADY IN!
+            
+        else:
+            # NO POSITION -> LOOK FOR ENTRY
+            if decision == "BUY" and confidence > 0.75:
+                # Send the Buy Signal (First time only)
+                self.ai.notifier.send_buy_alert(
+                    ticker, 
+                    current_price, 
+                    current_params['stop_loss'], 
+                    current_params['target'], 
+                    confidence, 
+                    fund_score
+                )
+                
+                # Auto-Enter Paper Trade (if in Paper Mode)
+                if self.mode == "PAPER":
+                    self.portfolio.open_position(ticker, current_price, current_params['stop_loss'], current_params['target'])
             
         return None
 
@@ -329,7 +384,8 @@ if __name__ == "__main__":
     default_basket = "NVDA,AMD,MSFT,GOOGL,AAPL,META,TSLA,QCOM,AMZN"
     
     parser.add_argument('--symbols', type=str, default=default_basket, help='Comma-separated ticker symbols')
-    parser.add_argument('--interval', type=str, default='1d', help='Candle interval (1m, 1h, 1d)')
+    # Force Daily Interval in the code if you don't use CLI args
+parser.add_argument('--interval', type=str, default='1d', help='Candle interval')
     parser.add_argument('--mode', type=str, default='PAPER', help='PAPER or LIVE')
     
     args = parser.parse_args()

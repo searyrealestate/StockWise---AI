@@ -162,6 +162,16 @@ class PortfolioManager:
         else:
             return None
 
+    def get_active_position(self, ticker):
+        """
+        Helper: Returns the specific OPEN trade dictionary for a ticker, or None.
+        """
+        # Search Shadow Portfolio
+        for trade in self.shadow_portfolio.get("trades", []):
+            if trade["status"] == "OPEN" and trade["ticker"] == ticker:
+                return trade
+        return None
+        
     def get_active_positions(self, type='BOTH'):
         """Return list of open trades."""
         active = []

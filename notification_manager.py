@@ -88,6 +88,106 @@ class NotificationManager:
             logger.error(f"❌ Telegram Connection Test Failed: {e}")
             return False, f"Connection failed: {e}"
 
+    def send_buy_alert(self, symbol, price, stop_loss, target, confidence, fund_score, notes=""):
+        """
+        Sends a clean, high-visibility BUY signal.
+        """
+        # Calculate Risk/Reward Ratio
+        risk = price - stop_loss
+        reward = target - price
+        rr_ratio = reward / risk if risk > 0 else 0
+
+        message = (
+            f"🚀 <b>SNIPER BUY: {symbol}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"💵 <b>Entry:</b>   ${price:.2f}\n"
+            f"🎯 <b>Target:</b>  ${target:.2f} <i>(+{(target-price)/price:.1%})</i>\n"
+            f"🛑 <b>Stop:</b>    ${stop_loss:.2f} <i>({(stop_loss-price)/price:.1%})</i>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"⚖️ <b>R/R Ratio:</b> 1:{rr_ratio:.1f}\n"
+            f"🧠 <b>AI Conf:</b>  {confidence:.1%}\n"
+            f"📊 <b>Fund Score:</b> {fund_score}/100\n"
+            f"<i>{notes}</i>"
+        )
+        self.send_message(message)
+
+    def send_sell_alert(self, symbol, exit_price, pnl_percent, reason):
+        """
+        Sends a result alert. Uses different emojis for Win vs Loss.
+        """
+        is_win = pnl_percent > 0
+        emoji = "💰" if is_win else "🛑"
+        header = "PROFIT SECURED" if is_win else "STOP LOSS HIT"
+        
+        message = (
+            f"{emoji} <b>{header}: {symbol}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"📉 <b>Exit Price:</b> ${exit_price:.2f}\n"
+            f"📈 <b>Result:</b>     {pnl_percent:+.2%}\n"
+            f"📝 <b>Reason:</b>     {reason}\n"
+            f"━━━━━━━━━━━━━━━━━━"
+        )
+        self.send_message(message)
+
+    def send_risk_update(self, symbol, new_stop, new_target, current_price, reason="Trailing Stop"):
+        """
+        Updates the user when the stop loss moves up.
+        """
+        message = (
+            f"🛡️ <b>TRADE UPDATE: {symbol}</b>\n"
+            f"<i>{reason}</i>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"🔼 <b>New Stop:</b>   ${new_stop:.2f}\n"
+            f"🎯 <b>Target:</b>     ${new_target:.2f}\n"
+            f"💵 <b>Cur Price:</b>  ${current_price:.2f}\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"<i>Locking in gains / Reducing risk.</i>"
+        )
+        self.send_message(message)
+
+    def send_daily_report(self, date, active_trades, closed_trades, total_pnl):
+        """
+        Sends the End of Day summary.
+        """
+        emoji = "🟢" if total_pnl >= 0 else "🔴"
+        
+        # Build list of active tickers
+        active_str = ", ".join([t['ticker'] for t in active_trades]) if active_trades else "None"
+        
+        message = (
+            f"📅 <b>EOD REPORT: {date}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"{emoji} <b>Daily PnL:</b> ${total_pnl:.2f}\n"
+            f"📥 <b>Active:</b>    {len(active_trades)} ({active_str})\n"
+            f"📤 <b>Closed:</b>    {len(closed_trades)}\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"<i>System sleeping until next market open.</i>"
+        )
+        self.send_message(message)
+
+    def send_message(self, message: str, parse_mode: str = 'HTML'):
+        """
+        Base function to send any message string to the user.
+        """
+        if not self.enabled: return
+
+        method = "sendMessage"
+        url = f"{TELEGRAM_API_BASE_URL}{self.token}/{method}"
+
+        payload = {
+            'chat_id': str(self.chat_id),
+            'text': message,
+            'parse_mode': parse_mode
+        }
+
+        try:
+            response = requests.post(url, data=payload, timeout=5)
+            response.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"[ERROR] Telegram API Error ({e.response.status_code}): {e.response.text}")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"[ERROR] Telegram Connection Error: {e}")
+    
     def send_alert(self, message: str, parse_mode: str = 'Markdown', ticker=None, current_params=None):
         """
         Sends a text message. If ticker/params provided, performs 'Smart Alert' check.
@@ -341,6 +441,24 @@ class NotificationManager:
             self.send_reply(chat_id, f"🏦 **Total Realized PnL**\n💰 Profit: ${pnl:.2f}\n🔢 Trades: {count}")
             return
 
+        # /status
+        if text.lower() == "/status":
+            summary_pos = pm.get_user_position_summary()
+            
+            pnl_today, count_today = pm.calculate_user_pnl('TODAY')
+            pnl_total, count_total = pm.calculate_user_pnl('ALL')
+            
+            msg = (
+                f"📈 **SYSTEM STATUS**\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"{summary_pos}\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"📅 **Today PnL:**   ${pnl_today:.2f} ({count_today} Trades)\n"
+                f"🏦 **Total PnL:**   ${pnl_total:.2f} ({count_total} Trades)"
+            )
+            self.send_reply(chat_id, msg)
+            return
+
         # Generic Help if confused
         if text.lower() == "/help":
              self.send_reply(chat_id, (
@@ -352,6 +470,7 @@ class NotificationManager:
                  "• `/buy TKR $ QTY` - Quick Buy\n"
                  "• `/sell TKR $ QTY` - Quick Sell\n\n"
                  "📊 **Reporting**\n"
+                 "• `/status` - Full Status Overlay\n"
                  "• `/list` - Active Positions\n"
                  "• `/today_profit` - Daily PnL\n"
                  "• `/month_profit` - Monthly PnL\n"

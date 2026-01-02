@@ -280,12 +280,18 @@ class StockWiseAI:
         sma_200 = features.get('sma_200') or features.get('sma_long')
         current_price = features.get('close')
         
-        is_falling_knife = False
+        # is_falling_knife = False
+        # if sma_200 and current_price:
+        #      if current_price < (sma_200 * 0.90):
+        #          is_falling_knife = True
+        #          trace["Checks"]["Trend_Filter"] = "BLOCKED (Falling Knife)"
+        #          decision_logger.info(f"BLOCKED: {ticker} is a Falling Knife ({current_price} < 0.9*{sma_200})")
+        #          return "WAIT", 0.0, trace
         if sma_200 and current_price:
-             if current_price < (sma_200 * 0.90):
-                 is_falling_knife = True
-                 trace["Checks"]["Trend_Filter"] = "BLOCKED (Falling Knife)"
-                 decision_logger.info(f"BLOCKED: {ticker} is a Falling Knife ({current_price} < 0.9*{sma_200})")
+             # STRICT RULE: Price must be ABOVE the 200 EMA
+             if current_price < sma_200: 
+                 trace["Checks"]["Trend_Filter"] = "BLOCKED (Downtrend < 200 SMA)"
+                 decision_logger.info(f"BLOCKED: {ticker} in Downtrend ({current_price} < {sma_200})")
                  return "WAIT", 0.0, trace
         
         trace["Checks"]["Trend_Filter"] = "PASS"
