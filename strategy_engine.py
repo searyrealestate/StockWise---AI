@@ -49,6 +49,261 @@ class StrategyOrchestra:
     def set_fundamentals(cls, data):
         cls.fundamentals = data
 
+    # @staticmethod
+    # def decide_action(ticker, row, analysis):
+    #     """
+    #     New Weighted Decision Engine (Committee Vote).
+    #     Replaces the old 'All or Nothing' logic.
+    #     """
+    #     ai_prob = analysis.get('AI_Probability', 0.0) # 0.0 to 1.0
+    #     fund_score = analysis.get('Fundamental_Score', 50) # 0 to 100
+    #     adx = row.get('ADX_14', 0)
+        
+    #     # --- NEW SCORING ENGINE (WITH SNIPER VETO) ---
+
+    #     # [STEP 4 INTEGRATION] Check for Sniper Lock (Perfect Market Structure)
+    #     # If perfect structure exists, we slightly lower the AI confidence requirement.
+    #     # We check both 'adx' and 'ADX_14' to be safe with column naming.
+    #     current_adx = row.get('adx', row.get('ADX_14', 0))
+    #     current_rsi = row.get('rsi_14', 50)
+    #     current_vol = row.get('volume', 0)
+    #     vol_ma = row.get('vol_ma', current_vol)
+
+    #     is_sniper_lock = (current_adx > 25 and current_rsi < 70 and current_vol > vol_ma)
+        
+    #     # Determine Dynamic Threshold
+    #     required_confidence = cfg.SniperConfig.MODEL_CONFIDENCE_THRESHOLD
+    #     if is_sniper_lock:
+    #         # Reward perfect technicals by allowing slightly lower AI confidence
+    #         required_confidence *= 0.85 
+    #         logger.info(f"🎯 Sniper Lock Active: Lowering AI Threshold to {required_confidence:.2f}")
+
+    #     # 1. Hard Veto: If AI is confused, DO NOT TRADE.
+    #     if ai_prob < required_confidence:
+    #         logger.info(f"🚫 AI Veto: Confidence {ai_prob:.2f} < Threshold {required_confidence:.2f}")
+    #         return "WAIT"
+
+    #     # 2. Hard Veto: If Fundamentals are trash, DO NOT TRADE.
+    #     if fund_score < 50:
+    #         logger.info(f"🚫 Fundamental Veto: Score {fund_score} < 50")
+    #         return "WAIT"
+
+    #     # 3. Only calculate score if Vetoes pass
+    #     # Normalize Inputs to 0-100 scale
+    #     score_ai = ai_prob * 100
+    #     score_fund = fund_score
+    #     score_tech = 0
+        
+    #     # Technical Bonus
+    #     if adx > 25: score_tech += 20
+    #     # Check RSI (Safety: Not Overbought, Not Oversold)
+    #     if row.get('RSI_14', 50) < 70 and row.get('RSI_14', 50) > 40: score_tech += 20
+    #     # Check Trend (Price above 200 EMA)
+    #     if row['close'] > row.get('EMA_200', 0): score_tech += 30
+        
+    #     # 2. Weighted Sum (The Committee Vote)
+    #     # AI Opinion: 40% | Fundamentals: 30% | Technicals: 30%
+    #     final_score = (score_ai * 0.4) + (score_fund * 0.3) + (score_tech * 0.3)
+        
+    #     # Log the breakdown so we can debug later
+    #     logger.info(f"🔍 {ticker} Score breakdown: AI({int(score_ai)}) Fund({score_fund}) Tech({score_tech}) -> FINAL: {final_score:.1f}")
+
+    #     # 3. Dynamic Threshold
+    #     # If score >= 60, we take the trade.
+    #     if final_score >= 50:
+    #         return "BUY"
+    #     elif final_score <= 30:
+    #         return "SELL"
+    #     else:
+    #         return "WAIT"
+
+    @staticmethod
+    def decide_action(ticker, row, analysis):
+        """
+        Sniper Decision Engine (Verbose Logging Edition)
+        """
+        # --- 1. EXTRACT RAW DATA ---
+        ai_prob = analysis.get('AI_Probability', 0.0) 
+        fund_score = analysis.get('Fundamental_Score', 50)
+        
+        current_adx = row.get('adx', row.get('ADX_14', 0))
+        current_rsi = row.get('rsi_14', 50)
+        current_vol = row.get('volume', 0)
+        vol_ma = row.get('vol_ma', current_vol)
+        price = row.get('close', 0)
+        ema_200 = row.get('EMA_200', 0)
+        ema_21 = row.get('ema_21', row.get('sma_short', 0)) # Short term trend
+
+        # --- 2. CALCULATE TECHNICAL SCORE ---
+        tech_raw_score = 0
+        tech_log = []
+        
+        # A. Trend Strength (ADX)
+        if current_adx > 20: 
+            tech_raw_score += 20
+            tech_log.append("ADX>25 (+20)")
+        
+        # B. RSI Safety (Not Overbought)
+        if 40 < current_rsi < 70: 
+            tech_raw_score += 20
+            tech_log.append("RSI_Safe (+20)")
+            
+        # C. Trend Alignment (Above 200 EMA)
+        if price > ema_200: 
+            tech_raw_score += 30
+            tech_log.append("Price>EMA200 (+30)")
+            
+        # D. Volume Confirmation (Sniper Lock Component)
+        if current_vol > vol_ma:
+            tech_raw_score += 10
+            tech_log.append("High_Vol (+10)")
+
+        # Cap Technical Score
+        tech_raw_score = min(tech_raw_score, 100)
+
+        # --- 3. CALCULATE COMMITTEE SCORES ---
+        # Weights: AI (60%), Fund (10%), Tech (30%)
+        w_ai = 0.6
+        w_fund = 0.1
+        w_tech = 0.3
+        
+        score_ai_contribution = (ai_prob * 100) * w_ai
+        score_fund_contribution = fund_score * w_fund
+        score_tech_contribution = tech_raw_score * w_tech
+        
+        final_score = score_ai_contribution + score_fund_contribution + score_tech_contribution
+
+        # --- 4. DETERMINE VERDICT (BEFORE VETO) ---
+        # Raised Threshold to 60 to stop the "Machine Gun"
+        if final_score >= 60:
+            verdict = "BUY"
+        elif final_score <= 30:
+            verdict = "SELL"
+        else:
+            verdict = "WAIT"
+
+        # --- 5. DETAILED LOGGING (The Report Card) ---
+        # Log if score is decent (>40) or if it's a BUY signal
+        if final_score > 45:
+            log_msg = (
+                f"\n📋 REPORT CARD: [{ticker}] @ {row.name if hasattr(row, 'name') else 'Now'}\n"
+                f"--------------------------------------------------\n"
+                f"1. 🧠 AI BRAIN       (Prob {ai_prob:.2f} | W {w_ai*100}%): +{score_ai_contribution:.1f}\n"
+                f"2. 📊 FUNDAMENTALS   (Raw {fund_score}   | W {w_fund*100}%): +{score_fund_contribution:.1f}\n"
+                f"3. 📈 TECHNICALS     (Raw {tech_raw_score}   | W {w_tech*100}%): +{score_tech_contribution:.1f}\n"
+                f"   L Details: {', '.join(tech_log)}\n"
+                f"--------------------------------------------------\n"
+                f"🏆 FINAL SCORE: {final_score:.1f} / 100  [Req: 60]\n"
+                f"⚖️ VERDICT: {verdict}\n"
+            )
+            logger.info(log_msg)
+
+        # --- 6. VETO GATES (After Logging) ---
+        # We check vetoes last so we can see the "Report Card" first
+        
+        # Check Sniper Lock (Perfect Market Structure)
+        is_sniper_lock = (current_adx > 25 and current_rsi < 70 and current_vol > vol_ma)
+        required_confidence = cfg.SniperConfig.MODEL_CONFIDENCE_THRESHOLD
+        
+        if verdict == "BUY":
+            # 1. AI Veto
+            if ai_prob < required_confidence:
+                logger.info(f"🚫 AI Veto: {ai_prob:.2f} < {required_confidence:.2f}")
+                return "WAIT"
+
+            # 2. Trend Strength Veto (With Accumulation Override)
+            # Bottleneck Fix: Allow buying in "Chop" (ADX < 20) IF AI is highly confident (Accumulation)
+            if current_adx < 20:
+                if ai_prob > 0.70:
+                    logger.info(f"⚡ ACCUMULATION ENTRY: Low ADX ({current_adx:.1f}) overridden by High AI ({ai_prob:.2f})")
+                else:
+                    logger.info(f"🚫 Trend Veto: ADX {current_adx:.1f} < 20 (Chop) & AI Neutral")
+                    return "WAIT"
+
+            # 3. DIRECTIONAL VETO (CRITICAL FIX)
+            # Never buy if price is below short-term trend (EMA 21).
+            # This prevents buying "Strong Downtrends".
+            if price < ema_21:
+                if ai_prob > 0.75:
+                    logger.info(f"🪂 DIP BUY: Price below EMA21 overridden by Massive AI Confidence ({ai_prob:.2f})")
+                else:
+                    logger.info(f"🚫 Directional Veto: Price {price:.2f} < EMA21 {ema_21:.2f} (Downtrend)")
+                    return "WAIT"
+
+            # 4. Fundamental Veto
+            if fund_score < 50:
+                return "WAIT"
+                
+            # # --- 7. ADAPTIVE ENTRY ENGINE (The Fix for "Hot" Markets) ---
+            # if verdict == "BUY":
+            
+            # Scenario A: THE ROCKET (High Momentum -> Buy Market)
+            # If ADX > 40 or RSI > 65, the stock is flying. Don't wait for a dip.
+            if current_adx > 40 or current_rsi > 65:
+                logger.info(f"🚀 ROCKET DETECTED (ADX {current_adx:.1f}): Buying at MARKET immediately.")
+            
+            # Scenario B: THE SNIPER (Strong Trend -> Slight Discount)
+            # If ADX is healthy (25-40), try to save 0.3% (standard liquidity dip).
+            elif current_adx > 25:
+                discount = price * 0.003 
+                limit_target = price - discount
+                logger.info(f"🔫 SNIPER ENTRY: Market is solid. Setting Limit at {limit_target:.2f} (-0.3%)")
+
+            # Scenario C: THE BOTTOM FISHER (Choppy/Reversal -> Deep Discount)
+            # If ADX < 25, the trend is weak. We have leverage to demand a better price.
+            else:
+                # Use ATR for volatility if available, else 1%
+                atr = row.get('atr', price * 0.01)
+                limit_target = price - (atr * 0.5) 
+                logger.info(f"⚓ BOTTOM FISHING: Market is choppy. Waiting for {limit_target:.2f} (Deep Pullback)")
+
+
+        return verdict
+
+    @staticmethod
+    def get_adaptive_targets(row, entry_price):
+        """
+        Orchestra Stop-Loss Engine (Auto-Adaptive).
+        Calculates dynamic stops based on Normalized ATR (Volatility %).
+        """
+        # 1. Get Volatility Data (ROBUST CHECK)
+        # Check all possible column names for ATR
+        atr = row.get('atr', row.get('ATRr_14', row.get('atr_14', 0.0)))
+        
+        # Fallback if ATR is missing or 0
+        if atr <= 0:
+            # logger.warning(f"⚠️ Missing ATR for adaptive stop. Defaulting to 2.5%.")
+            atr = entry_price * 0.025
+        
+        # 2. Calculate "Wildness" (NATR)
+        # Example: ATR 5.00 / Price 100.00 = 5% Volatility
+        natr = (atr / entry_price) * 100
+        
+        # 3. Assign Dynamic Multiplier
+        if natr >= 4.0:
+            stop_mult = 3.5  # Extreme Volatility (Crypto/Biotech mode)
+            regime = "EXTREME"
+        elif natr >= 2.5:
+            stop_mult = 3.0  # High Volatility (Wild Tech: NVDA, TSLA)
+            regime = "HIGH"
+        elif natr >= 1.5:
+            stop_mult = 2.5  # Normal Volatility (Standard: GOOGL, AAPL)
+            regime = "NORMAL"
+        else:
+            stop_mult = 2.0  # Low Volatility (Stable: KO, JNJ)
+            regime = "STABLE"
+            
+        # 4. Calculate Targets
+        # We aim for 2.0 R:R (Risk/Reward), so Target is 2x the Stop distance
+        # BUT for crazy stocks, we might cap the target or scale it differently.
+        # Here we stick to 2.0x for consistency.
+        target_mult = stop_mult * 2.0 
+        
+        stop_loss = entry_price - (atr * stop_mult)
+        target_price = entry_price + (atr * target_mult)
+        
+        return stop_loss, target_price, f"{regime} ({stop_mult}x)"
+    
     @staticmethod
     def _agent_fundamentals(f, p):
         """
@@ -130,27 +385,27 @@ class StrategyOrchestra:
             # logger.error(f"AI Agent Error: {e}")
             pass
             
-        return score, details
-        """Gen-8: Fundamental Filter"""
-        score = 0
-        details = {}
-        data = StrategyOrchestra.fundamentals
+        # return score, details
+        # """Gen-8: Fundamental Filter"""
+        # score = 0
+        # details = {}
+        # data = StrategyOrchestra.fundamentals
         
-        if not data: return 0, {}
+        # if not data: return 0, {}
         
-        # 1. Revenue Growth
-        rev_growth = data.get('revenueGrowth')
-        if rev_growth and rev_growth > 0.15:
-            score += 15
-            details["Fund_HighGrowth"] = 15
+        # # 1. Revenue Growth
+        # rev_growth = data.get('revenueGrowth')
+        # if rev_growth and rev_growth > 0.15:
+        #     score += 15
+        #     details["Fund_HighGrowth"] = 15
             
-        # 2. Profit Margins
-        margins = data.get('profitMargins')
-        if margins and margins > 0.20:
-             score += 10
-             details["Fund_HighMargin"] = 10
+        # # 2. Profit Margins
+        # margins = data.get('profitMargins')
+        # if margins and margins > 0.20:
+        #      score += 10
+        #      details["Fund_HighMargin"] = 10
 
-        return score, details
+        # return score, details
 
 
     # @staticmethod
@@ -277,6 +532,9 @@ class StrategyOrchestra:
                 score = dip_score
                 details = dip_details
                 active_agent = "DipBuyer_Range"
+
+        score += gen8_boost
+        details.update(gen8_details)
 
         # Final check: Must be positive or zero
         if score < 0:
@@ -553,12 +811,12 @@ class StrategyOrchestra:
             score += cfg.SCORE_PENALTY_SECTOR
             details["Penalty_Sector_Weak"] = cfg.SCORE_PENALTY_SECTOR
 
-        # --- 7. SNIPER LOCK (The "Perfect Setup" Bonus) ---
-        # User demands 95% Win Rate. We need to identify the "Slam Dunk".
-        # Condition: Strong Trend (ADX>25) + Not Overbought (RSI<70) + High Volume + Trend Align
-        if f.get('adx', 0) > 25 and f.get('rsi_14', 50) < 75 and f['volume'] > f.get('vol_ma', 0):
-             score += 20
-             details["Conf_Sniper_Lock"] = 20
+        # # --- 7. SNIPER LOCK (The "Perfect Setup" Bonus) ---
+        # # User demands 95% Win Rate. We need to identify the "Slam Dunk".
+        # # Condition: Strong Trend (ADX>25) + Not Overbought (RSI<70) + High Volume + Trend Align
+        # if f.get('adx', 0) > 25 and f.get('rsi_14', 50) < 75 and f['volume'] > f.get('vol_ma', 0):
+        #      score += 20
+        #      details["Conf_Sniper_Lock"] = 20
 
         # --- 8. Volume Confirmation ---
         if "volume" not in disabled_features:
@@ -652,18 +910,18 @@ class StrategyOrchestra:
                 score += 15
                 details["Conf_Candle_Bull"] = 15
 
-        # --- GEN-8 AGENTS ---
-        # Assuming these agents are meant to be called with 'f' (features) and 'p' (parameters)
-        # and return a score and update details.
-        # The instruction refers to `calculate_score` which uses `self._agent_...` and `row, decision_log, feature_manifest`.
-        # Adapting to `_agent_dip_buyer` context:
-        ml_score, ml_details = StrategyOrchestra._agent_machine_learning(f, p)
-        score += ml_score
-        details.update(ml_details)
+        # # --- GEN-8 AGENTS ---
+        # # Assuming these agents are meant to be called with 'f' (features) and 'p' (parameters)
+        # # and return a score and update details.
+        # # The instruction refers to `calculate_score` which uses `self._agent_...` and `row, decision_log, feature_manifest`.
+        # # Adapting to `_agent_dip_buyer` context:
+        # ml_score, ml_details = StrategyOrchestra._agent_machine_learning(f, p)
+        # score += ml_score
+        # details.update(ml_details)
 
-        fund_score, fund_details = StrategyOrchestra._agent_fundamentals(f, p)
-        score += fund_score
-        details.update(fund_details)
+        # fund_score, fund_details = StrategyOrchestra._agent_fundamentals(f, p)
+        # score += fund_score
+        # details.update(fund_details)
 
         # 6. Volume Spike (+10)
         if "volume_dip" not in disabled_features:

@@ -442,6 +442,13 @@ class RobustFeatureCalculator:
             df.columns = [str(col).lower() for col in df.columns]
             df = df.loc[:, ~df.columns.duplicated()]
 
+            # --- Add these lines for Gen-9 AI ---
+            # The AI Brain requires percentage changes for momentum inputs
+            if 'close' in df.columns:
+                df['daily_return'] = df['close'].pct_change().fillna(0)
+            if 'volume' in df.columns:
+                df['volume_change'] = df['volume'].pct_change().fillna(0)
+
             s_short = int(self.params.get('sma_short', 20))
             s_long = int(self.params.get('sma_long', 100))
 

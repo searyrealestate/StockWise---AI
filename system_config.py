@@ -84,13 +84,13 @@ DATA_START_DATE = datetime(2023, 1, 1)
 RISK_PROFILES = {
     "Conservative": {
         "buy_threshold": 100,      # ROYAL FLUSH: Tech(80) + ML(25) = 105
-        "stop_atr": 2.0,           # Tighter Stop for Precision Entries
+        "stop_atr": 2.5,           # Tighter Stop for Precision Entries
         "reward_ratio": 1.0,       # Hit Rate Focus (1.0 ATR Target)
         "position_size_mult": 2.0  # Conviction
     },
     "Moderate": {
         "buy_threshold": 75,       # Stricter than previous
-        "stop_atr": 2.0,           # Standard 2ATR stop
+        "stop_atr": 2.5,           # Standard 2ATR stop
         "reward_ratio": 2.0,
         "position_size_mult": 1.0
     },
@@ -110,6 +110,9 @@ ACTIVE_PROFILE = RISK_PROFILES[ACTIVE_PROFILE_NAME]
 SCORE_THRESHOLD_BUY = ACTIVE_PROFILE["buy_threshold"]
 TRAILLING_STOP_ATR = ACTIVE_PROFILE["stop_atr"]
 RISK_REWARD_RATIO = ACTIVE_PROFILE["reward_ratio"]
+
+# STOP_LOSS_ATR = 2.5   # Increased from default to give trades room to breathe
+TAKE_PROFIT_ATR = 5.0 # Maintain high reward target (2.0 * 2.5 = 5.0)
 
 # --- CRITICAL: TIME INTERVAL ---
 # "1h" = Sniper Mode (Swing Trading on Hourly Charts)
@@ -179,6 +182,10 @@ if not ALPACA_KEY:
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 # Telegram Token Print Removed for Security
+
+# list of symbols to trade
+TRAINING_SYMBOLS = ["NVDA", "AMD", "MSFT", "GOOGL", "AAPL", "META", "TSLA", "QCOM", "AMZN", "INTC"]
+
 
 # NOTE: We need a placeholder value for investment for PnL calculation
 # INVESTMENT_AMOUNT = 1000 # Hardcoded investment for hypothetical PnL
@@ -263,7 +270,7 @@ class SniperConfig:
     # 2. AI Thresholds
     # Model is "Timid" (High Precision Loss suppresses probabilities).
     # We lower threshold to 0.40 to capture high-quality setups (previously peaked at ~45%).
-    MODEL_CONFIDENCE_THRESHOLD = 0.65   # Minimum AI Probability to Pull Trigger
+    MODEL_CONFIDENCE_THRESHOLD = 0.55   # Minimum AI Probability to Pull Trigger
     
     # 3. Training Penalties
     LOSS_PENALTY_MULTIPLIER = 15.0     # Weighted Loss Penalty for False Positives

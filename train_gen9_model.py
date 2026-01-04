@@ -11,19 +11,22 @@ import numpy as np
 import logging
 import joblib 
 from stockwise_ai_core import DataPreprocessor, StockWiseAI
+import yfinance as yf
+from sklearn.utils import class_weight
+import system_config as cfg
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("Trainer")
 
-def train_model():
+def train_model(cutoff_date=None):
     from data_source_manager import DataSourceManager
     from continuous_learning_analyzer import calculate_future_outcomes
     from feature_engine import RobustFeatureCalculator
     from sklearn.utils import shuffle
     
-    symbols = ["NVDA", "AMD", "MSFT", "GOOGL", "AAPL", "META", "TSLA", "QCOM", "AMZN"]
-    
+    symbols = cfg.TRAINING_SYMBOLS
+
     dsm = DataSourceManager()
     
     all_X = []
@@ -37,8 +40,14 @@ def train_model():
         logger.info(f"Processing Training Data for {symbol}...")
         
         # Fetch
-        data_map = dsm.fetch_data_sequential([symbol])
-        df = data_map.get(symbol)
+        # data_map = dsm.fetch_data_sequential([symbol])
+        # --- MODIFIED: Force 7 Years of History ---
+        start_date = "2018-01-01"  # 7 Years Back
+        logger.info(f"Downloading {symbol} Daily data from {start_date}...")
+        # Force Daily Data (interval="1d") which has NO limit
+        df = yf.download(symbol, start=start_date, interval="1d", progress=False)
+
+        # df = data_map.get(symbol)
         
         if df is None or df.empty:
             logger.warning(f"Skipping {symbol} (No Data)")
@@ -57,6 +66,16 @@ def train_model():
             elif 'low' in c: new_cols[c] = 'low'
             elif 'volume' in c: new_cols[c] = 'volume'
         df.rename(columns=new_cols, inplace=True)
+
+        # Calculate the daily return and volume change - percentage change
+        df['daily_return'] = df['close'].pct_change()
+        df['volume_change'] = df['volume'].pct_change()
+
+        # --- APPLY DATE CUTOFF ---
+        if cutoff_date:
+            original_len = len(df)
+            df = df[df.index < cutoff_date]
+            logger.info(f"   ✂️ Cutoff applied: {original_len} -> {len(df)} rows (Stopped at {cutoff_date})")
         
         # Calc Features
         calc = RobustFeatureCalculator(params={})
@@ -136,7 +155,35 @@ def train_model():
     logger.info(f"Training Universal Model (Backend: {ai.backend})...")
     
     ai.build_model(input_shape=(60, len(features)))
-    ai.train(X_final, y_final)
+    logger.info(f"Training Universal Model (Backend: {ai.backend})...")
+    
+    ai.build_model(input_shape=(60, len(features)))
+
+    # --- NEW CODE START: Class Weights ---
+    # This prevents the "Lazy Student" problem where AI just guesses WAIT every time.
+    from sklearn.utils import class_weight
+    
+    # Convert one-hot (e.g., [0, 0, 1]) back to integers (0, 1, 2)
+    y_integers = np.argmax(y_final, axis=1)
+    
+    # Calculate mathematically balanced weights
+    class_weights = class_weight.compute_class_weight(
+        class_weight='balanced',
+        classes=np.unique(y_integers),
+        y=y_integers
+    )
+    class_weight_dict = dict(enumerate(class_weights))
+
+    # Manually boost the importance of BUY (2) and SELL (0) signals
+    # We tell the AI: "A missed Buy is 2x worse than a missed Wait"
+    if 0 in class_weight_dict: class_weight_dict[0] *= 0.5  # SELL
+    if 2 in class_weight_dict: class_weight_dict[2] *= 6.0  # BUY
+    if 1 in class_weight_dict: class_weight_dict[1] *= 0.5  # WAIT (Less important)
+
+    logger.info(f"⚖️ Applied Aggressive Class Weights: {class_weight_dict}")
+    
+    # Pass the weights to the training function
+    ai.train(X_final, y_final, class_weight=class_weight_dict)
     
     # --- SAVE ---
     # 1. Save Primary (based on backend)

@@ -6,21 +6,33 @@ from data_source_manager import DataSourceManager
 from feature_engine import RobustFeatureCalculator
 from strategy_engine import StrategyOrchestra
 from stockwise_ai_core import StockWiseAI
+import json
 
 import os
 import csv
 from datetime import datetime
 
+# cfg.TELEGRAM_TOKEN = None
+
 # Setup Logging
 os.makedirs("logs", exist_ok=True)
+timestamp_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+log_filename = f"logs/verification_actions_{timestamp_str}.log"
+
+# Force reconfiguration to ensure we capture everything
+for handler in logging.root.handlers[:]:
+    logging.root.removeHandler(handler)
+
 logging.basicConfig(
     level=logging.INFO,
-    format='%(message)s',
+    format='%(asctime)s | %(levelname)s | %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
     handlers=[
-        logging.FileHandler("logs/verification_run.log", mode='w', encoding='utf-8'),
+        logging.FileHandler(log_filename, mode='w', encoding='utf-8'),
         logging.StreamHandler(sys.stdout)
     ]
 )
+print(f"[INIT] Logging to: {log_filename}")
 logger = logging.getLogger("SniperVerifier")
 
 def run_verification(symbols=None):
@@ -101,8 +113,17 @@ def run_verification(symbols=None):
             price_val = today['close']
             price_str = f"{price_val:.2f}"
             
-            target_price = price_val * (1 + cfg.SniperConfig.TARGET_PROFIT)
-            stop_loss = price_val * (1 + cfg.SniperConfig.MAX_DRAWDOWN)
+            # --- MODIFIED: Use ATR-based dynamic stops ---
+            # If 'atr' exists in features, use it. Else default to 2% of price.
+            atr = features.get('atr', price_val * 0.02)
+            
+            # Use the new config values
+            # --- NEW ADAPTIVE TARGETS ---
+            stop_loss, target_price, vol_regime = StrategyOrchestra.get_adaptive_targets(today, price_val)
+            # Log the regime so you can see it working
+            logger.info(f"   -> Volatility Regime: {vol_regime}")
+            # target_price = price_val * (1 + cfg.SniperConfig.TARGET_PROFIT)
+            # stop_loss = price_val * (1 + cfg.SniperConfig.MAX_DRAWDOWN)
             
             threshold = cfg.SniperConfig.MODEL_CONFIDENCE_THRESHOLD
             outcome_str = "-"
@@ -160,8 +181,15 @@ def run_verification(symbols=None):
                 "Trace": str(trace)
             })
 
+# Calculate win rate safely
+        total_closed = sym_stats['Wins'] + sym_stats['Losses']
+        if total_closed > 0:
+            symbol_win_rate = (sym_stats['Wins'] / total_closed) * 100
+        else:
+            symbol_win_rate = 0.0
+        
         logger.info("-" * 60)
-        logger.info(f"Summary for {symbol}: Wins: {sym_stats['Wins']} | Losses: {sym_stats['Losses']} | Signals: {sym_stats['Signals']}")
+        logger.info(f"Summary for {symbol}: Wins: {sym_stats['Wins']} | Losses: {sym_stats['Losses']} | Signals: {sym_stats['Signals']} | Win Rate: {symbol_win_rate:.2f}%")
         logger.info("-" * 60)
 
     # 5. Grand Statistics
@@ -198,6 +226,70 @@ def run_verification(symbols=None):
             dict_writer.writeheader()
             dict_writer.writerows(csv_data)
         logger.info(f"[INFO] Detailed data saved to {csv_path}")
+    
+    track_system_improvements(grand_stats, win_rate)
+
+# Performance Tracker (Tracks improvements over time)
+def track_system_improvements(current_stats, current_win_rate):
+    history_file = "logs/history_stats.json"
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # 1. Prepare Current Record
+    current_record = {
+        "timestamp": timestamp,
+        "win_rate": current_win_rate,
+        "total_pnl_pct": current_stats["Total_PnL_Pct"],
+        "total_signals": current_stats["Total_Signals"]
+    }
+
+    # 2. Load History
+    history = []
+    if os.path.exists(history_file):
+        try:
+            with open(history_file, 'r') as f:
+                history = json.load(f)
+        except:
+            history = []
+
+    # 3. Compare with Last Run (if exists)
+    logger.info("\n🚀 SYSTEM IMPROVEMENT REPORT")
+    logger.info("=" * 40)
+    
+    if history:
+        last_run = history[-1]
+        
+        # Calculate Deltas
+        delta_wr = current_win_rate - last_run['win_rate']
+        delta_pnl = current_stats["Total_PnL_Pct"] - last_run['total_pnl_pct']
+        delta_sig = current_stats["Total_Signals"] - last_run['total_signals']
+        
+        # Formatting
+        wr_icon = "🟢" if delta_wr >= 0 else "🔴"
+        pnl_icon = "🟢" if delta_pnl >= 0 else "🔴"
+        
+        logger.info(f"Previous Run: {last_run['timestamp']}")
+        logger.info(f"Win Rate:     {last_run['win_rate']:.2f}% -> {current_win_rate:.2f}%  ({wr_icon} {delta_wr:+.2f}%)")
+        logger.info(f"Total PnL:    {last_run['total_pnl_pct']*100:.2f}% -> {current_stats['Total_PnL_Pct']*100:.2f}%  ({pnl_icon} {delta_pnl*100:+.2f}%)")
+        logger.info(f"Signal Count: {last_run['total_signals']} -> {current_stats['Total_Signals']}  (Diff: {delta_sig:+})")
+        
+        if delta_wr > 0:
+            logger.info("\n✅ VERDICT: System Logic has IMPROVED since last run.")
+        elif delta_wr < 0:
+            logger.info("\n⚠️ VERDICT: System Logic has REGRESSED. Check recent changes.")
+        else:
+            logger.info("\nℹ️ VERDICT: Performance is STABLE (No Change).")
+            
+    else:
+        logger.info("ℹ️ First run recorded. Improvements will be calculated next time.")
+
+    # 4. Save Updates
+    history.append(current_record)
+    # Keep only last 50 runs to save space
+    if len(history) > 50: 
+        history = history[-50:]
+        
+    with open(history_file, 'w') as f:
+        json.dump(history, f, indent=4)
 
 if __name__ == "__main__":
     run_verification()

@@ -52,7 +52,7 @@ if not decision_logger.handlers:
 # --- CONFIGURATION constants ---
 # --- CONFIGURATION constants ---
 GEN9_FEATURES = [
-    'close', 'volume', 'rsi_14', 'adx', 'ema_spread',
+    'daily_return', 'volume_change', 'rsi_14', 'adx', 'ema_spread',
     'smart_hammer', 'smart_shooting_star', 
     'vsa_squat_bar', 'vsa_no_demand', 
     'bull_trap_signal', 'candle_confluence'
@@ -213,10 +213,10 @@ class StockWiseAI:
                 return True
         return False
 
-    def train(self, X, y):
+    def train(self, X, y,class_weight=None):
         """Unified Train."""
         if self.backend == "tensorflow":
-            self.model.fit(X, y, epochs=5, batch_size=32, verbose=1)
+            self.model.fit(X, y, epochs=5, batch_size=32, verbose=1, class_weight=class_weight)
             self.model.save(self.model_path)
         else:
             # Scikit learn needs 1D labels

@@ -152,6 +152,37 @@ class LiveTrader:
             logger.error(f"Pipeline Error {symbol}: {e}")
             return None, None
 
+    def update_stop_loss(self, ticker, new_stop):
+        """Updates the stop_loss for an open SHADOW trade."""
+        updated = False
+        for trade in self.shadow_portfolio.get("trades", []):
+            if trade["status"] == "OPEN" and trade["ticker"] == ticker:
+                trade["stop_loss"] = float(new_stop)
+                updated = True
+                logger.info(f"[Shadow] Stop Loss Updated for {ticker}: ${new_stop:.2f}")
+        
+        if updated:
+            self._save_json(self.shadow_file, self.shadow_portfolio)
+
+    def close_shadow_trade(self, ticker, exit_price, reason):
+        """Closes a SHADOW trade (Automated System)."""
+        closed = False
+        for trade in self.shadow_portfolio.get("trades", []):
+            if trade["status"] == "OPEN" and trade["ticker"] == ticker:
+                trade["status"] = "CLOSED"
+                trade["exit_price"] = float(exit_price)
+                trade["exit_reason"] = reason
+                trade["exit_timestamp"] = datetime.now().isoformat()
+                
+                # Calc PnL
+                pct_change = (float(exit_price) - trade["entry_price"]) / trade["entry_price"]
+                trade["pnl"] = pct_change * trade["allocation"]
+                closed = True
+                
+        if closed:
+            self._save_json(self.shadow_file, self.shadow_portfolio)
+            logger.info(f"[Shadow] Trade Closed: {ticker} @ {exit_price} ({reason})")
+
     def analyze_market(self, symbol, df, fund_data):
         """Ask the AI for a decision."""
         if len(df) < 60:
@@ -195,24 +226,25 @@ class LiveTrader:
         # --- SWING TRADE MANAGEMENT LOGIC ---
         
         # 1. Check if we already have an OPEN trade for this ticker
-        active_position = self.portfolio.get_active_position(ticker)
+        active_position = self.pm.get_active_position(symbol)
         
         if active_position:
             # WE ARE IN A TRADE -> MANAGE IT (Quiet Mode)
             entry_price = active_position['entry_price']
             current_stop = active_position['stop_loss']
             current_target = active_position['target_price']
+            price = features.get('close')
             
             # A. Check for EXIT (Target Hit)
-            if current_price >= current_target:
-                self.portfolio.close_position(ticker, current_price, "TARGET")
-                self.ai.notifier.send_sell_alert(ticker, current_price, (current_price - entry_price)/entry_price, "TARGET 🎯")
+            if price >= current_target:
+                self.pm.close_shadow_trade(symbol, price, active_position['qty'])  # Use PM to close
+                self.ai.notifier.send_sell_alert(symbol, price, (price - entry_price)/entry_price, "TARGET 🎯")
                 return # Done for this cycle
 
             # B. Check for EXIT (Stop Loss Hit)
-            elif current_price <= current_stop:
-                self.portfolio.close_position(ticker, current_price, "STOP")
-                self.ai.notifier.send_sell_alert(ticker, current_price, (current_price - entry_price)/entry_price, "STOP 🛑")
+            elif price <= current_stop:
+                self.pm.close_shadow_trade(symbol, price, active_position['qty'])
+                self.ai.notifier.send_sell_alert(symbol, price, (price - entry_price)/entry_price, "STOP 🛑")
                 return # Done for this cycle
 
             # C. Trailing Stop Logic (Only update if significant move)
@@ -220,9 +252,9 @@ class LiveTrader:
             new_suggested_stop = current_params['stop_loss']
             if new_suggested_stop > (current_stop * 1.01): 
                 # Update the position in the file
-                self.portfolio.update_stop_loss(ticker, new_suggested_stop)
+                self.pm.update_stop_loss(symbol, new_suggested_stop)
                 # Send Quiet Update
-                self.ai.notifier.send_risk_update(ticker, new_suggested_stop, current_target, current_price, "Trailing Stop 🛡️")
+                self.ai.notifier.send_risk_update(symbol, new_suggested_stop, current_target, price, "Trailing Stop 🛡️")
             
             # DO NOT SEND "BUY" SIGNALS IF WE ARE ALREADY IN!
             
@@ -231,18 +263,16 @@ class LiveTrader:
             if decision == "BUY" and confidence > 0.75:
                 # Send the Buy Signal (First time only)
                 self.ai.notifier.send_buy_alert(
-                    ticker, 
-                    current_price, 
+                    symbol, 
+                    price, 
                     current_params['stop_loss'], 
                     current_params['target'], 
-                    confidence, 
-                    fund_score
+                    prob, 
+                    fund_data.get('Score', 50)
                 )
-                
-                # Auto-Enter Paper Trade (if in Paper Mode)
-                if self.mode == "PAPER":
-                    self.portfolio.open_position(ticker, current_price, current_params['stop_loss'], current_params['target'])
-            
+                # 2. RETURN the signal to the Main Loop
+                return (decision, prob, price, trace, current_params)
+
         return None
 
     def execute_trade(self, symbol, action, price, details, params):
@@ -315,7 +345,20 @@ class LiveTrader:
                 # --- EOD AUDIT TRIGGER ---
                 # Run once after market close
                 if now > today_close and not self.eod_run_today and self.is_trading_day(now.date()):
-                    self.auditor.generate_eod_report()
+                    logger.info("🏁 Market Closed. Running EOD Maintenance...")
+                    
+                    # 1. Run Maintenance (Audit + Retrain)
+                    # We import it here to avoid circular imports at top level if possible
+                    from daily_maintenance import AutoCorrector
+                    ac = AutoCorrector()
+                    ac.run_routine()
+                    
+                    # 2. CRITICAL: HOT RELOAD THE BRAIN
+                    # We must re-initialize the AI to load the NEW .keras file we just trained
+                    logger.info("🧠 RELOADING AI MODEL from Disk...")
+                    self.ai = StockWiseAI() 
+                    logger.info("✅ Brain Reloaded.")
+
                     self.eod_run_today = True
 
                 # 4. Handle Inactive State
