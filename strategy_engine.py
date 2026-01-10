@@ -1,970 +1,856 @@
+# # strategy_engine.py
+
+# import logging
+# import numpy as np
+# import system_config as cfg
+
+# # Logger setup
+# logger = logging.getLogger("StrategyEngine")
+
+
+# class MarketRegimeDetector:
+#     @staticmethod
+#     def detect_regime(latest_row):
+#         close = latest_row['close']
+#         sma_short = latest_row.get('sma_short', close)
+#         sma_long = latest_row.get('sma_long', close)
+#         adx = latest_row.get('adx', latest_row.get('ADX', latest_row.get('ADX_14', latest_row.get('adx_14', 0))))
+
+#         if close < sma_long:
+#             return "BEARISH"
+
+#         # 2. RANGING_SHUFFLE (Consolidation)
+#         # if sma_short > 0:
+#         #     price_near_sma_short = abs(close - sma_short) / sma_short < 0.01
+#         # else:
+#         #     price_near_sma_short = False
+#         #
+#         # if adx < cfg.STRATEGY_PARAMS.get('adx_threshold', 25) and price_near_sma_short:
+#         #     return "RANGING_SHUFFLE"  # <-- NEW SHUFFLE REGIME
+
+#         # 3. TRENDING_UP (Strong Bull)
+#         if close > sma_long:
+#             if adx >= cfg.STRATEGY_PARAMS.get('adx_threshold', 25) and close > sma_short:
+#                 return "TRENDING_UP"
+
+#         # 4. RANGING_BULL (Default / Mild Uptrend)
+#         return "RANGING_BULL"
+
+
+# class StrategyOrchestra:
+#     """
+#         Gen-7 Strategy Orchestra - 'PREDATOR' Edition
+#         Optimized for High Win Rate & Dip Buying													
+#     """
+
+#     fundamentals = None # Gen-8 Global State
+
+#     @classmethod
+#     def set_fundamentals(cls, data):
+#         cls.fundamentals = data
+
+#     @staticmethod
+#     def decide_action(ticker, row, analysis):
+#         """
+#         Sniper Decision Engine (Predator Edition)
+#         Updates:
+#         1. Reduced AI dependence (60% -> 40%) to allow Technicals to shine.
+#         2. Added 'Dip Buy' logic for Oversold conditions.
+#         3. Dynamic Thresholds: Strong Technicals lowers AI requirement.
+#         """
+
+#         # --- 1. ROBUST DATA EXTRACTION (The Fix) ---
+#         def get_val(row, keys, default=0.0):
+#             for k in keys:
+#                 if k in row: return float(row[k])
+#             return default
+        
+#         # # --- 1. EXTRACT RAW DATA ---
+#         # ai_prob = analysis.get('AI_Probability', 0.0) 
+#         # fund_score = analysis.get('Fundamental_Score', 50)
+        
+#         current_rsi = get_val(row, ['rsi_14', 'RSI', 'rsi', 'RSI_14'], 50.0)
+#         current_adx = get_val(row, ['adx_14', 'ADX_14', 'ADX', 'adx'], 0.0)
+#         current_vol = get_val(row, ['volume', 'Volume', 'VOL'], 0.0)
+#         vol_ma = get_val(row, ['vol_ma', 'Vol_MA', 'VOL_MA'], current_vol)
+
+#         ai_prob = analysis.get('AI_Probability', 0.0) 
+#         fund_score = analysis.get('Fundamental_Score', 50)
+#         price = row.get('close', 0)
+#         ema_200 = row.get('EMA_200', 0)
+
+#         # --- 2. CALCULATE TECHNICAL SCORE ---
+#         tech_raw_score = 0
+#         tech_log = []
+        
+#         # A. Trend Strength (ADX) OR Reversal Strength
+#         if current_adx > 25: 
+#             tech_raw_score += 20
+#             tech_log.append("StrongTrend (+20)")
+
+#             # ** NEW: GOLDEN ZONE BONUS **
+#             # This specific combo had 60.9% Win Rate in your logs
+#             if 50 < current_rsi < 70:
+#                 tech_raw_score += 15
+#                 tech_log.append("GoldenZone (+15)")
+
+#         # B. DIPS (The Losing Strategy - Fixed)
+#         # Old logic (RSI < 40) had 20% WR. We tightened it to < 30 (Extreme only).
+#         elif current_rsi < 30:
+#             tech_raw_score += 25
+#             tech_log.append("DeepValue (+25)")
+        
+#         # C. RSI HEALTH
+#         if 45 < current_rsi < 65: 
+#             tech_raw_score += 10
+#             tech_log.append("RSI_Prime (+10)")
+            
+#         # D. MACRO TREND
+#         if price > ema_200: 
+#             tech_raw_score += 20
+#             tech_log.append("MacroTrend (+20)")
+            
+#         # E. VOLUME
+#         if current_vol > vol_ma:
+#             tech_raw_score += 10
+#             tech_log.append("High_Vol (+10)")
+
+#         # Cap Technical Score
+#         tech_raw_score = min(tech_raw_score, 100)
+
+#         # --- 3. CALCULATE COMMITTEE SCORES ---
+#         # Weights: AI (40%), Fund (15%), Tech (45%)
+#         w_ai = 0.40
+#         w_fund = 0.15
+#         w_tech = 0.45
+        
+#         score_ai_contribution = (ai_prob * 100) * w_ai
+#         score_fund_contribution = fund_score * w_fund
+#         score_tech_contribution = tech_raw_score * w_tech
+        
+#         final_score = score_ai_contribution + score_fund_contribution + score_tech_contribution
+
+#         # --- 4. DETERMINE VERDICT (BEFORE VETO) ---
+#         # Raised Threshold to 60 to stop the "Machine Gun"
+#         if final_score >= 60:
+#             verdict = "BUY"
+#         elif final_score <= 30:
+#             verdict = "SELL"
+#         else:
+#             verdict = "WAIT"
+
+#         # --- 5. DETAILED LOGGING (The Report Card) ---
+#         # Log if score is decent (>40) or if it's a BUY signal
+#         if final_score > 40:
+#             log_msg = (
+#                 f"\n📋 REPORT CARD: [{ticker}] @ {row.name if hasattr(row, 'name') else 'Now'}\n"
+#                 f"--------------------------------------------------\n"
+#                 f"   RSI: {current_rsi:.1f} | ADX: {current_adx:.1f}\n" # Log the ACTUAL values seen
+#                 f"1. 🧠 AI BRAIN       (Prob {ai_prob:.2f}): +{score_ai_contribution:.1f}\n"
+#                 f"2. 📈 TECHNICALS     (Raw {tech_raw_score}): +{score_tech_contribution:.1f}\n"
+#                 f"   L Details: {', '.join(tech_log)}\n"
+#                 f"--------------------------------------------------\n"
+#                 f"🏆 FINAL SCORE: {final_score:.1f} / 100\n"
+#                 f"⚖️ VERDICT: {verdict}\n"
+#             )
+#             logger.info(log_msg)
+
+#         # --- 6. VETO GATES (DYNAMIC) ---
+#         # We check vetoes last so we can see the "Report Card" first        
+#         # Check Sniper Lock (Perfect Market Structure)
+#         # is_sniper_lock = (current_adx > 25 and current_rsi < 70 and current_vol > vol_ma)
+#         required_confidence = cfg.SniperConfig.MODEL_CONFIDENCE_THRESHOLD
+
+#         # DYNAMIC THRESHOLD: If Technicals are perfect (>80), AI can be dumber (0.45)
+#         if tech_raw_score > 80:
+#             required_confidence = 0.45
+#             logger.info(f"⚡ OVERRIDE: Perfect Technicals! Lowering AI Threshold to {required_confidence}")
+        
+        
+#         if verdict == "BUY":
+#             # 1. HARD RSI CEILING (Stop Buying Tops)
+#             if current_rsi > 70:
+#                 logger.info(f"🛑 SAFETY VETO: RSI {current_rsi:.1f} is dangerously high. Abort.")
+#                 return "WAIT"
+
+#             # 2. DIRECTIONAL VETO (With Dip Exception)
+#             if price < ema_21:
+#                 # ALLOW if it is a Deep Dip (RSI < 30)
+#                 if current_rsi < 30: 
+#                     logger.info(f"⚡ FALLING KNIFE CATCH: Price < EMA21 but RSI {current_rsi:.1f} is oversold. ALLOWED.")
+#                 else:
+#                     logger.info(f"🛑 TREND VETO: Price {price:.2f} < EMA21 {ema_21:.2f} and not oversold.")
+#                     return "WAIT"
+
+#             # 2. TOXIC DIP PROTECTION
+#             # If trend is weak (ADX < 20) and RSI is not extreme (< 30), don't buy.
+#             if current_adx < 20 and current_rsi > 30:
+#                 logger.info(f"🛑 CHOP VETO: Weak Trend (ADX {current_adx:.1f}) & Not Deep Value.")
+#                 return "WAIT"
+
+#             # 3. AI Veto
+#             if ai_prob < required_confidence:
+#                 logger.info(f"🚫 AI Veto: {ai_prob:.2f} < {required_confidence:.2f}")
+#                 return "WAIT"
+
+#             # 4. Fundamental Veto
+#             if fund_score < 50:
+#                 return "WAIT"
+
+#             # 5. Context-Aware Trend/Dip Logic
+#             if current_adx < 30:
+#                 # WEAK TREND: Only buy DEEP Dips or High AI
+#                 if current_rsi < 40:
+#                      logger.info(f"⚡ VALUE ENTRY: Buying Deep Dip (RSI {current_rsi:.1f}) in weak trend.")
+#                 elif ai_prob > 0.75:
+#                     logger.info(f"⚡ AI SNIPE: Buying Weak Trend on High AI Confidence ({ai_prob:.2f}).")
+#                 else:
+#                     logger.info(f"🚫 Trend Veto: Weak Trend (ADX {current_adx:.1f}) & Not Deep Value.")
+#                     return "WAIT"
+#             else:
+#                 # STRONG TREND: Buy Shallow Dips or Breakouts
+#                 if current_rsi < 60:
+#                      logger.info(f"🚀 TREND ENTRY: Buying healthy pullback/breakout (RSI {current_rsi:.1f}).")
+
+#             # 4. Fundamental Veto
+#             if fund_score < 50:
+#                 return "WAIT"
+                
+#             # ENTRY OPTIMIZATION
+#             if current_adx > 30:
+#                 logger.info(f"🚀 MOMENTUM: Buy MARKET.")
+#             elif current_rsi < 40:
+#                 logger.info(f"⚓ DIP SNIPE: Buy MARKET.")
+#             else:
+#                 limit_target = price * 0.998 
+#                 logger.info(f"🔫 STANDARD: Limit at {limit_target:.2f}")
+
+#         return verdict
+
+#     @staticmethod
+#     def get_adaptive_targets(row, entry_price):
+#         """
+#         Orchestra Stop-Loss Engine (High Win Rate Edition).
+#         Adjusts R:R to favor 'Hitting the Target' more often.
+#         """
+
+#         # Robust Fetch
+#         def get_val(row, keys, default=0.0):
+#             for k in keys:
+#                 if k in row: return float(row[k])
+#             return default
+
+#         # 1. Get Volatility Data (ROBUST CHECK)
+#         # Check all possible column names for ATR
+#         atr = get_val(row, ['atr', 'ATRr_14', 'atr_14'], entry_price * 0.02)
+#         natr = (atr / entry_price) * 100
+        
+#         # Stop Multipliers (Volatility Based)
+#         if natr >= 4.0:
+#             stop_mult = 3.0  # Extreme Volatility (Crypto/Biotech mode)
+#             regime = "EXTREME"
+#         elif natr >= 2.5:
+#             stop_mult = 2.5  # High Volatility (Wild Tech: NVDA, TSLA)
+#             regime = "HIGH"
+#         else:
+#             stop_mult = 2.0  # Normal Volatility (Standard: GOOGL, AAPL)
+#             regime = "NORMAL"
+        
+            
+#         # 4. Calculate Targets
+#         # We aim for 2.0 R:R (Risk/Reward), so Target is 2x the Stop distance
+#         # BUT for crazy stocks, we might cap the target or scale it differently.
+#         # Here we stick to 2.0x for consistency.
+#         # --- CRITICAL CHANGE FOR WIN RATE ---
+#         # Old: target_mult = stop_mult * 2.0 (1:2 Risk Reward) -> ~40-50% Win Rate
+#         # New: target_mult = stop_mult * 1.3 (1:1.3 Risk Reward) -> Aiming for 65%+ Win Rate												
+#         target_mult = stop_mult * 1.3
+        
+#         stop_loss = entry_price - (atr * stop_mult)
+#         target_price = entry_price + (atr * target_mult)
+        
+#         return stop_loss, target_price, f"{regime} (Stop {stop_mult}x / Target {target_mult:.1f}x)"
+
+#     @staticmethod
+#     def _agent_fundamentals(f, p):
+#         """
+#         Agent 8: Fundamental Analysis.
+#         Uses static class variable 'fundamentals' set by external engine.
+#         """
+#         score = 0
+#         details = {}
+        
+#         fund = StrategyOrchestra.fundamentals
+#         if not fund:
+#             return 0, {}
+            
+#         # PE Ratio Logic
+#         pe = fund.get('trailingPE')
+#         if pe and pe > 0:
+#             if pe < 20: 
+#                 score += 10
+#                 # details['Fund_LowPE'] = 10
+#             elif pe > 50:
+#                 score -= 5 # Overvalued penalty
+                
+#         # # Revenue Growth
+#         # rev_growth = fund.get('revenueGrowth')
+#         # if rev_growth and rev_growth > 0.20: # >20% growth
+#         #     score += 10
+#         #     details['Fund_HighGrowth'] = 10
+            
+#         return score, details
+
+#     @staticmethod
+#     def _agent_machine_learning(f, p):
+#         """Gen-8: ML Confirmation (Lorentzian/KNN) with Veto Power"""
+#         score = 0
+#         details = {}
+#         ml_signal = f.get('ml_signal', 0)
+        
+#         if ml_signal == 1:
+#             score += 25 # Confirmation
+#             # details["ML_Lorentzian_Bull"] = 25
+#         else:
+#             score -= 50 # VETO: If ML says Down, we kill the trade.
+#             # details["ML_Lorentzian_Bear_VETO"] = -50
+            
+#         return score, details
+
+#     @staticmethod
+#     def _agent_deep_learning(f, p):
+#         """Gen-9: Deep Learning 'Sniper' Agent"""
+#         score = 0
+#         details = {}
+        
+#         # We need historical context (DataFrame) for LSTM
+#         history_window = f.get('history_window')
+        
+#         if history_window is None or history_window.empty:
+#             return 0, {}
+            
+#         try:
+#             # Lazy Import to avoid overhead if not used
+#             from stockwise_ai_core import StockWiseAI
+            
+#             # Singleton storage could be improved, but for now instantiate/load
+#             # In production, this should be initialized once in the class __init__
+#             ai = StockWiseAI() 
+            
+#             # Predict
+#             # AI expects exactly 60 bars.
+#             if len(history_window) >= 60:
+#                 # Take last 60
+#                 window = history_window.iloc[-60:].copy()
+#                 action, confidence = ai.predict(window)
+                
+#                 if action == 2 and confidence > 0.95:
+#                     score += 100 # INSTANT TRIGGER
+#                     details["AI_SNIPER_BUY"] = 100
+#                     # details["AI_Confidence"] = float(f"{confidence:.4f}")
+#         except:
+#             # logger.error(f"AI Agent Error: {e}")
+#             pass
+
+#         return score, details
+
+
+#     @staticmethod
+#     def get_score(features, regime, params=None):
+#         """
+#         Main dispatch method to select the correct agent based on regime.
+
+#         Gen-7 Logic Override: Calculates potential score from all relevant agents
+#         and selects the highest positive score, allowing high-confidence Dip Buyer
+#         signals to override conservative regime filters (Falling Knife Paradox fix).
+#         """
+#         if params is None: params = cfg.STRATEGY_PARAMS
+
+#         # score_details = {
+#         #     "Trigger_Breakout": 0, "Conf_Volume": 0, "Conf_Slope": 0, "Conf_EMA_Short": 0,
+#         #     "Conf_PSAR_Bull": 0, "Conf_Kalman_Positive": 0, "Conf_Wavelet_LowNoise": 0,
+#         #     "Penalty_Wavelet_Noise": 0, "Conf_Sector_Strong": 0, "Penalty_Sector_Weak": 0,
+#         #     "Penalty_RSI_Overbought": 0, "Feature_SlopeAngle": features.get('slope_angle', 0.0),
+#         #     "Feature_KalmanSmooth": features.get('kalman_smooth', 0.0),
+#         #     "Feature_WaveletNoise": features.get('wavelet_std_ratio', 99.0),
+#         #     "Feature_RSI": features.get('rsi_14', 50),
+#         #     "Regime": regime
+#         # }
+        
+#         score_details = {"Regime": regime}
+
+#         # --- Gen-7 Logic Override: Calculate potential score from all relevant agents ---
+#         # We calculate everything upfront so we can compare them
+#         # Simplified dispatch for robustness
+#         breakout_score, breakout_details = StrategyOrchestra._agent_breakout(features, params)
+#         dip_score, dip_details = StrategyOrchestra._agent_dip_buyer(features, params)
+#         # bear_score, bear_details = StrategyOrchestra._agent_bear_defense(features)
+
+#         # Default initialization
+#         score = 0
+#         details = {}
+#         # active_agent = "None"
+        
+#         # --- GEN-8: AGENT CALCULATIONS ---
+        
+#         # ml_score, ml_details = StrategyOrchestra._agent_machine_learning(features, params)
+#         # fund_score, fund_details = StrategyOrchestra._agent_fundamentals(features, params)
+#         # dl_score, dl_details = StrategyOrchestra._agent_deep_learning(features, params)
+        
+#         # # BASE SCORE BOOST (Add to whatever agent is selected)
+#         # gen8_boost = ml_score + fund_score + dl_score
+#         # gen8_details = {}
+#         # gen8_details.update(ml_details)
+#         # gen8_details.update(fund_details)
+#         # gen8_details.update(dl_details)
+
+#         # if regime == "BEARISH":
+#         #     # In Bear market, Breakouts are harder (Penalty), Dips are preferred.
+#         #     # But if a breakout is HUGE (Score > 80), we take it (Turnaround play).
+#         #     breakout_score -= 10
+#         #     breakout_details["Penalty_Regime_Bear"] = -10
+
+#         #     if dip_score > breakout_score:
+#         #         score = dip_score
+#         #         details = dip_details
+#         #         active_agent = "DipBuyer_Bear"
+#         #     else:
+#         #         score = breakout_score
+#         #         details = breakout_details
+#         #         active_agent = "Breakout_CounterTrend"
+        
+#         # Prioritize Dip in ranges, Breakout in trends
+#         # A. Prioritize Breakout if it has the highest score in Trending/Bullish regimes
+#         if regime == "TRENDING_UP":
+#             # In Bull market, Breakouts are preferred.
+#             if breakout_score >= dip_score:
+#                 score, details = breakout_score, breakout_details
+#             else:
+#                 score, details = dip_score, dip_details
+#         else:  # RANGING / SHUFFLE
+#             # In chop/bear, we ONLY want dip buys
+#             score, details = dip_score, dip_details
+
+#         # Merge the score breakdown for logging
+#         score_details.update(details)
+
+#         # --- CAP THE SCORE AT 100 ---
+#         score = min(score, 100)
+
+#         return score, score_details
+
+#     @staticmethod
+#     def _agent_breakout(f, p):
+#         """
+#         Gen-7 Breakout Agent (Ablation-Ready)
+#         """
+#         score = 0
+#         details = {}
+
+#         # --- Breakout Trigger (The Base) ---
+#         if f.get('recent_high', 0) > 0 and f['high'] > f['recent_high']:
+#             score += 20
+#         #     score += cfg.SCORE_TRIGGER_BREAKOUT
+#         #     details["Trigger_Breakout"] = cfg.SCORE_TRIGGER_BREAKOUT
+
+#         # # --- EMA Trend Crossover ---
+#         # if "ema_crossover" not in disabled_features:
+#         #     if f.get('ema_9', 0) > f.get('ema_21', 0):
+#         #         score += 10      # EMA crossover bonus - ENABLED for Gen-7
+#         #         details["Conf_EMA_Crossover"] = 10
+
+#         # # --- ADX Trend Strength ---
+#         # if "adx" not in disabled_features:
+#         #     if f.get('ADX_14', 0) > 20:
+#         #         score += 5
+#         #         details["Conf_ADX_Strong"] = 5
+
+#         # # --- 8. Volume Confirmation ---
+#         # if "volume" not in disabled_features:
+#         #     if f['volume'] > f.get('vol_ma', 0) * 1.1:
+#         #         score += cfg.SCORE_CONFIRM_VOLUME
+#         #         details["Conf_Volume"] = cfg.SCORE_CONFIRM_VOLUME
+
+#         return score, details
+
+#     @staticmethod
+#     def _agent_dip_buyer(f, p):
+#         """
+#         Gen-7 Dip Buyer
+#         Updates: Added 'Falling Knife' filter (200 EMA).
+#         """
+#         # # Get disabled features list
+#         # disabled_features = getattr(cfg, 'DISABLED_FEATURES', [])
+
+#         score = 0
+#         details = {}
+        
+#         # wt1 = f.get('wt1', 0)
+#         # wt2 = f.get('wt2', 0)
+
+#         # # 1. Rising Knife Filter (Wait, Falling Knife) with Gen-7 OVERRIDE
+#         # long_trend = f.get('sma_200', f.get('sma_long', 0))
+        
+#         # # Calculate Signals FIRST
+#         # # Dip Trigger
+#         # wt_score = 0
+#         # is_deep_value = False
+        
+#         # # Gen-7 Spec: Trigger if WT1 < -60 (Deep Oversold) AND Crossover
+#         # if wt1 < -60 and wt1 > wt2:
+#         #     wt_score = 45  # High Trigger Bonus (The override logic)
+#         #     # is_deep_value = True
+#         # elif wt1 < -53 and wt1 > wt2:
+#         #      wt_score = 30 # Normal trigger
+#         # elif f.get('rsi_14', 50) < 35:
+#         #     # Fallback Trigger (Weak)
+#         #     wt_score = 25
+
+#         # # # Now Apply Filter with Override Logic
+#         # # if long_trend > 0 and f['close'] < long_trend * 0.85:
+#         # #     if is_deep_value:
+#         # #         # OVERRIDE: Allowed because it's a "Deep Value" play
+#         # #         details["Info_Filter_Override"] = "Deep_Value_Catch"
+#         # #     else:
+#         # #         # Block trade
+#         # #         # print(f"DEBUG: DipBuyer Filtered. Close: {f['close']} < LongTrend: {long_trend}") # DEBUG
+#         # #         return 0, {"Status": "Filter_Bear_Crash"}
+
+#         # score += wt_score
+#         # details["Trigger_Dip"] = wt_score
+
+#         # # # 2. Support Confirmation: Price near Keltner Channel Lower Band [cite: 174]
+#         # # kc_score = 0
+#         # # kc_lower = f.get('kc_lower', 0)
+#         # # # Logic: If price is dipping into or below the Lower Band
+#         # # if 0 < kc_lower and f['close'] <= kc_lower * 1.01: 
+#         # #     kc_score = 15
+#         # #     details["Conf_KC_Lower"] = 15
+#         # # score += kc_score
+
+#         # # 3. Trend Support Bonus (+10)
+#         # # If we are dipping BUT still above the 200 EMA, it's a "Bullish Pullback".
+#         # if "trend_support" not in disabled_features:
+#         #     if f['close'] > long_trend:
+#         #         score += 10
+#         #         details["Conf_Trend_Support"] = 10
+
+#         def get_val(row, keys, default=0.0):
+#             for k in keys:
+#                 if k in row: return float(row[k])
+#             return default
+            
+#         rsi = get_val(f, ['rsi_14', 'RSI', 'rsi'], 50)
+        
+#         if rsi < 30:
+#             score += 40
+
+#         return score, details
+
+#     @staticmethod
+#     def _agent_bear_defense(f):
+#         score = 0
+#         details = {}
+
+#         # Existing RSI-based defense
+#         if f.get('rsi14', 50) < 20:
+#             score += 25
+#             details['DefenseRSIOversold'] = 25
+
+#         return score, details
+
+
 # strategy_engine.py
 
-import logging
-import numpy as np
-import system_config as cfg
+# strategy_engine.py
 
-# Logger setup
+# --- IMPORTS ---
+import logging  # For logging system events and decisions
+import numpy as np  # For numerical operations and array handling
+import system_config as cfg  # Import global system configuration settings
+
+# --- LOGGER SETUP ---
+# Create a logger specific to this module for easier debugging
 logger = logging.getLogger("StrategyEngine")
 
+class RegimeConfig:
+    """
+    Adaptive Parameter Store.
+    This class acts as a database of rules. It returns different trading parameters 
+    (Risk, Targets, Thresholds) depending on which 'Regime' (Bull, Bear, Chop) the market is in.
+    """
+    @staticmethod
+    def get_params(regime):
+        # 1. Define the DEFAULT / NEUTRAL parameters (The baseline)
+        params = {
+            'adx_threshold': 25,       # Minimum ADX to consider a trend 'strong'
+            'rsi_buy_min': 30,         # Minimum RSI to consider 'oversold'
+            'rsi_buy_max': 70,         # Maximum RSI to allow a buy (prevent buying tops)
+            'stop_loss_mult': 2.0,     # Stop Loss distance (Multiplier of ATR)
+            'profit_target_mult': 1.5, # Take Profit distance (Multiplier of Stop Loss)
+            'description': "Neutral"   # Label for logging
+        }
+
+        # 2. Adjust for TRENDING BULL Market (Aggressive Buying)
+        if regime == "TRENDING_BULL":
+            params.update({
+                'adx_threshold': 20,       # Lower barrier: We want to enter trends early
+                'rsi_buy_min': 40,         # Buy shallow dips (don't wait for <30, it won't happen)
+                'rsi_buy_max': 75,         # Allow buying even when slightly overbought (momentum)
+                'stop_loss_mult': 2.5,     # Widen stop loss to avoid getting shaken out by noise
+                'profit_target_mult': 2.0, # Aim for bigger wins (Home Runs)
+                'description': "TREND HUNTER"
+            })
+        
+        # 3. Adjust for TRENDING BEAR Market (Defensive Buying)
+        elif regime == "TRENDING_BEAR":
+            params.update({
+                'adx_threshold': 30,       # Require VERY strong trend to even consider acting
+                'rsi_buy_min': 20,         # Only buy extreme crashes (Capitulation)
+                'rsi_buy_max': 35,         # Never buy bounces/rallies
+                'stop_loss_mult': 1.5,     # Tight leash: If it drops more, get out immediately
+                'profit_target_mult': 1.0, # Quick scalps only (Base Hits)
+                'description': "BEAR SNIPER"
+            })
+            
+        # 4. Adjust for CHOPPY / RANGE Market (Oscillator Mode)
+        elif regime == "CHOPPY_RANGE":
+            params.update({
+                'adx_threshold': 999,      # Ignore Trend Strength (ADX is useless in chop)
+                'rsi_buy_min': 25,         # Buy support levels (low RSI)
+                'rsi_buy_max': 45,         # Don't buy mid-range
+                'stop_loss_mult': 2.0,     # Standard stops
+                'profit_target_mult': 1.2, # Modest targets (don't expect a breakout)
+                'description': "RANGE TRADER"
+            })
+            
+        # Return the final dictionary of parameters
+        return params
 
 class MarketRegimeDetector:
+    """
+    The 'Eyes' of the system.
+    Analyzes technical indicators to classify the market into one of 3 states.
+    """
     @staticmethod
-    def detect_regime(latest_row):
-        close = latest_row['close']
-        sma_short = latest_row.get('sma_short', close)
-        sma_long = latest_row.get('sma_long', close)
-        adx = latest_row.get('ADX_14', 0)
+    def detect_regime(row):
+        """
+        Classifies the current market state.
+        :param row: A dictionary or Series containing current price/indicators.
+        :return: String ("TRENDING_BULL", "TRENDING_BEAR", "CHOPPY_RANGE")
+        """
+        # Helper function to safely get values from the row (handling missing keys)
+        def g(k, default=0.0): return float(row.get(k, default))
 
-        if close < sma_long:
-            return "BEARISH"
-
-        # 2. RANGING_SHUFFLE (Consolidation)
-        # if sma_short > 0:
-        #     price_near_sma_short = abs(close - sma_short) / sma_short < 0.01
-        # else:
-        #     price_near_sma_short = False
-        #
-        # if adx < cfg.STRATEGY_PARAMS.get('adx_threshold', 25) and price_near_sma_short:
-        #     return "RANGING_SHUFFLE"  # <-- NEW SHUFFLE REGIME
-
-        # 3. TRENDING_UP (Strong Bull)
-        if close > sma_long:
-            if adx >= cfg.STRATEGY_PARAMS.get('adx_threshold', 25) and close > sma_short:
-                return "TRENDING_UP"
-
-        # 4. RANGING_BULL (Default / Mild Uptrend)
-        return "RANGING_BULL"
+        # Extract Key Indicators
+        close = g('close')
+        ema_50 = g('sma_50', close)   # Medium-term trend proxy
+        ema_200 = g('sma_200', close) # Long-term trend proxy (The 200 SMA)
+        adx = g('adx', g('ADX_14', 0)) # Trend Strength
+        
+        # 1. Determine Trend Direction based on Moving Averages
+        trend_direction = "NEUTRAL"
+        # Bullish: Price > 200 AND 50 > 200 (Golden Cross alignment)
+        if close > ema_200 and ema_50 > ema_200:
+            trend_direction = "BULL"
+        # Bearish: Price < 200 AND 50 < 200 (Death Cross alignment)
+        elif close < ema_200 and ema_50 < ema_200:
+            trend_direction = "BEAR"
+            
+        # 2. Determine Trend Strength using ADX
+        # If ADX is high (>25), we trust the trend direction
+        if adx > 25:
+            if trend_direction == "BULL": return "TRENDING_BULL"
+            if trend_direction == "BEAR": return "TRENDING_BEAR"
+        
+        # 3. If ADX is low or MAs are messy, assume it's Ranging/Choppy
+        return "CHOPPY_RANGE"
 
 
 class StrategyOrchestra:
     """
-        Gen-7 Strategy Orchestra
-        Orchestrates specialized agents (Breakout, DipBuyer) incorporating
-        advanced indicators: EMA, PSAR, WaveTrend, Keltner Channels.
+    Gen-10 Strategy Orchestra - 'ADAPTIVE' Edition.
+    This class is the 'Brain'. It uses the Regime Detector to load the right rules,
+    then evaluates the trade using AI, Fundamentals, and Technicals.
     """
-    fundamentals = None # Gen-8 Global State
+
+    fundamentals = None # Class variable to store fundamental data (PE, Revenue, etc.)
 
     @classmethod
     def set_fundamentals(cls, data):
+        """Sets the fundamental data for the current stock."""
         cls.fundamentals = data
-
-    # @staticmethod
-    # def decide_action(ticker, row, analysis):
-    #     """
-    #     New Weighted Decision Engine (Committee Vote).
-    #     Replaces the old 'All or Nothing' logic.
-    #     """
-    #     ai_prob = analysis.get('AI_Probability', 0.0) # 0.0 to 1.0
-    #     fund_score = analysis.get('Fundamental_Score', 50) # 0 to 100
-    #     adx = row.get('ADX_14', 0)
-        
-    #     # --- NEW SCORING ENGINE (WITH SNIPER VETO) ---
-
-    #     # [STEP 4 INTEGRATION] Check for Sniper Lock (Perfect Market Structure)
-    #     # If perfect structure exists, we slightly lower the AI confidence requirement.
-    #     # We check both 'adx' and 'ADX_14' to be safe with column naming.
-    #     current_adx = row.get('adx', row.get('ADX_14', 0))
-    #     current_rsi = row.get('rsi_14', 50)
-    #     current_vol = row.get('volume', 0)
-    #     vol_ma = row.get('vol_ma', current_vol)
-
-    #     is_sniper_lock = (current_adx > 25 and current_rsi < 70 and current_vol > vol_ma)
-        
-    #     # Determine Dynamic Threshold
-    #     required_confidence = cfg.SniperConfig.MODEL_CONFIDENCE_THRESHOLD
-    #     if is_sniper_lock:
-    #         # Reward perfect technicals by allowing slightly lower AI confidence
-    #         required_confidence *= 0.85 
-    #         logger.info(f"🎯 Sniper Lock Active: Lowering AI Threshold to {required_confidence:.2f}")
-
-    #     # 1. Hard Veto: If AI is confused, DO NOT TRADE.
-    #     if ai_prob < required_confidence:
-    #         logger.info(f"🚫 AI Veto: Confidence {ai_prob:.2f} < Threshold {required_confidence:.2f}")
-    #         return "WAIT"
-
-    #     # 2. Hard Veto: If Fundamentals are trash, DO NOT TRADE.
-    #     if fund_score < 50:
-    #         logger.info(f"🚫 Fundamental Veto: Score {fund_score} < 50")
-    #         return "WAIT"
-
-    #     # 3. Only calculate score if Vetoes pass
-    #     # Normalize Inputs to 0-100 scale
-    #     score_ai = ai_prob * 100
-    #     score_fund = fund_score
-    #     score_tech = 0
-        
-    #     # Technical Bonus
-    #     if adx > 25: score_tech += 20
-    #     # Check RSI (Safety: Not Overbought, Not Oversold)
-    #     if row.get('RSI_14', 50) < 70 and row.get('RSI_14', 50) > 40: score_tech += 20
-    #     # Check Trend (Price above 200 EMA)
-    #     if row['close'] > row.get('EMA_200', 0): score_tech += 30
-        
-    #     # 2. Weighted Sum (The Committee Vote)
-    #     # AI Opinion: 40% | Fundamentals: 30% | Technicals: 30%
-    #     final_score = (score_ai * 0.4) + (score_fund * 0.3) + (score_tech * 0.3)
-        
-    #     # Log the breakdown so we can debug later
-    #     logger.info(f"🔍 {ticker} Score breakdown: AI({int(score_ai)}) Fund({score_fund}) Tech({score_tech}) -> FINAL: {final_score:.1f}")
-
-    #     # 3. Dynamic Threshold
-    #     # If score >= 60, we take the trade.
-    #     if final_score >= 50:
-    #         return "BUY"
-    #     elif final_score <= 30:
-    #         return "SELL"
-    #     else:
-    #         return "WAIT"
 
     @staticmethod
     def decide_action(ticker, row, analysis):
         """
-        Sniper Decision Engine (Verbose Logging Edition)
+        Main Decision Function.
+        1. Detects Regime.
+        2. Loads Adaptive Parameters.
+        3. Scores trade based on specific Regime rules.
         """
-        # --- 1. EXTRACT RAW DATA ---
+        # --- 1. DATA EXTRACTION ---
+        # Helper to get value from row, checking multiple potential column names
+        def get_val(keys, default=0.0):
+            for k in keys:
+                if k in row: return float(row[k])
+            return default
+        
+        # Extract core indicators
+        current_rsi = get_val(['rsi_14', 'RSI', 'rsi'], 50.0)
+        current_adx = get_val(['adx_14', 'ADX', 'adx'], 0.0)
+        price = get_val(['close'], 0.0)
+        
+        # Extract inputs from the AI Core
         ai_prob = analysis.get('AI_Probability', 0.0) 
         fund_score = analysis.get('Fundamental_Score', 50)
+
+        # --- 2. DETECT REGIME & LOAD PARAMS ---
+        # Ask the Detector: "What is the market doing?"
+        regime = MarketRegimeDetector.detect_regime(row)
+        # Load the rules for that specific market
+        params = RegimeConfig.get_params(regime)
         
-        current_adx = row.get('adx', row.get('ADX_14', 0))
-        current_rsi = row.get('rsi_14', 50)
-        current_vol = row.get('volume', 0)
-        vol_ma = row.get('vol_ma', current_vol)
-        price = row.get('close', 0)
-        ema_200 = row.get('EMA_200', 0)
-        ema_21 = row.get('ema_21', row.get('sma_short', 0)) # Short term trend
-
-        # --- 2. CALCULATE TECHNICAL SCORE ---
-        tech_raw_score = 0
-        tech_log = []
+        # --- 3. CALCULATE SCORE ---
+        final_score = 0
+        log_reasons = [] # Keep a list of reasons for logging
         
-        # A. Trend Strength (ADX)
-        if current_adx > 20: 
-            tech_raw_score += 20
-            tech_log.append("ADX>25 (+20)")
+        # A. Base AI Score (Weighted 40%)
+        # If AI is 90% confident, this contributes 36 points (90 * 0.4)
+        ai_score = ai_prob * 100
+        final_score += ai_score * 0.40
         
-        # B. RSI Safety (Not Overbought)
-        if 40 < current_rsi < 70: 
-            tech_raw_score += 20
-            tech_log.append("RSI_Safe (+20)")
-            
-        # C. Trend Alignment (Above 200 EMA)
-        if price > ema_200: 
-            tech_raw_score += 30
-            tech_log.append("Price>EMA200 (+30)")
-            
-        # D. Volume Confirmation (Sniper Lock Component)
-        if current_vol > vol_ma:
-            tech_raw_score += 10
-            tech_log.append("High_Vol (+10)")
-
-        # Cap Technical Score
-        tech_raw_score = min(tech_raw_score, 100)
-
-        # --- 3. CALCULATE COMMITTEE SCORES ---
-        # Weights: AI (60%), Fund (10%), Tech (30%)
-        w_ai = 0.6
-        w_fund = 0.1
-        w_tech = 0.3
+        # B. Fundamental Score (Weighted 10%)
+        # Good fundamentals give a small boost
+        final_score += fund_score * 0.10
         
-        score_ai_contribution = (ai_prob * 100) * w_ai
-        score_fund_contribution = fund_score * w_fund
-        score_tech_contribution = tech_raw_score * w_tech
+        # C. Technical Score (Weighted 50% - Adaptive)
+        tech_score = 0
         
-        final_score = score_ai_contribution + score_fund_contribution + score_tech_contribution
-
-        # --- 4. DETERMINE VERDICT (BEFORE VETO) ---
-        # Raised Threshold to 60 to stop the "Machine Gun"
-        if final_score >= 60:
-            verdict = "BUY"
-        elif final_score <= 30:
-            verdict = "SELL"
-        else:
-            verdict = "WAIT"
-
-        # --- 5. DETAILED LOGGING (The Report Card) ---
-        # Log if score is decent (>40) or if it's a BUY signal
-        if final_score > 45:
-            log_msg = (
-                f"\n📋 REPORT CARD: [{ticker}] @ {row.name if hasattr(row, 'name') else 'Now'}\n"
-                f"--------------------------------------------------\n"
-                f"1. 🧠 AI BRAIN       (Prob {ai_prob:.2f} | W {w_ai*100}%): +{score_ai_contribution:.1f}\n"
-                f"2. 📊 FUNDAMENTALS   (Raw {fund_score}   | W {w_fund*100}%): +{score_fund_contribution:.1f}\n"
-                f"3. 📈 TECHNICALS     (Raw {tech_raw_score}   | W {w_tech*100}%): +{score_tech_contribution:.1f}\n"
-                f"   L Details: {', '.join(tech_log)}\n"
-                f"--------------------------------------------------\n"
-                f"🏆 FINAL SCORE: {final_score:.1f} / 100  [Req: 60]\n"
-                f"⚖️ VERDICT: {verdict}\n"
-            )
-            logger.info(log_msg)
-
-        # --- 6. VETO GATES (After Logging) ---
-        # We check vetoes last so we can see the "Report Card" first
+        # --- LOGIC BRANCHING BASED ON REGIME ---
         
-        # Check Sniper Lock (Perfect Market Structure)
-        is_sniper_lock = (current_adx > 25 and current_rsi < 70 and current_vol > vol_ma)
-        required_confidence = cfg.SniperConfig.MODEL_CONFIDENCE_THRESHOLD
-        
-        if verdict == "BUY":
-            # 1. AI Veto
-            if ai_prob < required_confidence:
-                logger.info(f"🚫 AI Veto: {ai_prob:.2f} < {required_confidence:.2f}")
-                return "WAIT"
+        # CASE 1: BULL TREND (We want to buy!)
+        if regime == "TRENDING_BULL":
+            # Rule: Buy Pullbacks (RSI 40-60)
+            if current_rsi < 60 and current_rsi > 40:
+                tech_score += 30; log_reasons.append("Bull_Pullback")
+            # Rule: Reward strong trends
+            if current_adx > 25:
+                tech_score += 20; log_reasons.append("Strong_Trend")
+            # Rule: Price above short-term EMA (Momentum)
+            if price > get_val(['ema_21'], 0):
+                tech_score += 20; log_reasons.append("Above_EMA21")
+            # Bonus: "Golden Zone" setup
+            if 50 < current_rsi < 65:
+                tech_score += 15; log_reasons.append("Golden_Zone")
 
-            # 2. Trend Strength Veto (With Accumulation Override)
-            # Bottleneck Fix: Allow buying in "Chop" (ADX < 20) IF AI is highly confident (Accumulation)
-            if current_adx < 20:
-                if ai_prob > 0.70:
-                    logger.info(f"⚡ ACCUMULATION ENTRY: Low ADX ({current_adx:.1f}) overridden by High AI ({ai_prob:.2f})")
-                else:
-                    logger.info(f"🚫 Trend Veto: ADX {current_adx:.1f} < 20 (Chop) & AI Neutral")
-                    return "WAIT"
-
-            # 3. DIRECTIONAL VETO (CRITICAL FIX)
-            # Never buy if price is below short-term trend (EMA 21).
-            # This prevents buying "Strong Downtrends".
-            if price < ema_21:
-                if ai_prob > 0.75:
-                    logger.info(f"🪂 DIP BUY: Price below EMA21 overridden by Massive AI Confidence ({ai_prob:.2f})")
-                else:
-                    logger.info(f"🚫 Directional Veto: Price {price:.2f} < EMA21 {ema_21:.2f} (Downtrend)")
-                    return "WAIT"
-
-            # 4. Fundamental Veto
-            if fund_score < 50:
-                return "WAIT"
-                
-            # # --- 7. ADAPTIVE ENTRY ENGINE (The Fix for "Hot" Markets) ---
-            # if verdict == "BUY":
-            
-            # Scenario A: THE ROCKET (High Momentum -> Buy Market)
-            # If ADX > 40 or RSI > 65, the stock is flying. Don't wait for a dip.
-            if current_adx > 40 or current_rsi > 65:
-                logger.info(f"🚀 ROCKET DETECTED (ADX {current_adx:.1f}): Buying at MARKET immediately.")
-            
-            # Scenario B: THE SNIPER (Strong Trend -> Slight Discount)
-            # If ADX is healthy (25-40), try to save 0.3% (standard liquidity dip).
-            elif current_adx > 25:
-                discount = price * 0.003 
-                limit_target = price - discount
-                logger.info(f"🔫 SNIPER ENTRY: Market is solid. Setting Limit at {limit_target:.2f} (-0.3%)")
-
-            # Scenario C: THE BOTTOM FISHER (Choppy/Reversal -> Deep Discount)
-            # If ADX < 25, the trend is weak. We have leverage to demand a better price.
+        # CASE 2: BEAR TREND (Be very careful!)
+        elif regime == "TRENDING_BEAR":
+            # Rule: Only buy Deep Oversold (Mean Reversion)
+            if current_rsi < 30:
+                tech_score += 50; log_reasons.append("Oversold_Bear")
+            elif current_rsi < 20:
+                tech_score += 80; log_reasons.append("Capitulation_Buy")
             else:
-                # Use ATR for volatility if available, else 1%
-                atr = row.get('atr', price * 0.01)
-                limit_target = price - (atr * 0.5) 
-                logger.info(f"⚓ BOTTOM FISHING: Market is choppy. Waiting for {limit_target:.2f} (Deep Pullback)")
+                # Penalty: Don't buy if RSI is normal in a bear market
+                tech_score -= 50; log_reasons.append("Bear_Trend_Penalty")
 
+        # CASE 3: CHOPPY RANGE (Buy Support)
+        elif regime == "CHOPPY_RANGE":
+            # Rule: Buy near the bottom of the range
+            if current_rsi < 35:
+                tech_score += 40; log_reasons.append("Range_Bottom")
+            # Rule: Penalize buying near the top
+            elif current_rsi > 60:
+                tech_score -= 30; log_reasons.append("Range_Top_Penalty")
+            else:
+                # Mid-range is "Dead Money" - avoid
+                tech_score -= 10; log_reasons.append("Mid_Range_Noise")
+
+        # Normalize Technical Score to 0-100 and add to Final Score
+        tech_score = max(0, min(100, tech_score))
+        final_score += tech_score * 0.50
+
+        # --- 4. VERDICT GENERATION ---
+        # Set the bar for buying based on difficulty
+        buy_threshold = 60
+        if regime == "TRENDING_BEAR": buy_threshold = 75 # Harder to buy in bear
+        if regime == "CHOPPY_RANGE": buy_threshold = 65  # Harder to buy in chop
+        
+        verdict = "WAIT"
+        if final_score >= buy_threshold:
+            verdict = "BUY"
+        
+        # --- 5. LOGGING ---
+        # Log if the score is interesting (close to buying)
+        if final_score > 45:
+            logger.info(
+                f"\n ORCHESTRA REPORT [{ticker}]\n"
+                f"   Mode: {params['description']} ({regime})\n"
+                f"   RSI: {current_rsi:.1f} | ADX: {current_adx:.1f}\n"
+                f"   Scores: AI({ai_score:.0f}) Fund({fund_score}) Tech({tech_score})\n"
+                f"   Reasons: {', '.join(log_reasons)}\n"
+                f"   Total: {final_score:.1f} / {buy_threshold} -> {verdict}"
+            )
+
+        # --- 6. SAFETY OVERRIDES (The "Veto" System) ---
+        if verdict == "BUY":
+            # Global Ceiling: Never buy if RSI is extreme (>80)
+            if current_rsi > 80:
+                logger.info("SAFETY: RSI > 80. Kill Switch.")
+                return "WAIT"
+            
+            # Regime Specific Vetoes
+            if regime == "TRENDING_BULL" and current_rsi > 75:
+                return "WAIT" # Too hot even for a bull
+                
+            if regime == "CHOPPY_RANGE" and current_adx > 40:
+                # If ADX spikes in a range, it might be a breakout against us
+                logger.info("SAFETY: Range Volatility Spike. Wait for clarity.")
+                return "WAIT"
 
         return verdict
 
     @staticmethod
     def get_adaptive_targets(row, entry_price):
         """
-        Orchestra Stop-Loss Engine (Auto-Adaptive).
-        Calculates dynamic stops based on Normalized ATR (Volatility %).
+        Calculates Stop Loss and Take Profit based on the Regime.
         """
-        # 1. Get Volatility Data (ROBUST CHECK)
-        # Check all possible column names for ATR
-        atr = row.get('atr', row.get('ATRr_14', row.get('atr_14', 0.0)))
+        # 1. Detect Regime to know which Multipliers to use
+        regime = MarketRegimeDetector.detect_regime(row)
+        params = RegimeConfig.get_params(regime)
         
-        # Fallback if ATR is missing or 0
-        if atr <= 0:
-            # logger.warning(f"⚠️ Missing ATR for adaptive stop. Defaulting to 2.5%.")
-            atr = entry_price * 0.025
+        # 2. Get ATR (Average True Range) for volatility-based sizing
+        def get_val(keys, default=0.0):
+            for k in keys:
+                if k in row: return float(row[k])
+            return default
+        atr = get_val(['atr', 'ATRr_14', 'atr_14'], entry_price * 0.02)
         
-        # 2. Calculate "Wildness" (NATR)
-        # Example: ATR 5.00 / Price 100.00 = 5% Volatility
-        natr = (atr / entry_price) * 100
+        # 3. Calculate Dynamic Levels
+        # Stop Loss distance = ATR * Multiplier (e.g., 2.0x)
+        stop_dist = atr * params['stop_loss_mult']
+        # Target distance = Stop distance * R:R ratio (e.g., 1.5x)
+        target_dist = stop_dist * params['profit_target_mult'] 
         
-        # 3. Assign Dynamic Multiplier
-        if natr >= 4.0:
-            stop_mult = 3.5  # Extreme Volatility (Crypto/Biotech mode)
-            regime = "EXTREME"
-        elif natr >= 2.5:
-            stop_mult = 3.0  # High Volatility (Wild Tech: NVDA, TSLA)
-            regime = "HIGH"
-        elif natr >= 1.5:
-            stop_mult = 2.5  # Normal Volatility (Standard: GOOGL, AAPL)
-            regime = "NORMAL"
-        else:
-            stop_mult = 2.0  # Low Volatility (Stable: KO, JNJ)
-            regime = "STABLE"
-            
-        # 4. Calculate Targets
-        # We aim for 2.0 R:R (Risk/Reward), so Target is 2x the Stop distance
-        # BUT for crazy stocks, we might cap the target or scale it differently.
-        # Here we stick to 2.0x for consistency.
-        target_mult = stop_mult * 2.0 
+        stop_loss = entry_price - stop_dist
+        target_price = entry_price + target_dist
         
-        stop_loss = entry_price - (atr * stop_mult)
-        target_price = entry_price + (atr * target_mult)
-        
-        return stop_loss, target_price, f"{regime} ({stop_mult}x)"
-    
+        return stop_loss, target_price, f"{params['description']} (ATR x{params['stop_loss_mult']})"
+
+    # --- AGENT STUBS ---
+    # These empty functions are kept to prevent errors if other files try to import them.
     @staticmethod
-    def _agent_fundamentals(f, p):
-        """
-        Agent 8: Fundamental Analysis.
-        Uses static class variable 'fundamentals' set by external engine.
-        """
-        score = 0
-        details = {}
-        
-        fund = StrategyOrchestra.fundamentals
-        if not fund:
-            return 0, {}
-            
-        # PE Ratio Logic
-        pe = fund.get('trailingPE')
-        if pe and pe > 0:
-            if pe < 20: 
-                score += 10
-                details['Fund_LowPE'] = 10
-            elif pe > 50:
-                score -= 5 # Overvalued penalty
-                
-        # Revenue Growth
-        rev_growth = fund.get('revenueGrowth')
-        if rev_growth and rev_growth > 0.20: # >20% growth
-            score += 10
-            details['Fund_HighGrowth'] = 10
-            
-        return score, details
-
+    def get_score(features, regime, params=None): return 0, {}
     @staticmethod
-    def _agent_machine_learning(f, p):
-        """Gen-8: ML Confirmation (Lorentzian/KNN) with Veto Power"""
-        score = 0
-        details = {}
-        ml_signal = f.get('ml_signal', 0)
-        
-        if ml_signal == 1:
-            score += 25 # Confirmation
-            details["ML_Lorentzian_Bull"] = 25
-        else:
-            score -= 50 # VETO: If ML says Down, we kill the trade.
-            details["ML_Lorentzian_Bear_VETO"] = -50
-            
-        return score, details
-
+    def _agent_breakout(f, p): return 0, {}
     @staticmethod
-    def _agent_deep_learning(f, p):
-        """Gen-9: Deep Learning 'Sniper' Agent"""
-        score = 0
-        details = {}
-        
-        # We need historical context (DataFrame) for LSTM
-        history_window = f.get('history_window')
-        
-        if history_window is None or history_window.empty:
-            return 0, {}
-            
-        try:
-            # Lazy Import to avoid overhead if not used
-            from stockwise_ai_core import StockWiseAI
-            
-            # Singleton storage could be improved, but for now instantiate/load
-            # In production, this should be initialized once in the class __init__
-            ai = StockWiseAI() 
-            
-            # Predict
-            # AI expects exactly 60 bars.
-            if len(history_window) >= 60:
-                # Take last 60
-                window = history_window.iloc[-60:].copy()
-                action, confidence = ai.predict(window)
-                
-                if action == 2 and confidence > 0.95:
-                    score += 100 # INSTANT TRIGGER
-                    details["AI_SNIPER_BUY"] = 100
-                    details["AI_Confidence"] = float(f"{confidence:.4f}")
-        except Exception as e:
-            # logger.error(f"AI Agent Error: {e}")
-            pass
-            
-        # return score, details
-        # """Gen-8: Fundamental Filter"""
-        # score = 0
-        # details = {}
-        # data = StrategyOrchestra.fundamentals
-        
-        # if not data: return 0, {}
-        
-        # # 1. Revenue Growth
-        # rev_growth = data.get('revenueGrowth')
-        # if rev_growth and rev_growth > 0.15:
-        #     score += 15
-        #     details["Fund_HighGrowth"] = 15
-            
-        # # 2. Profit Margins
-        # margins = data.get('profitMargins')
-        # if margins and margins > 0.20:
-        #      score += 10
-        #      details["Fund_HighMargin"] = 10
-
-        # return score, details
-
-
-    # @staticmethod
-    # def get_score(features, regime, params=None):
-    #     """
-    #     Main dispatch method to select the correct agent based on regime.
-    #     """
-    #     if params is None: params = cfg.STRATEGY_PARAMS
-    #
-    #     score_details = {
-    #         "Trigger_Breakout": 0, "Conf_Volume": 0, "Conf_Slope": 0, "Conf_EMA_Short": 0,
-    #         "Conf_PSAR_Bull": 0, "Conf_Kalman_Positive": 0, "Conf_Wavelet_LowNoise": 0,
-    #         "Penalty_Wavelet_Noise": 0, "Conf_Sector_Strong": 0, "Penalty_Sector_Weak": 0,
-    #         "Penalty_RSI_Overbought": 0, "Feature_SlopeAngle": features.get('slope_angle', 0.0),
-    #         "Feature_KalmanSmooth": features.get('kalman_smooth', 0.0),
-    #         "Feature_WaveletNoise": features.get('wavelet_std_ratio', 99.0),
-    #         "Feature_RSI": features.get('rsi_14', 50),
-    #         "Regime": regime
-    #     }
-    #     score = 0
-    #
-    #     details = {}  # Initialize details to prevent UnboundLocalError
-    #
-    #     if regime == "TRENDING_UP":
-    #         score, details = StrategyOrchestra._agent_breakout(features, params)
-    #     elif regime == "RANGING_SHUFFLE":
-    #         score, details = StrategyOrchestra._agent_dip_buyer(features, params)  # <-- USE DIP BUYER
-    #     elif regime == "RANGING_BULL":
-    #         if features['close'] > features.get('recent_high', 99999):
-    #             score, details = StrategyOrchestra._agent_breakout(features, params)
-    #         else:
-    #             score, details = StrategyOrchestra._agent_dip_buyer(features, params)
-    #     elif regime == "BEARISH":
-    #         score, details = StrategyOrchestra._agent_bear_defense(features)
-    #
-    #     # Merge the score breakdown for logging
-    #     score_details.update(details)
-    #
-    #     # --- CAP THE SCORE AT 100 ---
-    #     score = min(score, 100)
-    #
-    #     return score, score_details
-
-
+    def _agent_dip_buyer(f, p): return 0, {}
     @staticmethod
-    def get_score(features, regime, params=None):
-        """
-        Main dispatch method to select the correct agent based on regime.
-
-        Gen-7 Logic Override: Calculates potential score from all relevant agents
-        and selects the highest positive score, allowing high-confidence Dip Buyer
-        signals to override conservative regime filters (Falling Knife Paradox fix).
-        """
-        if params is None: params = cfg.STRATEGY_PARAMS
-
-        score_details = {
-            "Trigger_Breakout": 0, "Conf_Volume": 0, "Conf_Slope": 0, "Conf_EMA_Short": 0,
-            "Conf_PSAR_Bull": 0, "Conf_Kalman_Positive": 0, "Conf_Wavelet_LowNoise": 0,
-            "Penalty_Wavelet_Noise": 0, "Conf_Sector_Strong": 0, "Penalty_Sector_Weak": 0,
-            "Penalty_RSI_Overbought": 0, "Feature_SlopeAngle": features.get('slope_angle', 0.0),
-            "Feature_KalmanSmooth": features.get('kalman_smooth', 0.0),
-            "Feature_WaveletNoise": features.get('wavelet_std_ratio', 99.0),
-            "Feature_RSI": features.get('rsi_14', 50),
-            "Regime": regime
-        }
-
-        # --- Gen-7 Logic Override: Calculate potential score from all relevant agents ---
-        # We calculate everything upfront so we can compare them
-        breakout_score, breakout_details = StrategyOrchestra._agent_breakout(features, params)
-        dip_score, dip_details = StrategyOrchestra._agent_dip_buyer(features, params)
-        # bear_score, bear_details = StrategyOrchestra._agent_bear_defense(features)
-
-        # Default initialization
-        score = 0
-        details = {}
-        active_agent = "None"
-        
-        # --- GEN-8: AGENT CALCULATIONS ---
-        ml_score, ml_details = StrategyOrchestra._agent_machine_learning(features, params)
-        fund_score, fund_details = StrategyOrchestra._agent_fundamentals(features, params)
-        dl_score, dl_details = StrategyOrchestra._agent_deep_learning(features, params)
-        
-        # BASE SCORE BOOST (Add to whatever agent is selected)
-        gen8_boost = ml_score + fund_score + dl_score
-        gen8_details = {}
-        gen8_details.update(ml_details)
-        gen8_details.update(fund_details)
-        gen8_details.update(dl_details)
-
-        if regime == "BEARISH":
-            # In Bear market, Breakouts are harder (Penalty), Dips are preferred.
-            # But if a breakout is HUGE (Score > 80), we take it (Turnaround play).
-            breakout_score -= 10
-            breakout_details["Penalty_Regime_Bear"] = -10
-
-            if dip_score > breakout_score:
-                score = dip_score
-                details = dip_details
-                active_agent = "DipBuyer_Bear"
-            else:
-                score = breakout_score
-                details = breakout_details
-                active_agent = "Breakout_CounterTrend"
-
-        # A. Prioritize Breakout if it has the highest score in Trending/Bullish regimes
-        elif regime == "TRENDING_UP":
-            # In Bull market, Breakouts are preferred.
-            if breakout_score >= dip_score:
-                score = breakout_score
-                details = breakout_details
-                active_agent = "Breakout_Trend"
-
-            else:
-                score = dip_score
-                details = dip_details
-                active_agent = "DipBuyer_Trend"
-        else:  # RANGING / SHUFFLE
-            # Pure meritocracy: Take the winner
-            if breakout_score > dip_score:
-                score = breakout_score
-                details = breakout_details
-                active_agent = "Breakout_Range"
-            else:
-                score = dip_score
-                details = dip_details
-                active_agent = "DipBuyer_Range"
-
-        score += gen8_boost
-        details.update(gen8_details)
-
-        # Final check: Must be positive or zero
-        if score < 0:
-            score = 0
-            details = {"status": "BLOCKED_BY_PENALTY"}
-
-        # Merge the score breakdown for logging
-        score_details.update(details)
-        score_details['Active_Agent'] = active_agent
-
-        # --- CAP THE SCORE AT 100 ---
-        score = min(score, 100)
-
-        return score, score_details
-
-    # @staticmethod
-    # def _agent_breakout(f, p):
-    #     """
-    #     Gen-7 Breakout Agent
-    #
-    #     Logic:
-    #     - Trigger: Price > Recent High
-    #     - Confirmation: EMA Trend, PSAR (Bullish), Keltner Channel Breakout
-    #     - Signal Processing: Kalman & Wavelet constraints
-    #     """
-    #     score = 0
-    #     details = {}
-    #
-    #     # Check if we are running an Ablation Test (disabled features)
-    #     # If the list doesn't exist, default to empty (no disables)
-    #     disabled_features = getattr(cfg, 'DISABLED_FEATURES', [])
-    #
-    #     # --- GEN-7 RF PARAMETERS ---
-    #     kalman_smooth_threshold = p.get('kalman_smooth_threshold', 0.5)
-    #     wavelet_noise_max = p.get('wavelet_noise_max', 1.5)
-    #     kalman_dev = f.get('kalman_smooth', 0.0)
-    #
-    #     # 1. Breakout Trigger
-    #     if f['close'] > f.get('recent_high', 99999):
-    #         score += cfg.SCORE_TRIGGER_BREAKOUT
-    #         details["Trigger_Breakout"] = cfg.SCORE_TRIGGER_BREAKOUT
-    #
-    #     # 2. EMA Trend Crossover (Wake-Up Signal) [cite: 140, 141, 142]
-    #     if "ema_crossover" not in disabled_features:
-    #         ema_9 = f.get('ema_9', 0)
-    #         ema_21 = f.get('ema_21', 0)
-    #         if ema_9 > ema_21:
-    #             score += 10
-    #             details["Conf_EMA_Crossover"] = 10
-    #     # score += ema_score
-    #     # details["Conf_EMA_Crossover"] = ema_score
-    #
-    #     # 3. Parabolic SAR (PSAR) Logic [cite: 155]
-    #     if "psar" not in disabled_features:
-    #         psar_score = 0
-    #         psar = f.get('psar', 0)
-    #         ema_9 = f.get('ema_9', 0)
-    #         ema_21 = f.get('ema_21', 0)
-    #
-    #         # # Bullish Regime: PSAR must be below price (PSAR < Price)
-    #         # if 0 < psar < f['close']:
-    #         #     psar_score = 15
-    #         # elif psar > f['close']:
-    #         #     # Only penalize if we are NOT in a strong EMA uptrend
-    #         #     # If EMA9 > EMA21, we assume trend is strong and PSAR is just lagging.
-    #         #     if ema_9 > ema_21:
-    #         #         psar_score = 0  # No penalty, ignore lag
-    #         #         details["Conf_PSAR_Lag_Ignored"] = 0
-    #         #     else:
-    #         #         psar_score = -35
-    #
-    #         score += psar_score
-    #         details["Conf_PSAR_Bull"] = psar_score
-    #
-    #     # 4. Keltner Channel (KC) Breakout Confirmation
-    #     if "kc_breakout" not in disabled_features:
-    #         kc_upper = f.get('kc_upper', 0)
-    #         kc_score = 0
-    #         if f['close'] > kc_upper:
-    #             kc_score = 10
-    #         score += kc_score
-    #         details["Conf_KC_Upper"] = kc_score
-    #
-    #     # 5. Volume Confirmation
-    #     if "volume" not in disabled_features:
-    #         vol_score = 0
-    #         if f['volume'] > f.get('vol_ma', 0) * p.get('vol_multiplier', 1.1):
-    #             vol_score = cfg.SCORE_CONFIRM_VOLUME
-    #         score += vol_score
-    #         details["Conf_Volume"] = vol_score
-    #
-    #     # 6. Trend Slope/Velocity
-    #     if "slope" not in disabled_features:
-    #         angle_score = 0
-    #         angle = f.get('slope_angle', 0)
-    #         if angle > p.get('slope_threshold', 20):
-    #             angle_score = cfg.SCORE_CONFIRM_SLOPE
-    #         score += angle_score
-    #         details["Conf_Slope"] = angle_score
-    #
-    #     # 7. Kalman Deviation Check (Positive Deviation for trend-following)
-    #     if "kalman" not in disabled_features:
-    #         kalman_score = 0
-    #         if kalman_dev > kalman_smooth_threshold:
-    #             kalman_score = cfg.SCORE_CONFIRM_KALMAN
-    #         score += kalman_score
-    #         details["Conf_Kalman_Positive"] = kalman_score
-    #
-    #     # 8. Wavelet Noise Check
-    #     if "wavelet" not in disabled_features:
-    #         wavelet_score = 0
-    #         noise_penalty = 0
-    #         if f.get('wavelet_std_ratio', 99.0) < wavelet_noise_max:
-    #             wavelet_score = cfg.SCORE_CONFIRM_WAVELET
-    #         else:
-    #             noise_penalty = cfg.SCORE_PENALTY_NOISE  # Negative value
-    #         score += wavelet_score + noise_penalty
-    #         details["Conf_Wavelet_LowNoise"] = wavelet_score
-    #         details["Penalty_Wavelet_Noise"] = noise_penalty
-    #
-    #     # 9. Safety Checks
-    #     if "rsi_safety" not in disabled_features:
-    #         rsi_penalty = 0
-    #         if f.get('rsi_14', 50) > 82:
-    #             rsi_penalty = cfg.SCORE_PENALTY_RSI
-    #         score += rsi_penalty
-    #         details["Penalty_RSI_Overbought"] = rsi_penalty
-    #
-    #     return score, details
-
-
-
-    #
-    # @staticmethod
-    # def _agent_dip_buyer(f, p):
-    #     """
-    #     Gen-7 Dip Buyer Agent
-    #
-    #     Logic:
-    #     - Trigger: WaveTrend Crossover (Oversold) OR RSI Fallback
-    #     - Support: Price at Keltner Lower Band (KC)
-    #     - Signal Processing: Kalman Negative Deviation (Dip), Low Noise
-    #     - CRITICAL: WaveTrend Oversold Crossover is the logic override for 'Falling Knife'.
-    #     """
-    #     score = 0
-    #     details = {}
-    #
-    #     # --- NEW GEN-7 RF PARAMETERS ---
-    #     kalman_smooth_threshold = p.get('kalman_smooth_threshold', 0.5)
-    #     wavelet_noise_max = p.get('wavelet_noise_max', 1.5)
-    #
-    #     wt1 = f.get('wt1', 0)  # Fast Line (Signal) [cite: 165]
-    #     wt2 = f.get('wt2', 0)  # Slow Line (Average) [cite: 166]
-    #     kc_lower = f.get('kc_lower', 0)  # Keltner Channel Lower Band [cite: 179]
-    #
-    #     # 1. Primary Trigger: WaveTrend Oversold Crossover [cite: 169, 170]
-    #     wt_score = 0
-    #     # Condition: Deeply oversold (<-60) AND Fast crosses above Slow
-    #
-    #     if wt1 < -53 and wt1 > wt2:
-    #         wt_score = 45  # High Trigger Bonus (The override logic)
-    #     elif f.get('rsi_14', 50) < 40:
-    #         wt_score = cfg.SCORE_TRIGGER_DIP  # Fallback Trigger
-    #
-    #     score += wt_score
-    #     details["Trigger_WaveTrend"] = wt_score
-    #
-    #     # 2. Support Confirmation: Price near Keltner Channel Lower Band [cite: 174]
-    #     kc_score = 0
-    #     if 0 < kc_lower <= f['close'] * 1.005:  # Price is at or slightly above KC Lower
-    #         kc_score = 25
-    #     score += kc_score
-    #     details["Conf_KC_Lower"] = kc_score
-    #
-    #     # 3. Kalman Deviation Check (Must be a dip)
-    #     kalman_score = 0
-    #     # Check for negative deviation (dip below trend)
-    #     if f.get('kalman_smooth', 0.0) < 0:
-    #         kalman_score = cfg.SCORE_CONFIRM_KALMAN
-    #     score += kalman_score
-    #     details["Conf_Kalman_Negative"] = kalman_score
-    #
-    #     # 4. Wavelet Noise Check (Crucial for Dips - must be low noise)
-    #     wavelet_score = 0
-    #     noise_penalty = 0
-    #     wavelet_noise = f.get('wavelet_std_ratio', 99.0)
-    #     if wavelet_noise < wavelet_noise_max:
-    #         wavelet_score = cfg.SCORE_CONFIRM_WAVELET
-    #     else:
-    #         noise_penalty = cfg.SCORE_PENALTY_NOISE  # Negative value
-    #     score += wavelet_score + noise_penalty
-    #     details["Conf_Wavelet_LowNoise"] = wavelet_score
-    #     details["Penalty_Wavelet_Noise"] = noise_penalty
-    #
-    #     # 5. Micro-Structure Confirmation (VWAP Recapture / IBS Reversion)
-    #     ibs_score = 0
-    #     if f.get('ibs', 0.5) < 0.2:
-    #         ibs_score = 15
-    #     score += ibs_score
-    #     details["Conf_IBS_Reversion"] = ibs_score
-    #
-    #     vwap_score = 0
-    #     if f.get('vwap', 0) > 0 and f['close'] > f['vwap']:
-    #         vwap_score = 5
-    #     score += vwap_score
-    #     details["Conf_VWAP"] = vwap_score
-    #
-    #     return score, details
-
-        # strategy_engine.py
-
+    def _agent_bear_defense(f): return 0, {}
     @staticmethod
-    def _agent_breakout(f, p):
-        """
-        Gen-7 Breakout Agent (Ablation-Ready)
-        """
-        # 1. Get the list of disabled features for the current test
-        # If running normally, this list is empty.
-        disabled_features = getattr(cfg, 'DISABLED_FEATURES', [])
-
-        score = 0
-        details = {}
-
-        # --- 1. Breakout Trigger (The Base) ---
-        if f.get('recent_high', 0) > 0 and f['high'] > f['recent_high']:
-            score += cfg.SCORE_TRIGGER_BREAKOUT
-            details["Trigger_Breakout"] = cfg.SCORE_TRIGGER_BREAKOUT
-            # print(f"DEBUG: Breakout Triggered! High: {f['high']} > RecentHigh: {f['recent_high']}") # DEBUG
-        else:
-            # print(f"DEBUG: Breakout Failed. High: {f['high']}, RecentHigh: {f.get('recent_high', 'MISSING')}") # DEBUG
-            pass
-
-        # --- 2. EMA Trend Crossover ---
-        if "ema_crossover" not in disabled_features:
-            if f.get('ema_9', 0) > f.get('ema_21', 0):
-                score += 10      # EMA crossover bonus - ENABLED for Gen-7
-                details["Conf_EMA_Crossover"] = 10
-
-        # --- 3. MACD Confirmation ---
-        if "macd" not in disabled_features:
-            # Check if MACD key exists (it might be missing if feature calc failed)
-            if f.get('macd', 0) > f.get('macd_signal', 0):
-                score += 10
-                details["Conf_MACD"] = 10
-
-        # --- 4. ADX Trend Strength ---
-        if "adx" not in disabled_features:
-            if f.get('ADX_14', 0) > 20:
-                score += 5
-                details["Conf_ADX_Strong"] = 5
-
-        # --- 5. Keltner Channel ---
-        if "kc_breakout" not in disabled_features:
-            # Breakout: Close > Keltner Upper Band
-            if f['close'] > f.get('kc_upper', 99999):
-                score += 10
-                details["Conf_KC_Upper"] = 10
-
-        # 5. Candlestick Confirmation (Bullish Continuation / Reversal)
-        # Using the new "bullish_continuation" (Rising 3 / 3-Line Strike) for trend confirmation
-        if f.get('bullish_continuation', False):
-            score += 15
-            details["Conf_Candle_Continuation"] = 15
-        elif f.get('bullish_reversal', False):  # Fallback to basic patterns (Hammer/Engulfing)
-            score += 10
-            details["Conf_Candle_Basic"] = 10
-            
-        # 6. Sector Alignment (if available)
-        # If 'rel_strength_sector' > 0, it means we are outperforming the sector
-        if f.get('rel_strength_sector', 0) > 0:
-            score += cfg.SCORE_CONFIRM_SECTOR
-            details["Conf_Sector_Strong"] = cfg.SCORE_CONFIRM_SECTOR
-        elif f.get('rel_strength_sector', 0) < -0.02:
-            score += cfg.SCORE_PENALTY_SECTOR
-            details["Penalty_Sector_Weak"] = cfg.SCORE_PENALTY_SECTOR
-
-        # # --- 7. SNIPER LOCK (The "Perfect Setup" Bonus) ---
-        # # User demands 95% Win Rate. We need to identify the "Slam Dunk".
-        # # Condition: Strong Trend (ADX>25) + Not Overbought (RSI<70) + High Volume + Trend Align
-        # if f.get('adx', 0) > 25 and f.get('rsi_14', 50) < 75 and f['volume'] > f.get('vol_ma', 0):
-        #      score += 20
-        #      details["Conf_Sniper_Lock"] = 20
-
-        # --- 8. Volume Confirmation ---
-        if "volume" not in disabled_features:
-            if f['volume'] > f.get('vol_ma', 0) * 1.1:
-                score += cfg.SCORE_CONFIRM_VOLUME
-                details["Conf_Volume"] = cfg.SCORE_CONFIRM_VOLUME
-
-        # --- 9. Safety Checks (RSI) ---
-        if "rsi_safety" not in disabled_features:
-            if f.get('rsi_14', 50) > 90:
-                score -= 20
-                details["Penalty_RSI_Extreme"] = -20
-
-        return score, details
-
+    def _agent_fundamentals(f, p): return 0, {}
     @staticmethod
-    def _agent_dip_buyer(f, p):
-        """
-        Gen-7 Dip Buyer
-        Updates: Added 'Falling Knife' filter (200 EMA).
-        """
-        # Get disabled features list
-        disabled_features = getattr(cfg, 'DISABLED_FEATURES', [])
-
-        score = 0
-        details = {}
-        
-        wt1 = f.get('wt1', 0)
-        wt2 = f.get('wt2', 0)
-
-        # 1. Rising Knife Filter (Wait, Falling Knife) with Gen-7 OVERRIDE
-        long_trend = f.get('sma_200', f.get('sma_long', 0))
-        
-        # Calculate Signals FIRST
-        wt_score = 0
-        is_deep_value = False
-        
-        # Gen-7 Spec: Trigger if WT1 < -60 (Deep Oversold) AND Crossover
-        if wt1 < -60 and wt1 > wt2:
-            wt_score = 45  # High Trigger Bonus (The override logic)
-            is_deep_value = True
-        elif wt1 < -53 and wt1 > wt2:
-             wt_score = 30 # Normal trigger
-        elif f.get('rsi_14', 50) < 45:
-            # Fallback Trigger (Weak)
-            wt_score = cfg.SCORE_TRIGGER_DIP 
-
-        # Now Apply Filter with Override Logic
-        if long_trend > 0 and f['close'] < long_trend * 0.85:
-            if is_deep_value:
-                # OVERRIDE: Allowed because it's a "Deep Value" play
-                details["Info_Filter_Override"] = "Deep_Value_Catch"
-            else:
-                # Block trade
-                # print(f"DEBUG: DipBuyer Filtered. Close: {f['close']} < LongTrend: {long_trend}") # DEBUG
-                return 0, {"Status": "Filter_Bear_Crash"}
-
-        score += wt_score
-        details["Trigger_WaveTrend"] = wt_score
-
-        # 2. Support Confirmation: Price near Keltner Channel Lower Band [cite: 174]
-        kc_score = 0
-        kc_lower = f.get('kc_lower', 0)
-        # Logic: If price is dipping into or below the Lower Band
-        if 0 < kc_lower and f['close'] <= kc_lower * 1.01: 
-            kc_score = 15
-            details["Conf_KC_Lower"] = 15
-        score += kc_score
-
-        # 3. Trend Support Bonus (+10)
-        # If we are dipping BUT still above the 200 EMA, it's a "Bullish Pullback".
-        if "trend_support" not in disabled_features:
-            if f['close'] > long_trend:
-                score += 10
-                details["Conf_Trend_Support"] = 10
-
-        # 4. RSI Oversold (+15)
-        # Standard Dip logic
-        if "rsi_dip" not in disabled_features:
-            rsi = f.get('rsi_14', 50)
-            if 25 < rsi < 45:
-                score += 15
-                details["Conf_RSI_Dip"] = 15
-            elif rsi <= 25:
-                score += 10
-                details["Conf_RSI_Extreme"] = 10
-
-        # 5. Candlestick Confirmation (+15)
-        if "candles" not in disabled_features:
-            if f.get('bullish_pattern', False):
-                score += 15
-                details["Conf_Candle_Bull"] = 15
-
-        # # --- GEN-8 AGENTS ---
-        # # Assuming these agents are meant to be called with 'f' (features) and 'p' (parameters)
-        # # and return a score and update details.
-        # # The instruction refers to `calculate_score` which uses `self._agent_...` and `row, decision_log, feature_manifest`.
-        # # Adapting to `_agent_dip_buyer` context:
-        # ml_score, ml_details = StrategyOrchestra._agent_machine_learning(f, p)
-        # score += ml_score
-        # details.update(ml_details)
-
-        # fund_score, fund_details = StrategyOrchestra._agent_fundamentals(f, p)
-        # score += fund_score
-        # details.update(fund_details)
-
-        # 6. Volume Spike (+10)
-        if "volume_dip" not in disabled_features:
-            if f['volume'] > f.get('vol_ma', 0) * 1.2:
-                score += 10
-                details["Conf_Vol_Capitulation"] = 10
-        
-        # print(f"DEBUG: DipBuyer Score: {score}, Details: {details}") # DEBUG
-        return score, details
+    def _agent_machine_learning(f, p): return 0, {}
     @staticmethod
-    def _agent_bear_defense(f):
-        # score = 0
-        # details = {}
-        # defense_score = 0
-        #
-        # if f.get('rsi_14', 50) < 20:
-        #     defense_score = 55
-        #
-        # score += defense_score
-        # details["Defense_RSI_Oversold"] = defense_score
-        # return score, details
-        score = 0
-        details = {}
-        defensescore = 0
-
-        # Existing RSI-based defense
-        if f.get('rsi14', 50) < 20:
-            defensescore = 25
-            score += defensescore
-            details['DefenseRSIOversold'] = defensescore
-
-        # reward bearish patterns (confirming downside)
-        bearish_bonus = 0
-        if f.get('bearish_pattern', False):
-            bearish_bonus = 10  # tune this
-            score += bearish_bonus
-        details['ConfBearishPattern'] = bearish_bonus
-
-        # penalize bullish patterns (conflicting with bear regime)
-        bullish_penalty = 0
-        if f.get('bullish_pattern', False):
-            bullish_penalty = 10  # tune this
-            score -= bullish_penalty
-        details['PenaltyBullishPattern'] = bullish_penalty
-
-        return score, details
+    def _agent_deep_learning(f, p): return 0, {}

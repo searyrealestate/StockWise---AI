@@ -184,7 +184,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 # Telegram Token Print Removed for Security
 
 # list of symbols to trade
-TRAINING_SYMBOLS = ["NVDA", "AMD", "MSFT", "GOOGL", "AAPL", "META", "TSLA", "QCOM", "AMZN", "INTC"]
+TRAINING_SYMBOLS = ["NVDA", "AMD", "MSFT", "GOOGL", "AAPL", "META", "TSLA", "QCOM", "AMZN", "INTC", "LLY", "JPM", "WMT", "ORCL", "PLTR", "MU"]
 
 
 # NOTE: We need a placeholder value for investment for PnL calculation
