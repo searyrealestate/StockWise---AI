@@ -19,7 +19,7 @@ except ImportError:
     pass
 
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 
 
 # --- 1. FILE SYSTEM ---
@@ -38,12 +38,17 @@ TARGET_TICKER = "NVDA"
 BENCHMARK_TICKER = "QQQ"
 SECTOR_TICKER = "SMH"           # Default, can be auto-detected
 
-# --- 3. DATA CONFIG ---
-# We want enough data for 200 EMA calculation + Testing window
-DATA_END_DATE = datetime.now().date()
-DATA_START_DATE = DATA_END_DATE - timedelta(days=1200)
-# # Total fetch range = chart window + warmup buffer
-# DATA_END_DATE = date.today()
+# list of symbols to trade
+WATCHLIST = ["NVDA", "AMD", "MSFT", "GOOGL", "AAPL", "META", 
+            "TSLA", "QCOM", "AMZN", "INTC", "LLY", "JPM", "WMT", "ORCL", "PLTR", "MU"]
+
+
+# # --- 3. DATA CONFIG ---
+# # We want enough data for 200 EMA calculation + Testing window
+# DATA_END_DATE = datetime.now().date()
+# DATA_START_DATE = DATA_END_DATE - timedelta(days=1200)
+# # # Total fetch range = chart window + warmup buffer
+# # DATA_END_DATE = date.today()
 
 
 
@@ -181,10 +186,6 @@ if not ALPACA_KEY:
 # Telegram Bot Credentials
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-# Telegram Token Print Removed for Security
-
-# list of symbols to trade
-TRAINING_SYMBOLS = ["NVDA", "AMD", "MSFT", "GOOGL", "AAPL", "META", "TSLA", "QCOM", "AMZN", "INTC", "LLY", "JPM", "WMT", "ORCL", "PLTR", "MU"]
 
 
 # NOTE: We need a placeholder value for investment for PnL calculation
@@ -263,7 +264,7 @@ class SniperConfig:
     Defines strict thresholds for High-Precision Swing Trading.
     """
     # 1. Targets
-    TARGET_PROFIT = 0.05        # +5% Minimum Target per trade
+    TARGET_PROFIT = 0.04        # +5% Minimum Target per trade
     MAX_DRAWDOWN = -0.02        # -2% Hard Stop Loss
     SIMULATION_STARTING_CAPITAL = 1000.0 # Starting Capital for Verification Simulation
     
@@ -331,6 +332,8 @@ class SchedulerConfig:
     
     # Auto-Calculate Holidays (Current Year + Next 2 Years)
     MARKET_HOLIDAYS = get_dynamic_holidays(years=2)
+
+
 
 
 

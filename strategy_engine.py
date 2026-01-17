@@ -562,16 +562,14 @@
 
 # strategy_engine.py
 
-# strategy_engine.py
-
 # --- IMPORTS ---
 import logging  # For logging system events and decisions
 import numpy as np  # For numerical operations and array handling
 import system_config as cfg  # Import global system configuration settings
+from logging_manager import LoggerSetup
 
 # --- LOGGER SETUP ---
-# Create a logger specific to this module for easier debugging
-logger = logging.getLogger("StrategyEngine")
+logger = LoggerSetup.setup_logger("StrategyBrain")
 
 class RegimeConfig:
     """
@@ -681,6 +679,187 @@ class StrategyOrchestra:
         """Sets the fundamental data for the current stock."""
         cls.fundamentals = data
 
+    # @staticmethod
+    # def decide_action(ticker, row, analysis):
+    #     """
+    #     Main Decision Function.
+    #     1. Detects Regime.
+    #     2. Loads Adaptive Parameters.
+    #     3. Scores trade based on specific Regime rules.
+    #     """
+
+    #     logger.info(f"--- ANALYZING {ticker} ---")
+
+    #     # --- 1. DATA EXTRACTION ---
+    #     # Helper to get value from row, checking multiple potential column names
+    #     def get_val(keys, default=0.0):
+    #         for k in keys:
+    #             if k in row: return float(row[k])
+    #         return default
+        
+    #     # Extract core indicators
+    #     current_rsi = get_val(['rsi_14', 'RSI', 'rsi'], 50.0)
+    #     current_adx = get_val(['adx_14', 'ADX', 'adx'], 0.0)
+    #     price = get_val(['close'], 0.0)
+
+    #     logger.info(f"OBSERVATION: Price={price:.2f} | RSI={current_rsi:.1f} | ADX={current_adx:.1f}")
+
+    #     # Extract Trend & Volume Data for Filters
+    #     sma_200 = get_val(['sma_200', 'ema_200', 'SMA_200'], 0.0)
+    #     volume = get_val(['volume', 'VOL'], 0.0)
+    #     vol_ma = get_val(['vol_ma_20', 'volume_ma', 'vol_ma'], 0.0) # Ensure your feature engine creates this!
+        
+    #     # Extract inputs from the AI Core
+    #     ai_prob = analysis.get('AI_Probability', 0.0) 
+    #     fund_score = analysis.get('Fundamental_Score', 50)
+        
+
+    #     # --- 2. DETECT REGIME & LOAD PARAMS ---
+    #     # Ask the Detector: "What is the market doing?"
+    #     regime = MarketRegimeDetector.detect_regime(row)
+    #     # Load the rules for that specific market
+    #     params = RegimeConfig.get_params(regime)
+        
+    #     # --- FALLING KNIFE PROTECTION ---
+    #     # Calculate Volatility (ATR)
+    #     current_atr = get_val(['atr', 'ATRr_14', 'atr_14'], 0.0)
+    #     avg_atr = get_val(['atr_ma', 'ATR_MA'], current_atr) # Assuming you have a moving average of ATR, if not use a rolling mean if available or skip
+        
+    #     # If Volatility is 2x normal (Crash Mode), wait for a Green Candle
+    #     if current_atr > 2.0 * avg_atr and avg_atr > 0:
+    #          # Check if today is Green (Close > Open)
+    #          open_price = get_val(['open'], 0.0)
+    #          if price < open_price:
+    #              logger.info(f"SAFETY: Falling Knife (High Volatility {current_atr:.2f}). Waiting for green candle.")
+    #              return "WAIT"
+        
+    #     # FILTERS: ELIMINATING "MAX PnL" LOSSES
+    #     # 1. BEAR MARKET DEFENSE (Fixes "Slow Bleed" Losses)
+    #     # If Price is BELOW the 200 SMA, we are in a Bear Market.
+    #     if sma_200 > 0 and price < sma_200:
+    #         # EXCEPTION: Only buy if it's a "Crash" (RSI < 25) - Capitulation Play
+    #         if current_rsi > 25:
+    #             logger.info(f"TREND VETO: Price {price:.2f} < SMA200 {sma_200:.2f} (Bear Market). Waiting for deep crash (RSI<25).")
+    #             return "WAIT"
+
+    #     # 2. VOLUME VALIDATION (Fixes "Fakeout" Losses)
+    #     # If Volume is weak (less than 80% of average), we skip.
+    #     if vol_ma > 0 and volume < (vol_ma * 0.8):
+    #          # Exception: If AI is SUPER confident (>90%), we trust it.
+    #          if ai_prob < 0.90:
+    #              logger.info(f"VOLUME VETO: Volume {volume} is weak (< 80% of Avg). Fakeout Risk.")
+    #              return "WAIT"
+
+    #     # --- 3. CALCULATE SCORE ---
+    #     final_score = 0
+
+    #     log_reasons = [] # Keep a list of reasons for logging
+        
+    #     # A. Base AI Score (Weighted 40%)
+    #     # If AI is 90% confident, this contributes 36 points (90 * 0.4)
+    #     ai_score = ai_prob * 100
+    #     final_score += ai_score * 0.40
+        
+    #     # B. Fundamental Score (Weighted 10%)
+    #     # Good fundamentals give a small boost
+    #     final_score += fund_score * 0.10
+        
+    #     # C. Technical Score (Weighted 50% - Adaptive)
+    #     tech_score = 0
+        
+    #     # --- LOGIC BRANCHING BASED ON REGIME ---
+        
+    #     # CASE 1: BULL TREND (We want to buy!)
+    #     if regime == "TRENDING_BULL":
+    #         # Rule: Buy Pullbacks (RSI 40-60)
+    #         if current_rsi < 60 and current_rsi > 40:
+    #             tech_score += 30; log_reasons.append("Bull_Pullback")
+    #         # Rule: Reward strong trends
+    #         if current_adx > 25:
+    #             tech_score += 20; log_reasons.append("Strong_Trend")
+    #         # Rule: Price above short-term EMA (Momentum)
+    #         if price > get_val(['ema_21'], 0):
+    #             tech_score += 20; log_reasons.append("Above_EMA21")
+    #         # Bonus: "Golden Zone" setup
+    #         if 50 < current_rsi < 65:
+    #             tech_score += 15; log_reasons.append("Golden_Zone")
+
+    #     # CASE 2: BEAR TREND (Be very careful!)
+    #     elif regime == "TRENDING_BEAR":
+    #         # Rule: Only buy Deep Oversold (Mean Reversion)
+    #         if current_rsi < 30:
+    #             tech_score += 50; log_reasons.append("Oversold_Bear")
+    #         elif current_rsi < 20:
+    #             tech_score += 80; log_reasons.append("Capitulation_Buy")
+    #         else:
+    #             # Penalty: Don't buy if RSI is normal in a bear market
+    #             tech_score -= 50; log_reasons.append("Bear_Trend_Penalty")
+
+    #     # CASE 3: CHOPPY RANGE (Buy Support)
+    #     elif regime == "CHOPPY_RANGE":
+    #         # Rule: Buy near the bottom of the range
+    #         if current_rsi < 35:
+    #             tech_score += 40; log_reasons.append("Range_Bottom")
+    #         # Rule: Penalize buying near the top
+    #         elif current_rsi > 60:
+    #             tech_score -= 30; log_reasons.append("Range_Top_Penalty")
+    #         else:
+    #             # Mid-range is "Dead Money" - avoid
+    #             tech_score -= 10; log_reasons.append("Mid_Range_Noise")
+
+    #     # Normalize Technical Score to 0-100 and add to Final Score
+    #     tech_score = max(0, min(100, tech_score))
+    #     final_score += tech_score * 0.50
+
+    #     # --- 4. VERDICT GENERATION ---
+    #     # Set the bar for buying based on difficulty
+    #     buy_threshold = 60
+    #     if regime == "TRENDING_BEAR": buy_threshold = 75 # Harder to buy in bear
+    #     if regime == "CHOPPY_RANGE": buy_threshold = 65  # Harder to buy in chop
+        
+    #     # --- AI OVERRIDE ---
+    #     # If AI is super confident (>85%), we LOWER the difficulty
+    #     if ai_prob > 0.85:
+    #         logger.info(f"AI OVERRIDE: Confidence {ai_prob:.2%} detected. Lowering buy threshold.")
+    #         buy_threshold = 40 # Force the trade unless it's a total disaster
+
+    #     verdict = "WAIT"
+    #     if final_score >= buy_threshold:
+    #         verdict = "BUY"
+        
+    #     # --- 5. LOGGING ---
+    #     # Log if the score is interesting (close to buying)
+    #     if final_score > 45:
+    #         logger.info(
+    #             f"\n ORCHESTRA REPORT [{ticker}]\n"
+    #             f"   Mode: {params['description']} ({regime})\n"
+    #             f"   RSI: {current_rsi:.1f} | ADX: {current_adx:.1f}\n"
+    #             f"   Scores: AI({ai_score:.0f}) Fund({fund_score}) Tech({tech_score})\n"
+    #             f"   Reasons: {', '.join(log_reasons)}\n"
+    #             f"   Total: {final_score:.1f} / {buy_threshold} -> {verdict}"
+    #         )
+
+    #     # --- 6. SAFETY OVERRIDES (The "Veto" System) ---
+    #     if verdict == "BUY":
+    #         # Global Ceiling: Never buy if RSI is extreme (>80)
+    #         if current_rsi > 80:
+    #             logger.info("SAFETY: RSI > 80. Kill Switch.")
+    #             return "WAIT"
+            
+    #         # Regime Specific Vetoes
+    #         if regime == "TRENDING_BULL" and current_rsi > 75:
+    #             logger.info("DECISION: WAIT. Reason: Too hot (RSI > 75) for Bull trend.")
+    #             return "WAIT" # Too hot even for a bull
+                
+    #         if regime == "CHOPPY_RANGE" and current_adx > 40:
+    #             # If ADX spikes in a range, it might be a breakout against us
+    #             logger.info("SAFETY: Range Volatility Spike. Wait for clarity.")
+    #             return "WAIT"
+
+    #     if verdict == "BUY":
+    #         logger.info("DECISION: BUY SIGNAL GENERATED.")
+        
+    #     return verdict
     @staticmethod
     def decide_action(ticker, row, analysis):
         """
@@ -689,8 +868,11 @@ class StrategyOrchestra:
         2. Loads Adaptive Parameters.
         3. Scores trade based on specific Regime rules.
         """
+
+        logger.info(f"--- ANALYZING {ticker} ---")
+
         # --- 1. DATA EXTRACTION ---
-        # Helper to get value from row, checking multiple potential column names
+        # Helper to get value from row
         def get_val(keys, default=0.0):
             for k in keys:
                 if k in row: return float(row[k])
@@ -700,115 +882,144 @@ class StrategyOrchestra:
         current_rsi = get_val(['rsi_14', 'RSI', 'rsi'], 50.0)
         current_adx = get_val(['adx_14', 'ADX', 'adx'], 0.0)
         price = get_val(['close'], 0.0)
+
+        # Extract Trend & Volume Data
+        sma_200 = get_val(['sma_200', 'ema_200', 'SMA_200'], 0.0)
+        ema_20 = get_val(['ema_20', 'ema_21', 'ma_20'], 0.0) # [NEW] Needed for Reversal Check
+        volume = get_val(['volume', 'VOL'], 0.0)
+        vol_ma = get_val(['vol_ma_20', 'volume_ma', 'vol_ma'], 0.0)
         
         # Extract inputs from the AI Core
         ai_prob = analysis.get('AI_Probability', 0.0) 
         fund_score = analysis.get('Fundamental_Score', 50)
 
+        logger.info(f"OBSERVATION: Price={price:.2f} | RSI={current_rsi:.1f} | ADX={current_adx:.1f}")
+
         # --- 2. DETECT REGIME & LOAD PARAMS ---
-        # Ask the Detector: "What is the market doing?"
         regime = MarketRegimeDetector.detect_regime(row)
-        # Load the rules for that specific market
         params = RegimeConfig.get_params(regime)
         
+        # --- FALLING KNIFE PROTECTION ---
+        current_atr = get_val(['atr', 'ATRr_14', 'atr_14'], 0.0)
+        avg_atr = get_val(['atr_ma', 'ATR_MA'], current_atr)
+        
+        if current_atr > 2.0 * avg_atr and avg_atr > 0:
+             open_price = get_val(['open'], 0.0)
+             if price < open_price:
+                 logger.info(f"SAFETY: Falling Knife (High Volatility {current_atr:.2f}). Waiting for green candle.")
+                 return "WAIT"
+        
+        # --- [FIXED] FILTERS ---
+
+        # 1. BEAR MARKET DEFENSE (Relaxed)
+        # If Price is BELOW the 200 SMA
+        if sma_200 > 0 and price < sma_200:
+            # FIX: Allow trade if Price has recovered above EMA 20 (Reversal) OR RSI is Crash (<30)
+            if price > ema_20:
+                logger.info(f"OPPORTUNITY: Price < SMA200 but reclaimed EMA20. Trend Reversal possible.")
+            elif current_rsi < 30:
+                logger.info(f"OPPORTUNITY: Deep Oversold (RSI {current_rsi:.1f}) in Bear Trend. Scalp Attempt.")
+            else:
+                logger.info(f"TREND VETO: Price {price:.2f} < SMA200 and not recovering (>EMA20). Waiting.")
+                return "WAIT"
+
+        # 2. VOLUME VALIDATION (Fixed for Intraday)
+        # CHANGED: 0.8 -> 0.3 to allow trading during the day
+        if vol_ma > 0 and volume < (vol_ma * 0.3):
+             # Exception: If AI is SUPER confident (>90%), we trust it.
+             if ai_prob < 0.90:
+                 logger.info(f"VOLUME VETO: Volume {volume} is weak (< 30% of Avg). Fakeout Risk.")
+                 return "WAIT"
+
         # --- 3. CALCULATE SCORE ---
         final_score = 0
-        log_reasons = [] # Keep a list of reasons for logging
+        log_reasons = [] 
         
         # A. Base AI Score (Weighted 40%)
-        # If AI is 90% confident, this contributes 36 points (90 * 0.4)
         ai_score = ai_prob * 100
         final_score += ai_score * 0.40
         
         # B. Fundamental Score (Weighted 10%)
-        # Good fundamentals give a small boost
         final_score += fund_score * 0.10
         
         # C. Technical Score (Weighted 50% - Adaptive)
         tech_score = 0
         
-        # --- LOGIC BRANCHING BASED ON REGIME ---
-        
-        # CASE 1: BULL TREND (We want to buy!)
+        # [NEW] Bonus for Trend Reversal (EMA 20 crossover)
+        if price > ema_20:
+            tech_score += 15
+            log_reasons.append("Above_EMA20")
+
+        # CASE 1: BULL TREND
         if regime == "TRENDING_BULL":
-            # Rule: Buy Pullbacks (RSI 40-60)
             if current_rsi < 60 and current_rsi > 40:
                 tech_score += 30; log_reasons.append("Bull_Pullback")
-            # Rule: Reward strong trends
             if current_adx > 25:
                 tech_score += 20; log_reasons.append("Strong_Trend")
-            # Rule: Price above short-term EMA (Momentum)
-            if price > get_val(['ema_21'], 0):
-                tech_score += 20; log_reasons.append("Above_EMA21")
-            # Bonus: "Golden Zone" setup
             if 50 < current_rsi < 65:
                 tech_score += 15; log_reasons.append("Golden_Zone")
 
-        # CASE 2: BEAR TREND (Be very careful!)
+        # CASE 2: BEAR TREND
         elif regime == "TRENDING_BEAR":
-            # Rule: Only buy Deep Oversold (Mean Reversion)
             if current_rsi < 30:
                 tech_score += 50; log_reasons.append("Oversold_Bear")
             elif current_rsi < 20:
                 tech_score += 80; log_reasons.append("Capitulation_Buy")
             else:
-                # Penalty: Don't buy if RSI is normal in a bear market
-                tech_score -= 50; log_reasons.append("Bear_Trend_Penalty")
+                tech_score -= 20; log_reasons.append("Bear_Trend_Penalty") # Reduced penalty
 
-        # CASE 3: CHOPPY RANGE (Buy Support)
+        # CASE 3: CHOPPY RANGE
         elif regime == "CHOPPY_RANGE":
-            # Rule: Buy near the bottom of the range
             if current_rsi < 35:
                 tech_score += 40; log_reasons.append("Range_Bottom")
-            # Rule: Penalize buying near the top
             elif current_rsi > 60:
                 tech_score -= 30; log_reasons.append("Range_Top_Penalty")
-            else:
-                # Mid-range is "Dead Money" - avoid
-                tech_score -= 10; log_reasons.append("Mid_Range_Noise")
 
-        # Normalize Technical Score to 0-100 and add to Final Score
         tech_score = max(0, min(100, tech_score))
         final_score += tech_score * 0.50
 
         # --- 4. VERDICT GENERATION ---
-        # Set the bar for buying based on difficulty
         buy_threshold = 60
-        if regime == "TRENDING_BEAR": buy_threshold = 75 # Harder to buy in bear
-        if regime == "CHOPPY_RANGE": buy_threshold = 65  # Harder to buy in chop
+        if regime == "TRENDING_BEAR": buy_threshold = 70 
+        if regime == "CHOPPY_RANGE": buy_threshold = 65 
         
+        # --- AI OVERRIDE ---
+        if ai_prob > 0.85:
+            logger.info(f"AI OVERRIDE: Confidence {ai_prob:.2%} detected. Lowering buy threshold.")
+            buy_threshold = 40 
+
         verdict = "WAIT"
-        if final_score >= buy_threshold:
+        # [NEW] Lowered slightly to capture more "Paper" trades for testing
+        if final_score >= (buy_threshold - 5): 
             verdict = "BUY"
         
         # --- 5. LOGGING ---
-        # Log if the score is interesting (close to buying)
-        if final_score > 45:
+        if final_score > 40:
             logger.info(
-                f"\n ORCHESTRA REPORT [{ticker}]\n"
-                f"   Mode: {params['description']} ({regime})\n"
-                f"   RSI: {current_rsi:.1f} | ADX: {current_adx:.1f}\n"
-                f"   Scores: AI({ai_score:.0f}) Fund({fund_score}) Tech({tech_score})\n"
-                f"   Reasons: {', '.join(log_reasons)}\n"
-                f"   Total: {final_score:.1f} / {buy_threshold} -> {verdict}"
+                f"ORCHESTRA REPORT [{ticker}] | "
+                f"Mode: {params['description']} ({regime}) | "
+                f"Scores: AI({ai_score:.0f}) Fund({fund_score}) Tech({tech_score}) | "
+                f"Reasons: {', '.join(log_reasons)} | "
+                f"Total: {final_score:.1f} / {buy_threshold} -> {verdict}"
             )
 
-        # --- 6. SAFETY OVERRIDES (The "Veto" System) ---
+        # --- 6. SAFETY OVERRIDES ---
         if verdict == "BUY":
-            # Global Ceiling: Never buy if RSI is extreme (>80)
             if current_rsi > 80:
                 logger.info("SAFETY: RSI > 80. Kill Switch.")
                 return "WAIT"
             
-            # Regime Specific Vetoes
             if regime == "TRENDING_BULL" and current_rsi > 75:
-                return "WAIT" # Too hot even for a bull
+                logger.info("DECISION: WAIT. Reason: Too hot (RSI > 75) for Bull trend.")
+                return "WAIT"
                 
             if regime == "CHOPPY_RANGE" and current_adx > 40:
-                # If ADX spikes in a range, it might be a breakout against us
                 logger.info("SAFETY: Range Volatility Spike. Wait for clarity.")
                 return "WAIT"
 
+        if verdict == "BUY":
+            logger.info("DECISION: BUY SIGNAL GENERATED.")
+        
         return verdict
 
     @staticmethod

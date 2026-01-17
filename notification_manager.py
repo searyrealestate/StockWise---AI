@@ -4,7 +4,10 @@
 StockWise Notification Manager (Telegram Bot)
 ==============================================
 Handles sending automated trading alerts and system status messages via Telegram.
-Now includes interactive features: "Smart Alerts" and "User Input Processing".
+Now includes:
+1. Offline Resilience (Message Queue)
+2. Smart Alerts (Diffs)
+3. User Input Processing (Interactive Bot)
 """
 
 import requests
@@ -22,7 +25,8 @@ TELEGRAM_API_BASE_URL = "https://api.telegram.org/bot"
 
 class NotificationManager:
     """
-    Manages communication with the Telegram Bot API to send alerts and receive commands.
+    Manages communication with the Telegram Bot API.
+    Includes an Offline Message Queue to handle internet disconnections.
     """
 
     def __init__(self):
@@ -33,17 +37,17 @@ class NotificationManager:
         self.history_file = "dsm_signal_history.json"
         self.signal_history = self._load_history()
         
+        # Offline Resilience
+        self.message_queue = []
+        self.max_queue_size = 50
+        
         # User Input State Machine
         self.last_update_id = 0
         self.user_states = {} # {chat_id: {"state": "AWAITING_PRICE", "data": {...}}}
 
-        # CRITICAL FIX: Aggressively strip whitespace/hash and clean the ID
+        # Clean Chat ID
         if self.chat_id:
-            # Step 1: Strip whitespace and the '#' anchor
             clean_id = str(self.chat_id).strip().lstrip('#')
-
-            # Step 2: Set the chat_id to the clean, hyphenated numeric ID.
-            # We explicitly REMOVE the erroneous 'chat_' logic.
             self.chat_id = clean_id
 
         if not self.token or not self.chat_id:
@@ -87,6 +91,27 @@ class NotificationManager:
         except requests.exceptions.RequestException as e:
             logger.error(f"❌ Telegram Connection Test Failed: {e}")
             return False, f"Connection failed: {e}"
+
+    def _retry_queue(self):
+        """Attempts to resend queued messages."""
+        if not self.message_queue: return
+
+        # Try sending the oldest message first
+        logger.info(f"🔄 Retrying {len(self.message_queue)} queued messages...")
+        
+        # Snapshot copy to iterate safe
+        pending = list(self.message_queue)
+        self.message_queue = [] # Clear, we re-add if fail
+        
+        for msg_data in pending:
+            try:
+                self.send_message(msg_data['text'], msg_data['parse_mode'], _is_retry=True)
+                time.sleep(0.5) # Rate limit
+            except Exception:
+                # If fail again, re-queue and stop trying for now
+                self.message_queue.insert(0, msg_data)
+                # logger.warning("Still offline. Re-queued message.")
+                break
 
     def send_buy_alert(self, symbol, price, stop_loss, target, confidence, fund_score, notes=""):
         """
@@ -165,11 +190,15 @@ class NotificationManager:
         )
         self.send_message(message)
 
-    def send_message(self, message: str, parse_mode: str = 'HTML'):
+    def send_message(self, message: str, parse_mode: str = 'HTML', _is_retry=False):
         """
         Base function to send any message string to the user.
+        Includes queued persistence for offline resilience.
         """
-        if not self.enabled: return
+        logger.critical(f"DEBUG: NM.send_message called. En={self.enabled} Retry={_is_retry}")
+        if not self.enabled: 
+            logger.critical("DEBUG: Disabled")
+            return
 
         method = "sendMessage"
         url = f"{TELEGRAM_API_BASE_URL}{self.token}/{method}"
@@ -181,13 +210,25 @@ class NotificationManager:
         }
 
         try:
+            logger.critical("DEBUG: NM Triggering Post...")
             response = requests.post(url, data=payload, timeout=5)
             response.raise_for_status()
-        except requests.exceptions.HTTPError as e:
-            logger.error(f"[ERROR] Telegram API Error ({e.response.status_code}): {e.response.text}")
+            logger.critical("DEBUG: NM Post Success")
+            
         except requests.exceptions.RequestException as e:
-            logger.error(f"[ERROR] Telegram Connection Error: {e}")
-    
+            logger.critical(f"DEBUG: NM Caught Exception: {type(e)} {e}")
+            # NETWORK ERROR -> QUEUE IT
+            if not _is_retry:
+                if len(self.message_queue) < self.max_queue_size:
+                    self.message_queue.append({'text': message, 'parse_mode': parse_mode})
+                    logger.critical(f"DEBUG: NM Enqueued message. Size: {len(self.message_queue)}")
+                    logger.warning(f"⚠️ Network Down. Message queued. (Queue: {len(self.message_queue)})")
+                else:
+                    logger.error("Queue Full. Message dropped.")
+            else:
+                # If we are already retrying and failing, just raise to stop the loop
+                raise e
+
     def send_alert(self, message: str, parse_mode: str = 'Markdown', ticker=None, current_params=None):
         """
         Sends a text message. If ticker/params provided, performs 'Smart Alert' check.
@@ -233,24 +274,7 @@ class NotificationManager:
             self.signal_history[ticker] = current_params
             self._save_history()
 
-        method = "sendMessage"
-        url = f"{TELEGRAM_API_BASE_URL}{self.token}/{method}"
-
-        payload = {
-            'chat_id': str(self.chat_id),
-            'text': final_msg,
-            'parse_mode': parse_mode
-        }
-
-        try:
-            # Use requests.post for thread safety and simplicity
-            response = requests.post(url, data=payload, timeout=5)
-            response.raise_for_status() # Raises HTTPError for bad responses
-            # We explicitly log only errors, avoiding unnecessary INFO logs on success
-        except requests.exceptions.HTTPError as e:
-            logger.error(f"[ERROR] Telegram API Error ({e.response.status_code}): {e.response.text}")
-        except requests.exceptions.RequestException as e:
-            logger.error(f"[ERROR] Telegram Connection Error: {e}")
+        self.send_message(final_msg, parse_mode)
 
     # --- INPUT PROCESSING ---
     
@@ -258,8 +282,13 @@ class NotificationManager:
         """
         Polls for new messages and processes them.
         Should be called in the main loop.
+        Wraps api calls in try/except to PREVENT LOG SPAM on timeout.
         """
         if not self.enabled: return
+
+        # 1. Attempt Retry Queue first (if back online)
+        if self.message_queue:
+            self._retry_queue()
 
         method = "getUpdates"
         url = f"{TELEGRAM_API_BASE_URL}{self.token}/{method}"
@@ -275,8 +304,11 @@ class NotificationManager:
                     if "message" in update and "text" in update["message"]:
                         self.process_incoming_message(update["message"], portfolio_manager)
             else:
-                logger.warning(f"Telegram Poll Error: {data.get('description')}")
+                pass # Silent on API logic errors to reduce noise
                         
+        except requests.exceptions.RequestException:
+             # SILENT FAIL ON POLL (Don't spam logs every 2 seconds)
+             pass 
         except Exception as e:
             logger.error(f"Telegram Poll Exception: {e}")
 

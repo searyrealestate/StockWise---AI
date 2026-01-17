@@ -30,14 +30,14 @@ class AutoCorrector:
         Main Workflow: Check -> Verdict -> Correction.
         :param simulation_mode: If True, uses mock_trades instead of real files (for verification script).
         """
-        logger.info("🌙 STARTING NIGHTLY MAINTENANCE ROUTINE...")
+        logger.info("STARTING NIGHTLY MAINTENANCE ROUTINE...")
 
         # 1. THE CHECK (Audit)
         # -------------------
         recent_trades = []                  
         
         if not simulation_mode:
-            logger.info("📊 Running EOD Audit (Updating Closing Prices)...")
+            logger.info("Running EOD Audit (Updating Closing Prices)...")
             self.auditor.generate_eod_report()
             
             # Fetch closed trades history
@@ -56,11 +56,11 @@ class AutoCorrector:
                 # For simplicity, we check if they are in the list.
             ]
             if len(todays_trades) > 0:
-                logger.info(f"📅 Analyzing {len(todays_trades)} trades closed TODAY.")
+                logger.info(f"Analyzing {len(todays_trades)} trades closed TODAY.")
                 recent_trades = todays_trades
             else:
                 # Fallback: If no trades today, look at last 10 to check general health
-                logger.info("ℹ️ No trades closed today. Analyzing last 10 historical trades.")
+                logger.info("No trades closed today. Analyzing last 10 historical trades.")
                 recent_trades = all_trades[-10:]                                                                            
                                              
                  
@@ -80,9 +80,9 @@ class AutoCorrector:
         if total > 0:
             wins = sum(1 for t in recent_trades if t['pnl'] > 0)
             win_rate = (wins / total) * 100
-            logger.info(f"🏆 Recent Performance: {wins}/{total} Wins ({win_rate:.1f}%)")
+            logger.info(f"Recent Performance: {wins}/{total} Wins ({win_rate:.1f}%)")
         else:
-            logger.info("ℹ️ Not enough data to grade.")
+            logger.info("Not enough data to grade.")
 
         # wins = sum(1 for t in recent_trades if t['pnl'] > 0)					
         # win_rate = (wins / total) * 100
@@ -95,7 +95,7 @@ class AutoCorrector:
         # 3. THE CORRECTION (Continuous Learning)
         # ----------------------------
         # We retrain EVERY night to include today's new data into the brain.
-        logger.info("🧠 CONTINUOUS LEARNING: Initiating nightly model update...")
+        logger.info("CONTINUOUS LEARNING: Initiating nightly model update...")
         status = "IDLE"                       
 
         try:
@@ -111,7 +111,7 @@ class AutoCorrector:
                                                       
                 train_gen9_model.train_model()
                 
-                logger.info("✅ Daily Improvement Complete. Model Updated.")
+                logger.info("Daily Improvement Complete. Model Updated.")
                 self.notifier.send_message("✅ <b>UPGRADE COMPLETE</b>\nSystem is ready for tomorrow.")
                 status = "UPDATED"                  
             else:
@@ -119,17 +119,17 @@ class AutoCorrector:
                 status = "SIMULATED_UPDATE"
 
         except Exception as e:
-            logger.error(f"❌ NIGHTLY TRAINING FAILED: {e}")
+            logger.error(f"NIGHTLY TRAINING FAILED: {e}")
             if not simulation_mode:
                 self.notifier.send_message(f"❌ <b>TRAINING ERROR</b>\n{e}")
             status = "ERROR"
 
         # 4. THE RESET (Now Reachable!)
         # -----------------------------
-        logger.info("🧹 Performing System Cleanup...")
+        logger.info("Performing System Cleanup...")
         # Add any cleanup logic here if needed in the future
         
-        logger.info("🌙 Routine Complete.")
+        logger.info("Routine Complete.")
         
         return status
 

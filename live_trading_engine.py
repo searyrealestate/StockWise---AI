@@ -1,3 +1,4 @@
+# live_trading_engine.py
 
 """
 StockWise Gen-9 Live Trading Engine
@@ -20,32 +21,38 @@ import pandas as pd
 import datetime
 import sys
 import os
+import json
+import pytz
+from datetime import datetime, timedelta
+import traceback
+import numpy as np
 
 # Ensure project root is in path
 sys.path.append(os.getcwd())
+
+# --- FIX WINDOWS EMOJI CRASH ---
+if sys.platform.startswith('win'):
+    sys.stdout.reconfigure(encoding='utf-8')
 
 from data_source_manager import DataSourceManager
 from feature_engine import RobustFeatureCalculator
 from strategy_engine import StrategyOrchestra, MarketRegimeDetector
 from stockwise_ai_core import StockWiseAI
-# NEW IMPORTS
 from portfolio_manager import PortfolioManager
 from auditor import DailyAuditor
 import system_config as cfg
+import notification_manager as nm
 
 # Configure Logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s | %(levelname)s | %(message)s',
     handlers=[
-        logging.FileHandler("logs/live_trading.log"),
+        logging.FileHandler("logs/live_trading.log", encoding='utf-8'),
         logging.StreamHandler(sys.stdout)
     ]
 )
 logger = logging.getLogger("LiveTrader")
-
-import pytz
-from datetime import datetime, timedelta
 
 class LiveTrader:
     def __init__(self, symbols, interval='1d', mode='PAPER'):
@@ -67,6 +74,9 @@ class LiveTrader:
         
         self.is_running = True
         self.eod_run_today = False # Track if EOD ran for current date
+
+        self.status_file = "logs/live_status.json"
+        self.update_status("Initializing", "Engine starting up...")
         
         logger.info(f"--- StockWise Gen-9 Live Engine Started ---")
         logger.info(f"Targets: {self.symbols} | Interval: {self.interval} | Mode: {self.mode}")
@@ -189,6 +199,30 @@ class LiveTrader:
             logger.warning(f"Not enough data for {symbol} (Need 60+ bars). Skipping...")
             return None
 
+        # --- 🔥 CRASH FIX: ROBUST DATA SANITIZATION ---
+        try:
+            # 1. Identify Numeric Columns (Avoid processing strings/objects)
+            numeric_cols = df.select_dtypes(include=[np.number]).columns
+            
+            # 2. Replace Infinity with NaN (Only in numeric columns)
+            df[numeric_cols] = df[numeric_cols].replace([np.inf, -np.inf], np.nan)
+            
+            # 3. Forward Fill (Fix FutureWarning: use ffill() instead of method='ffill')
+            df.ffill(inplace=True)
+            
+            # 4. Fill remaining NaNs with 0
+            df.fillna(0, inplace=True)
+
+            # 5. Final Safety Check (Check ONLY numeric columns)
+            check_data = df[numeric_cols].values
+            if np.isnan(check_data).any() or np.isinf(check_data).any():
+                 logger.error(f"[{symbol}] CORRUPT DATA DETECTED (NaN/Inf). Skipping.")
+                 return None
+                 
+        except Exception as e:
+            logger.error(f"[{symbol}] Data Sanitization Failed: {e}")
+            return None
+
         # Latest Candle Context
         latest_bar = df.iloc[-1]
         features = latest_bar.to_dict()
@@ -205,20 +239,23 @@ class LiveTrader:
         current_params = {
             "price": features.get('close'),
             "target": features.get('close') * (1 + cfg.SniperConfig.TARGET_PROFIT),
-            "stop_loss": stop_price,  # <--- NEW DYNAMIC STOP
+            "stop_loss": stop_price,
             "timestamp": str(latest_bar.name)
         }
         
-        # Manually injection of params into AI (hacky but effective without refactoring AI signature completely)
-        # We handle Smart Alert inside Notifier via send_alert params
-        
-        # AI PREDICTION
-        decision, prob, trace = self.ai.predict_trade_confidence(
-            symbol, 
-            features, 
-            fundamentals=fund_data, 
-            df_window=df # Pass full DF history
+        # --- GET AI CONFIDENCE (Raw Prob) ---
+        _, prob, trace = self.ai.predict_trade_confidence(
+            symbol, features, fundamentals=fund_data, df_window=df
         )
+
+        # --- ASK STRATEGY ORCHESTRA (The Brain) ---
+        analysis_packet = {
+            'AI_Probability': prob,
+            'Fundamental_Score': fund_data.get('Score', 50)
+        }
+        
+        # Use the updated Strategy Logic
+        decision = StrategyOrchestra.decide_action(symbol, features, analysis_packet)
         
         price = features.get('close')
         logger.info(f"[{latest_bar.name}] {symbol} | Price: {price:.2f} | Decision: {decision} | Conf: {prob:.2%}")
@@ -237,15 +274,40 @@ class LiveTrader:
             
             # A. Check for EXIT (Target Hit)
             if price >= current_target:
-                self.pm.close_shadow_trade(symbol, price, active_position['qty'])  # Use PM to close
-                self.ai.notifier.send_sell_alert(symbol, price, (price - entry_price)/entry_price, "TARGET 🎯")
-                return # Done for this cycle
+                # --- DYNAMIC EXIT (Let Winners Run) ---
+                ema_20 = features.get('ema_20') or features.get('sma_20') # Fallback to SMA if EMA missing
+                
+                if ema_20 and price > ema_20:
+                    # Trend is still strong! Don't sell yet.
+                    # Instead, move Stop Loss to Breakeven or slightly below current price to lock gains
+                    new_sl = max(current_stop, price * 0.95) # Lock in some profit but keep room
+                    if new_sl > current_stop:
+                        self.pm.update_stop_loss(symbol, new_sl)
+                        logger.info(f"Target Hit but Trend Strong (Price > EMA20). Holding & Trailing SL to {new_sl:.2f}")
+                    return 
+                else:
+                    # Trend broken OR no EMA data -> Take Profit
+                    self.pm.close_shadow_trade(symbol, price, active_position['qty'])  
+                    self.ai.notifier.send_sell_alert(symbol, price, (price - entry_price)/entry_price, "TARGET 🎯")
+                    return
 
             # B. Check for EXIT (Stop Loss Hit)
-            elif price <= current_stop:
-                self.pm.close_shadow_trade(symbol, price, active_position['qty'])
-                self.ai.notifier.send_sell_alert(symbol, price, (price - entry_price)/entry_price, "STOP 🛑")
-                return # Done for this cycle
+            # Use LOW and OPEN to simulate reality better than CLOSE
+            day_low = features.get('low', price)
+            day_open = features.get('open', price)
+            
+            if day_low <= current_stop:
+                # Calculate REALISTIC Exit Price
+                if day_open < current_stop:
+                    exit_price = day_open # Gap Down Reality
+                    reason = "STOP 🛑 (GAP DOWN)"
+                else:
+                    exit_price = current_stop # Standard Stop Hit
+                    reason = "STOP 🛑"
+
+                self.pm.close_shadow_trade(symbol, exit_price, active_position['qty'])
+                self.ai.notifier.send_sell_alert(symbol, exit_price, (exit_price - entry_price)/entry_price, reason)
+                return 
 
             # C. Trailing Stop Logic (Only update if significant move)
             # Only send an alert if we move the stop up by at least 1%
@@ -256,27 +318,47 @@ class LiveTrader:
                 # Send Quiet Update
                 self.ai.notifier.send_risk_update(symbol, new_suggested_stop, current_target, price, "Trailing Stop 🛡️")
             
-            # DO NOT SEND "BUY" SIGNALS IF WE ARE ALREADY IN!
-            
         else:
             # NO POSITION -> LOOK FOR ENTRY
-            if decision == "BUY" and confidence > 0.75:
-                # Send the Buy Signal (First time only)
+            # We now use the 'decision' from StrategyOrchestra (which handles the Falling Knife check)
+            if decision == "BUY":
+                # Send the Buy Signal
                 self.ai.notifier.send_buy_alert(
-                    symbol, 
-                    price, 
-                    current_params['stop_loss'], 
-                    current_params['target'], 
-                    prob, 
-                    fund_data.get('Score', 50)
+                    symbol, price, current_params['stop_loss'], current_params['target'], 
+                    prob, fund_data.get('Score', 50)
                 )
-                # 2. RETURN the signal to the Main Loop
                 return (decision, prob, price, trace, current_params)
 
         return None
 
     def execute_trade(self, symbol, action, price, details, params):
         """Execute or Log Trade."""
+
+        # 1. Get the Fixed Amount from Config (The line you asked about)
+        max_dollars = cfg.INVESTMENT_AMOUNT
+
+        # --- VOLATILITY POSITION SIZING ---
+        # 2. Calculate Risk-Based Sizing
+        stop_loss_price = params['stop_loss']
+        risk_per_share = price - stop_loss_price
+        
+        # Account Settings (Hardcoded for now, move to config later)
+        account_balance = 100000 # Example: $100k account
+        risk_per_trade_pct = 0.02 # Risk 2% per trade ($2000)
+        
+        if risk_per_share > 0:
+            qty_risk = int((account_balance * risk_per_trade_pct) / risk_per_share)
+        else:
+            qty_risk = 1 
+            
+        # 3. Calculate Quantity based on Dollar Cap
+        qty_cap = int(max_dollars / price)
+        
+        # 4. FINAL DECISION: Take the SMALLER of the two
+        qty = min(qty_risk, qty_cap)
+            
+        logger.info(f"Calculated Position Size: {qty} shares (Risk: ${risk_per_share*qty:.2f})")
+
         if self.mode == 'PAPER':
             logger.info(f"!!! PAPER TRADE SIGNAL: {action} {symbol} !!!")
             logger.info(f"Price: {price} | Reason: {details}")
@@ -287,8 +369,11 @@ class LiveTrader:
                     ticker=symbol, 
                     entry_price=price,
                     stop_loss=params['stop_loss'],
-                    target_price=params['target']
+                    target_price=params['target'],
+                    qty=qty
                 )
+            
+            self.log_trade_csv(symbol, "BUY", price, params['stop_loss'], params['target'])
             
             # Log to dedicated signals file
             with open("logs/signals.csv", "a") as f:
@@ -296,7 +381,6 @@ class LiveTrader:
                 
         elif self.mode == 'LIVE':
             logger.warning("LIVE TRADING NOT YET ENABLED. Switch to Paper Mode.")
-            # Future: self.dsm.place_order(...)
 
     def smart_sleep(self, seconds):
         """
@@ -306,18 +390,48 @@ class LiveTrader:
         end_time = time.time() + seconds
         while time.time() < end_time:
             # Poll Telegram
-            self.ai.notifier.check_for_updates(self.pm)
+            try:
+                self.ai.notifier.check_for_updates(self.pm)
+            except Exception as e:
+                # Log error but DO NOT CRASH
+                logger.warning(f"Telegram Poll Error: {e} (Retrying...)")
             
             # Short sleep to prevent CPU spin
             time.sleep(2)
+
+    def update_status(self, state, message, last_scan=None):
+        """Saves heartbeat for the GUI to read."""
+        status = {
+            "status": state,
+            "message": message,
+            "last_heartbeat": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "last_scan_time": last_scan
+        }
+        with open(self.status_file, 'w') as f:
+            json.dump(status, f)
+
+    def log_trade_csv(self, symbol, type, price, stop, target):
+        """Saves trade to CSV for the GUI PnL table."""
+        file = "logs/portfolio_trades.csv"
+        new_row = pd.DataFrame([{
+            "Date": datetime.now(), "Symbol": symbol, "Type": type, 
+            "Price": price, "Stop": stop, "Target": target, "Status": "OPEN"
+        }])
+        
+        if os.path.exists(file):
+            new_row.to_csv(file, mode='a', header=False, index=False)
+        else:
+            new_row.to_csv(file, mode='w', header=True, index=False)
 
     def run(self):
         """Main Loop."""
         try:
             while self.is_running:
+                self.update_status("Active", "Checking Scheduler...", datetime.now().strftime("%H:%M"))
+
                 # 0. Startup Notification (First Run Only)
                 if not hasattr(self, '_startup_sent'):
-                    msg = (f"🚀 **StockWise Gen-9 Engine Started**\n"
+                    msg = (f"**StockWise Gen-9 Engine Started**\n"
                            f"Targets: {len(self.symbols)}\n"
                            f"Mode: {self.mode}\n"
                            f"Interval: {self.interval}")
@@ -345,7 +459,7 @@ class LiveTrader:
                 # --- EOD AUDIT TRIGGER ---
                 # Run once after market close
                 if now > today_close and not self.eod_run_today and self.is_trading_day(now.date()):
-                    logger.info("🏁 Market Closed. Running EOD Maintenance...")
+                    logger.info("Market Closed. Running EOD Maintenance...")
                     
                     # 1. Run Maintenance (Audit + Retrain)
                     # We import it here to avoid circular imports at top level if possible
@@ -355,9 +469,9 @@ class LiveTrader:
                     
                     # 2. CRITICAL: HOT RELOAD THE BRAIN
                     # We must re-initialize the AI to load the NEW .keras file we just trained
-                    logger.info("🧠 RELOADING AI MODEL from Disk...")
+                    logger.info("RELOADING AI MODEL from Disk...")
                     self.ai = StockWiseAI() 
-                    logger.info("✅ Brain Reloaded.")
+                    logger.info("Brain Reloaded.")
 
                     self.eod_run_today = True
 
@@ -377,6 +491,9 @@ class LiveTrader:
                 
                 # --- MARKET OPEN ---
                 logger.info("\n--- Scanning Watchlist ---")
+
+                # --- Update GUI Status ---
+                self.update_status("Scanning", f"Analyzing {len(self.symbols)} items", datetime.now().strftime("%H:%M"))
                 
                 for symbol in self.symbols:
                     # Check Updates Intermittently
@@ -396,13 +513,7 @@ class LiveTrader:
                                  self.execute_trade(symbol, "BUY", price, f"AI_Conf: {prob:.2%} | {trace}", params)
                                  
                                  # Smart Alert (Pass Ticker/Params to update history)
-                                 # Note: The 'msg' construction logic is inside ai.predict (which sends alert).
-                                 # Ideally, we should refactor that to send here, but to avoid large diffs:
-                                 # We let AI send the alert. BUT we call a separate helper to update history?
-                                 # Or better: We assume AI sent it. We just manually update history here to keep them in sync?
-                                 # Actually `send_alert` inside AI core calls `notifier.send_alert`.
-                                 # We need to update `StockWiseAI` to pass params to `send_alert`.
-                                 # To do this safely without verifying AI Core file again, let's just trigger a "Shadow Update" here.
+                                 # (See reasoning in original)
                                  self.ai.notifier.signal_history[symbol] = params
                                  self.ai.notifier._save_history()
 
@@ -415,6 +526,9 @@ class LiveTrader:
                 if self.interval == '1d': sleep_sec = 3600 # 1 hour check for daily candles
                 
                 logger.info(f"Scan Complete. Sleeping for {sleep_sec} seconds...")
+                # ---Update GUI Status ---
+                self.update_status("Idle", f"Sleeping ({sleep_sec}s)", datetime.now().strftime("%H:%M"))
+                
                 self.smart_sleep(sleep_sec)
                 
         except KeyboardInterrupt:
@@ -424,14 +538,74 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='StockWise Gen-9 Live Trader')
     
     # Default basket
-    default_basket = "NVDA,AMD,MSFT,GOOGL,AAPL,META,TSLA,QCOM,AMZN"
+    # Default basket
+    if hasattr(cfg, 'WATCHLIST') and isinstance(cfg.WATCHLIST, list):
+        default_basket = ",".join(cfg.WATCHLIST)
+    else:
+        default_basket = "NVDA,AMD,MSFT" # Fallback    
     
     parser.add_argument('--symbols', type=str, default=default_basket, help='Comma-separated ticker symbols')
-    # Force Daily Interval in the code if you don't use CLI args
-parser.add_argument('--interval', type=str, default='1d', help='Candle interval')
+    parser.add_argument('--interval', type=str, default='1d', help='Candle interval')
     parser.add_argument('--mode', type=str, default='PAPER', help='PAPER or LIVE')
     
     args = parser.parse_args()
     
-    trader = LiveTrader(args.symbols, args.interval, args.mode)
-    trader.run()
+    # Robust Handling: Ensure we have a list of symbols
+    if isinstance(args.symbols, list):
+        symbols = args.symbols
+    else:
+        symbols = args.symbols.split(',')
+    
+    print(f"\n{'='*50}")
+    print(f"STOCKWISE LIVE ENGINE | Mode: {args.mode}")
+    print(f"{'='*50}\n")
+    
+    try:
+        # Initialize and Run
+        trader = LiveTrader(symbols=symbols, interval=args.interval, mode=args.mode)
+        trader.run()
+
+    except KeyboardInterrupt:
+        # User manually stopped the script (Ctrl+C)
+        logger.info("🛑 Engine stopped by user request.")
+        sys.exit(0)
+
+    except Exception as e:
+        # --- CRASH HANDLER ---
+        error_msg = str(e)
+        stack_trace = traceback.format_exc()
+        
+        # 1. Log Critical Error locally
+        logger.critical(f"CRITICAL ENGINE FAILURE: {error_msg}", exc_info=True)
+        
+        # 2. Send Telegram Alert
+        try:
+            logger.info("Attempting to send Telegram Crash Alert...")
+            notifier = nm.NotificationManager()
+            
+            # Format message (Markdown)
+            telegram_msg = (
+                f"**SYSTEM CRASH ALERT**\n\n"
+                f"**Engine:** StockWise Gen-10\n"
+                f"**Time:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                f"**Error:** `{error_msg}`\n\n"
+                f"**Traceback (Last 10 lines):**\n"
+                f"`{stack_trace[-1000:]}`"  # Truncate to avoid Telegram limit
+            )
+            
+            # Send (assuming .send_message or .send_telegram_message exists)
+            if hasattr(notifier, 'send_message'):
+                notifier.send_message(telegram_msg)
+            elif hasattr(notifier, 'send_telegram_message'):
+                notifier.send_telegram_message(telegram_msg)
+            else:
+                logger.error("Could not find 'send_message' method in NotificationManager")
+                
+            logger.info("Crash alert sent successfully.")
+            
+        except Exception as notify_err:
+            logger.error(f"Failed to send Telegram alert: {notify_err}")
+        
+        # 3. Exit with Error Code 1
+        # This tells the .bat file that a crash occurred (triggering the restart loop)
+        sys.exit(1)

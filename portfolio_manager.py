@@ -46,7 +46,7 @@ class PortfolioManager:
         except Exception as e:
             logger.error(f"Failed to save {filepath}: {e}")
 
-    def add_shadow_trade(self, ticker, entry_price, stop_loss, target_price, timestamp=None):
+    def add_shadow_trade(self, ticker, entry_price, stop_loss, target_price, qty, timestamp=None):
         """
         Record a virtual trade for system tracking.
         Called automatically by the engine on signal.
@@ -60,6 +60,7 @@ class PortfolioManager:
             "entry_price": float(entry_price),
             "stop_loss": float(stop_loss),
             "target_price": float(target_price),
+            "qty": float(qty),
             "timestamp": str(timestamp),
             "status": "OPEN",
             "pnl": 0.0,
