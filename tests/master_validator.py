@@ -256,6 +256,37 @@ class MasterValidator:
             )
 
     # ------------------------------------------------------------------
+    # CHECK 7: AI Pipeline Integrity (Bug 1.1)
+    # ------------------------------------------------------------------
+    def check_ai_pipeline_integrity(self):
+        """Verify AI training saves real features and prediction is model-type safe."""
+        tm_path = os.path.join(PROJECT_ROOT, 'train_model.py')
+        se_path = os.path.join(PROJECT_ROOT, 'strategy_engine.py')
+
+        with open(tm_path, 'r') as f:
+            tm_code = f.read()
+        with open(se_path, 'r') as f:
+            se_code = f.read()
+
+        self._record(
+            "AI features: no hardcoded meta-feature list in train_model.py",
+            '"tech_score", "ai_score", "master_score", "regime_val"' not in tm_code,
+            "Still saving ['tech_score','ai_score','master_score','regime_val'] instead of real columns"
+        )
+
+        self._record(
+            "AI model: XGBClassifier (not Regressor) for binary target",
+            'XGBClassifier' in tm_code,
+            "Still using XGBRegressor -- predict_proba will fail"
+        )
+
+        self._record(
+            "AI prediction: safe predict_proba with fallback",
+            'hasattr' in se_code and 'predict_proba' in se_code,
+            "get_ai_probability doesn't have model-type-safe prediction"
+        )
+
+    # ------------------------------------------------------------------
     # REPORT
     # ------------------------------------------------------------------
     def run_all(self):
@@ -276,6 +307,8 @@ class MasterValidator:
         self.check_cooldown_write_exists()
         print()
         self.check_cooldown_config_param()
+        print()
+        self.check_ai_pipeline_integrity()
 
         total = len(self.results)
         passed = sum(1 for _, p, _ in self.results if p)

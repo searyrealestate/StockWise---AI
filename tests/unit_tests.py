@@ -452,6 +452,69 @@ class TestBug1_6c_DateSplit:
 
 
 # ============================================================
+# BUG 1.1: AI Feature Mismatch (Core B Dead)
+# ============================================================
+class TestBug1_1_AIFeatureMismatch:
+    """Verify AI training saves real features and prediction handles both model types."""
+
+    def test_train_and_save_does_not_hardcode_meta_features(self):
+        """train_and_save should NOT write ['tech_score', 'ai_score', 'master_score', 'regime_val']."""
+        path = os.path.join(PROJECT_ROOT, 'train_model.py')
+        with open(path, 'r') as f:
+            code = f.read()
+        assert '"tech_score", "ai_score", "master_score", "regime_val"' not in code, \
+            "Hardcoded meta-feature list still in train_model.py!"
+
+    def test_train_saves_actual_columns(self):
+        """train_and_save should save X.columns (the actual DataFrame column names)."""
+        path = os.path.join(PROJECT_ROOT, 'train_model.py')
+        with open(path, 'r') as f:
+            code = f.read()
+        assert 'X.columns' in code or 'feature_list = list(' in code, \
+            "train_and_save doesn't extract actual column names from training data"
+
+    def test_model_is_classifier_not_regressor(self):
+        """train_and_save should use XGBClassifier (target is binary 0/1)."""
+        path = os.path.join(PROJECT_ROOT, 'train_model.py')
+        with open(path, 'r') as f:
+            code = f.read()
+        assert 'XGBClassifier' in code, \
+            "Model should be XGBClassifier, not XGBRegressor"
+
+    def test_get_ai_probability_handles_both_model_types(self):
+        """get_ai_probability should have predict_proba AND predict fallback."""
+        path = os.path.join(PROJECT_ROOT, 'strategy_engine.py')
+        with open(path, 'r') as f:
+            code = f.read()
+        assert 'predict_proba' in code and 'hasattr' in code, \
+            "get_ai_probability should check hasattr(model, 'predict_proba') for safe fallback"
+
+    def test_execute_pipeline_uses_universal_dataset(self):
+        """execute_training_pipeline should call build_universal_dataset, not prepare_training_data."""
+        import re
+        path = os.path.join(PROJECT_ROOT, 'train_model.py')
+        with open(path, 'r') as f:
+            code = f.read()
+        match = re.search(
+            r'def execute_training_pipeline\(.*?\n(.*?)(?=\n    def |\nclass |\Z)',
+            code, re.DOTALL
+        )
+        assert match, "execute_training_pipeline method not found"
+        method_body = match.group(1)
+        assert 'build_universal_dataset' in method_body, \
+            "execute_training_pipeline should use build_universal_dataset (real features)"
+        assert 'prepare_training_data' not in method_body, \
+            "execute_training_pipeline should NOT call prepare_training_data (meta-features path)"
+
+    def test_default_training_symbols_in_config(self):
+        """DEFAULT_TRAINING_SYMBOLS should exist in system_config."""
+        import system_config as cfg
+        symbols = getattr(cfg, 'DEFAULT_TRAINING_SYMBOLS', None)
+        assert symbols is not None, "DEFAULT_TRAINING_SYMBOLS missing from system_config"
+        assert len(symbols) >= 5, f"Need at least 5 default symbols, got {len(symbols)}"
+
+
+# ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
 if __name__ == '__main__':
@@ -459,7 +522,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

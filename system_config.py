@@ -398,6 +398,10 @@ SCAN_ROUTING_CONFIG = {
     "weight_volatility_mult": 0.3        # 30% of tomorrow's scan priority is based on raw volatility.
 }
 
+# Default symbols for AI training when scanner results are not available
+DEFAULT_TRAINING_SYMBOLS = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN',
+                             'META', 'TSLA', 'AMD', 'NFLX', 'SPY']
+
 # --- 8. GLOBAL SETTINGS ---
 MODE = "PAPER" # Operational Mode: "PAPER" (Simulated) or "LIVE" (Real Money)
 LOG_LEVEL = logging.DEBUG # Default logging level - logging.INFO or logging.DEBUG

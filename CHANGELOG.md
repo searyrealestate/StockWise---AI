@@ -135,3 +135,34 @@ buy_date_clean = buy_date_raw.split("T")[0] if "T" in buy_date_raw else buy_date
 **Tests added:** 4 unit tests (ISO extraction, no-T passthrough, UNKNOWN passthrough, source code guard).
 
 **Totals:** 30/30 unit tests pass, 20/20 system checks pass.
+
+---
+
+### Bug 1.1 — AI Feature Mismatch: Core B (AI probability) was dead (train_model.py + strategy_engine.py)
+
+**This was the most critical bug.** Three intertwined issues caused the AI to always return 50.0 (neutral):
+
+**Issue 1 — Wrong feature list saved to disk (`train_model.py`)**
+`train_and_save()` wrote `["tech_score", "ai_score", "master_score", "regime_val"]` as the feature schema. These are meta-scores computed *after* the AI runs — a circular dependency. The live engine would try to feed these back as model inputs, but they don't exist in the raw feature DataFrame.
+
+**Issue 2 — Training pipeline used Shadow Ledger instead of real features (`train_model.py`)**
+`execute_training_pipeline()` called `prepare_training_data()` which pulled from the Shadow Ledger (only 4 meta-columns). Replaced with the correct pipeline: `build_universal_dataset()` → `segregate_by_regime()` → `apply_feature_masking()` → `train_and_save()` using actual technical columns (`sma_50`, `rsi`, `macd_hist`, etc.).
+
+**Issue 3 — XGBRegressor called with `predict_proba()` (`strategy_engine.py`)**
+`get_ai_probability()` unconditionally called `predict_proba()`, which only exists on Classifiers. The Regressor always raised an exception → caught silently → returned 50.0.
+
+**Fixes applied:**
+
+| File | Change |
+|------|--------|
+| `train_model.py` | `XGBRegressor` → `XGBClassifier` (binary target: profit ≥ 2% in 5 days) |
+| `train_model.py` | `execute_training_pipeline()` now uses `build_universal_dataset` → real features |
+| `train_model.py` | `train_and_save()` now saves `list(X.columns)` — the actual trained feature names |
+| `strategy_engine.py` | `get_ai_probability()` checks `hasattr(model, 'predict_proba')` with Regressor fallback |
+| `system_config.py` | Added `DEFAULT_TRAINING_SYMBOLS` fallback list (10 liquid US equities) |
+
+**Impact:** Core B (AI probability score) can now produce real 0-100 predictions instead of always returning 50.0. The full dual-core scoring formula `(tech_score * 0.7) + (ai_prob * 0.3)` is live.
+
+**Tests added:** 6 unit tests + 3 system checks in master_validator.
+
+**Totals:** 36/36 unit tests pass, 23/23 system checks pass.

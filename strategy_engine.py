@@ -154,9 +154,16 @@ class TacticalSniper:
                 return 50.0
 
             # Ask the Brain for a prediction on the very last row of data
-            X = df[features].iloc[[-1]] 
-            prob = model.predict_proba(X)[0][1] # Probability of Class 1 (Profit)
-            return prob * 100.0
+            X = df[features].iloc[[-1]]
+
+            # Safe prediction: supports both Classifier (predict_proba) and Regressor (predict)
+            if hasattr(model, 'predict_proba'):
+                prob = model.predict_proba(X)[0][1]  # Probability of Class 1 (Profit)
+                return prob * 100.0
+            else:
+                # Regressor fallback: clamp output to 0-100 range
+                raw = model.predict(X)[0]
+                return float(np.clip(raw * 100.0, 0.0, 100.0))
             
         except Exception as e:
             logger.debug(f"AI Prediction failed for {regime}: {e}")
