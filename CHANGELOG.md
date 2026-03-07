@@ -57,3 +57,21 @@
 **Tests added:** 4 unit tests (write creates file, appends not overwrites, round-trip read detection, config-driven period) + 2 system checks in master_validator.
 
 **Totals:** 14/14 unit tests pass, 20/20 system checks pass.
+
+---
+
+### Bug 1.5 — Dual threshold conflict: dead zone 60-79 (system_config.py)
+
+**Problem:** `TacticalSniper.analyze()` returns `BUY` when `master_score > 60`, but `evaluate_ticker()` immediately overrides to `WAIT` if `master_score < 80` (`MIN_MASTER_SCORE_APPROVAL`). Any score in 60-79 was silently killed — the Friction Alpha veto already filters unprofitable trades, making 80 redundant and unreachable in practice.
+
+**Fix (config-only):**
+
+| Setting | Before | After |
+|---------|--------|-------|
+| `MIN_MASTER_SCORE_APPROVAL` | `80.0` | `65.0` |
+
+**Impact:** BUY signals scoring 65-79 now survive the approval gate. The Friction Alpha veto remains the real quality filter. Score range 60-64 is still gated (approval sits just above Sniper threshold).
+
+**Tests added:** 4 unit tests (exact value, above Sniper threshold, below unreachable ceiling, BUY survival check). Existing `master_validator` `check_threshold_sanity` passes at 65.0.
+
+**Totals:** 18/18 unit tests pass, 20/20 system checks pass.

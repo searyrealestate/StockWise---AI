@@ -320,8 +320,10 @@ RISK_CONFIG = {
 #     MODEL_CONFIDENCE_THRESHOLD = 0.75   # Adjusted for High Precision / Moderate Recall
 
 # --- GEN-13: ARCHITECTURAL THRESHOLDS & TRACKING ---
-# Minimum Master Score required to execute a live trade
-MIN_MASTER_SCORE_APPROVAL = 80.0
+# Minimum master score for a BUY to survive evaluate_ticker gate.
+# Range: 50.0-85.0. Set above TacticalSniper BUY threshold (60) but below
+# unreachable levels. Friction Alpha veto is the real quality filter.
+MIN_MASTER_SCORE_APPROVAL = 65.0
 
 # Premium trades threshold (Used to track high-quality setups killed by friction)
 PREMIUM_TRADE_THRESHOLD = 75.0

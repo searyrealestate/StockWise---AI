@@ -264,6 +264,54 @@ class TestBug1_4_CooldownWrite:
 
 
 # ============================================================
+# BUG 1.5: Dual Threshold Conflict
+# ============================================================
+class TestBug1_5_DualThreshold:
+    """Verify MIN_MASTER_SCORE_APPROVAL is reachable and not blocking valid BUYs."""
+
+    def test_approval_threshold_lowered(self):
+        """MIN_MASTER_SCORE_APPROVAL should be 65.0 (not 80.0)."""
+        import system_config as cfg
+        val = getattr(cfg, 'MIN_MASTER_SCORE_APPROVAL', None)
+        assert val is not None, "MIN_MASTER_SCORE_APPROVAL missing from config!"
+        assert val == 65.0, \
+            f"MIN_MASTER_SCORE_APPROVAL should be 65.0, got {val}"
+
+    def test_approval_above_sniper_buy_threshold(self):
+        """Approval must be above TacticalSniper's BUY threshold (60) to add value."""
+        import system_config as cfg
+        val = cfg.MIN_MASTER_SCORE_APPROVAL
+        assert val > 60.0, \
+            f"Approval ({val}) should be above Sniper BUY threshold (60)"
+
+    def test_approval_below_unreachable(self):
+        """Approval must be <= 85 to be realistically achievable."""
+        import system_config as cfg
+        val = cfg.MIN_MASTER_SCORE_APPROVAL
+        assert val <= 85.0, \
+            f"Approval ({val}) is too high -- most signals won't reach it"
+
+    def test_buy_survives_with_score_above_approval(self):
+        """A BUY verdict with master_score > MIN_MASTER_SCORE_APPROVAL should survive."""
+        from strategy_engine import StrategyEngine
+        engine = StrategyEngine()
+
+        df = _make_row(
+            er_slow=0.70, trend_alignment=1,
+            volume=800000, vol_avg_20=400000,
+            rsi=60.0, macd=1.0, macdsignal=0.5,
+            close=100.0, sma_50=95.0, sma_200=90.0,
+            bb_upper=115.0, rvol=1.5, atr=2.0
+        )
+
+        result = engine.evaluate_ticker("TEST_BUY", df)
+        if result.get('action') == 'WAIT':
+            reason = result.get('reason', '')
+            assert 'Calibrated Threshold' not in reason, \
+                f"Good signal killed by threshold gate! Score: {result.get('master_score')}, Reason: {reason}"
+
+
+# ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
 if __name__ == '__main__':
@@ -271,7 +319,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite]
+    test_classes = [TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")
