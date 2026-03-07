@@ -114,3 +114,24 @@
 **Tests added:** 3 unit tests (no blanket fillna, ffill present, ffill preserves prices while zeroing indicators).
 
 **Totals:** 26/26 unit tests pass, 20/20 system checks pass.
+
+---
+
+### Bug 1.6c — `split("T")` returns list instead of string (live_trading_engine.py)
+
+**Problem:** Line ~482 used `buy_date_raw.split("T")` without `[0]`, producing `["2025-02-05", "14:30:00"]` instead of `"2025-02-05"`. This list was passed to Telegram notifications and CSV logging, corrupting both outputs.
+
+**Fix:** Added `[0]` index to extract only the date portion:
+
+```python
+# Before:
+buy_date_clean = buy_date_raw.split("T") if "T" in buy_date_raw else buy_date_raw
+# After:
+buy_date_clean = buy_date_raw.split("T")[0] if "T" in buy_date_raw else buy_date_raw
+```
+
+**Impact:** Telegram closed-position messages and trade history CSV now show clean `YYYY-MM-DD` dates.
+
+**Tests added:** 4 unit tests (ISO extraction, no-T passthrough, UNKNOWN passthrough, source code guard).
+
+**Totals:** 30/30 unit tests pass, 20/20 system checks pass.

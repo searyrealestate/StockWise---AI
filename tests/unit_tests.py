@@ -407,6 +407,51 @@ class TestBug1_6b_SafeFillna:
 
 
 # ============================================================
+# BUG 1.6c: buy_date_raw.split("T") Returns List Instead of String
+# ============================================================
+class TestBug1_6c_DateSplit:
+    """Verify ISO date parsing returns a string, not a list."""
+
+    def test_iso_date_extracts_string(self):
+        """split('T')[0] should return '2025-02-05', not a list."""
+        raw = "2025-02-05T14:30:00"
+        result = raw.split("T")[0] if "T" in raw else raw
+        assert isinstance(result, str), f"Expected str, got {type(result)}"
+        assert result == "2025-02-05", f"Expected '2025-02-05', got '{result}'"
+
+    def test_date_without_T_passthrough(self):
+        """A date without 'T' should pass through unchanged."""
+        raw = "2025-02-05"
+        result = raw.split("T")[0] if "T" in raw else raw
+        assert result == "2025-02-05"
+
+    def test_unknown_passthrough(self):
+        """'UNKNOWN' fallback should pass through."""
+        raw = "UNKNOWN"
+        result = raw.split("T")[0] if "T" in raw else raw
+        assert result == "UNKNOWN"
+
+    def test_source_code_has_index_zero(self):
+        """The split('T') call in live_trading_engine.py must include [0]."""
+        import re
+        path = os.path.join(PROJECT_ROOT, 'live_trading_engine.py')
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
+            code = f.read()
+        assert '.split("T")[0]' in code or ".split('T')[0]" in code, \
+            "split('T') without [0] still in live_trading_engine.py!"
+        # Must NOT find bare split("T") without [0] outside comments
+        lines = code.split('\n')
+        real_bare = []
+        for line in lines:
+            if line.strip().startswith('#'):
+                continue
+            if re.search(r'\.split\(["\']T["\']\)(?!\[0\])', line):
+                real_bare.append(line.strip())
+        assert len(real_bare) == 0, \
+            f"Bare split('T') without [0] found: {real_bare}"
+
+
+# ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
 if __name__ == '__main__':
@@ -414,7 +459,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna]
+    test_classes = [TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

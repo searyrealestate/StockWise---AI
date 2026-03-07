@@ -478,8 +478,8 @@ class LiveTradingEngine:
                     # Extract entry time safely, clean ISO format ("2025-02-05T14:30:00" -> "2025-02-05")
                     buy_date_raw = position.get("entry_time", "UNKNOWN")
                     
-                    # Architectural Fix: Extract index  to ensure it remains a String and not a List
-                    buy_date_clean = buy_date_raw.split("T") if "T" in buy_date_raw else buy_date_raw
+                    # Architectural Fix: Extract date part from ISO timestamp string
+                    buy_date_clean = buy_date_raw.split("T")[0] if "T" in buy_date_raw else buy_date_raw
                     
                     self._process_closed_position(
                         ticker=symbol,
