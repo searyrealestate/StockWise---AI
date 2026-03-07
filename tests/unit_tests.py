@@ -312,6 +312,54 @@ class TestBug1_5_DualThreshold:
 
 
 # ============================================================
+# BUG 1.6a: Missing squeeze_on and mom_sqz Columns
+# ============================================================
+class TestBug1_6a_SqueezeColumns:
+    """Verify squeeze columns are created by feature_engine and Setup 2 can fire."""
+
+    def test_squeeze_on_column_created(self):
+        """feature_engine.py should now contain df['squeeze_on'] assignment."""
+        path = os.path.join(PROJECT_ROOT, 'feature_engine.py')
+        with open(path, 'r') as f:
+            code = f.read()
+        assert "df['squeeze_on']" in code, \
+            "squeeze_on column not created in feature_engine.py!"
+
+    def test_mom_sqz_column_created(self):
+        """feature_engine.py should now contain df['mom_sqz'] assignment."""
+        path = os.path.join(PROJECT_ROOT, 'feature_engine.py')
+        with open(path, 'r') as f:
+            code = f.read()
+        assert "df['mom_sqz']" in code, \
+            "mom_sqz column not created in feature_engine.py!"
+
+    def test_setup2_squeeze_prep_fires(self):
+        """Setup 2 VOLATILITY_SQUEEZE_PREP should fire when bb_width < 0.15 and squeeze_on=1."""
+        sniper = TacticalSniper()
+        df = _make_row(bb_width=0.10, squeeze_on=1, mom_sqz=0.0)
+        result = sniper.analyze("TEST", df, "TREND")
+        assert "VOLATILITY_SQUEEZE_PREP" in result.get('setups_found', []), \
+            f"Squeeze prep should fire. Got: {result.get('setups_found')}"
+
+    def test_setup2_squeeze_firing_fires(self):
+        """Setup 2 SQUEEZE_FIRING_LONG should fire when bb_width < 0.15 and mom_sqz > 0."""
+        sniper = TacticalSniper()
+        df = _make_row(bb_width=0.10, squeeze_on=0, mom_sqz=1.5)
+        result = sniper.analyze("TEST", df, "TREND")
+        assert "SQUEEZE_FIRING_LONG" in result.get('setups_found', []), \
+            f"Squeeze firing should fire. Got: {result.get('setups_found')}"
+
+    def test_setup2_does_not_fire_wide_bands(self):
+        """Setup 2 should NOT fire when bb_width >= 0.15."""
+        sniper = TacticalSniper()
+        df = _make_row(bb_width=0.25, squeeze_on=1, mom_sqz=2.0)
+        result = sniper.analyze("TEST", df, "TREND")
+        setups = result.get('setups_found', [])
+        assert "VOLATILITY_SQUEEZE_PREP" not in setups and "SQUEEZE_FIRING_LONG" not in setups, \
+            f"Setup 2 should NOT fire with wide bands. Got: {setups}"
+
+
+# ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
 if __name__ == '__main__':
@@ -319,7 +367,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold]
+    test_classes = [TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

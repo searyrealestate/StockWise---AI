@@ -75,3 +75,22 @@
 **Tests added:** 4 unit tests (exact value, above Sniper threshold, below unreachable ceiling, BUY survival check). Existing `master_validator` `check_threshold_sanity` passes at 65.0.
 
 **Totals:** 18/18 unit tests pass, 20/20 system checks pass.
+
+---
+
+### Bug 1.6a — Missing `squeeze_on` and `mom_sqz` columns (feature_engine.py)
+
+**Problem:** `strategy_engine.py` Setup 2 (`VOLATILITY_SQUEEZE`, 20-30 pts) reads `squeeze_on` and `mom_sqz` from the feature DataFrame, but `feature_engine.py` never created these columns. Setup 2 was permanently dead.
+
+**Fix:** Added two derived columns after the Keltner Channel block in `feature_engine.add_volatility_block()`:
+
+| Column | Formula |
+|--------|---------|
+| `squeeze_on` | `(bb_lower > kc_lower) & (bb_upper < kc_upper)` cast to int — classic TTM Squeeze logic |
+| `mom_sqz` | `macd_hist` — MACD histogram used as momentum proxy for squeeze firing direction |
+
+**Impact:** Setup 2 `VOLATILITY_SQUEEZE_PREP` (+20 pts) and `SQUEEZE_FIRING_LONG` (+30 pts) can now fire when BB contracts inside KC.
+
+**Tests added:** 5 unit tests (column creation guards, squeeze_prep fires, squeeze_firing fires, wide-band gate). `pending_investigation` set in master_validator pruned: `squeeze_on` and `mom_sqz` removed.
+
+**Totals:** 23/23 unit tests pass, 20/20 system checks pass.
