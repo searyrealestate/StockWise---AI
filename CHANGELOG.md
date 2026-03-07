@@ -37,3 +37,23 @@
 
 - **`tests/unit_tests.py`** — Per-bug unit test classes (Bug 1.2: 5 tests, Bug 1.3: 5 tests = 10 total). Uses `sys.modules` stubbing for `pandas_ta` so all tests run fully offline. Targets the correct classes: `StrategyEngine.apply_checklist_bonus` and `TacticalSniper.analyze`.
 - **`tests/master_validator.py`** — Cross-system integration checks (16 checks): column name consistency between `feature_engine` and `strategy_engine`, `DSP_CONFIG` integrity, score threshold sanity, dead column reference detection, and `analyze()` return contract validation.
+
+---
+
+### Bug 1.4 — Cooldown file never written on stop-loss (live_trading_engine.py + strategy_engine.py)
+
+**Problem:** `strategy_engine._is_in_cooldown()` reads `data/cooldown_list.json` to prevent re-buying a stopped-out ticker, but nothing in the codebase ever *wrote* to this file. Result: after a stop-loss, the ticker was immediately re-scanned and re-bought → loss loop.
+
+**Files changed:**
+
+| File | Change |
+|------|--------|
+| `system_config.py` | Added `COOLDOWN_PERIOD_HOURS = 24` |
+| `live_trading_engine.py` | Added `_write_cooldown()` method; called it on `STOP LOSS HIT` and `ZOMBIE PROTOCOL` exits in `manage_open_positions()` |
+| `strategy_engine.py` | `_is_in_cooldown()` now uses `COOLDOWN_PERIOD_HOURS * 3600` instead of hardcoded `86400` |
+
+**Impact:** Stop-loss and zombie exits now blacklist the ticker for 24 hours (configurable). The write/read round-trip between `LiveTradingEngine` and `StrategyEngine` is verified by tests.
+
+**Tests added:** 4 unit tests (write creates file, appends not overwrites, round-trip read detection, config-driven period) + 2 system checks in master_validator.
+
+**Totals:** 14/14 unit tests pass, 20/20 system checks pass.

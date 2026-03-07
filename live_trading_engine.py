@@ -1,611 +1,727 @@
 # live_trading_engine.py
 
 """
-StockWise Gen-9 Live Trading Engine
-===================================
-The "Heartbeat" of the system.
-Continuously monitors the market, fetches real-time data, and queries the AI "Sniper" Agent.
-
-Modes:
-- PAPER: Logs trades to console/file only. (DEFAULT)
-- LIVE: Sends orders to Broker (Alpaca/IBKR).
-
-Usage:
-    python live_trading_engine.py --symbol NVDA --interval 1h
+StockWise Gen-12 Live Trading Engine
+====================================
+The Execution & Defense Matrix.
+Houses Agent 4 (The Lifecycle Manager) which monitors active trades, 
+ratchets kinetic stops, and executes the Zombie Trade Protocol.
 """
 
-import time
-import logging
-import argparse
-import pandas as pd
-import datetime
-import sys
 import os
 import json
+import logging
+import requests
+import asyncio
 import pytz
 from datetime import datetime, timedelta
-import traceback
-import numpy as np
-
-# Ensure project root is in path
-sys.path.append(os.getcwd())
-
-# --- FIX WINDOWS EMOJI CRASH ---
-if sys.platform.startswith('win'):
-    sys.stdout.reconfigure(encoding='utf-8')
-
-from data_source_manager import DataSourceManager
-from feature_engine import RobustFeatureCalculator
-from strategy_engine import StrategyOrchestra, MarketRegimeDetector
-from stockwise_ai_core import StockWiseAI
-from portfolio_manager import PortfolioManager
-from auditor import DailyAuditor
 import system_config as cfg
-import notification_manager as nm
+from notification_manager import NotificationManager
+import csv
+import argparse
+import time
 
-# Configure Logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(levelname)s | %(message)s',
-    handlers=[
-        logging.FileHandler("logs/live_trading.log", encoding='utf-8'),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-logger = logging.getLogger("LiveTrader")
+# Initialize Logger (Rule 2 Compliance)
+logger = logging.getLogger("LiveTradingEngine")
 
-class LiveTrader:
-    def __init__(self, symbols, interval='1d', mode='PAPER'):
-        # Ensure symbols is a list
-        if isinstance(symbols, str):
-            self.symbols = [s.strip().upper() for s in symbols.split(',')]
-        else:
-            self.symbols = [s.upper() for s in symbols]
+async def scheduled_health_check(ib_client, notifier_instance):
+    """
+    [Proactive Health Monitoring Routine]
+    Continuously monitors the IB Gateway connection.
+    Specifically checks status at 07:00, 08:00, 21:00, and 22:00 (Asia/Jerusalem time),
+    triggering a Telegram alert if the weekly reauthentication (Soft token=0) disconnected the system.
+    """
+    israel_tz = pytz.timezone('Asia/Jerusalem')
+    target_hours = {7, 8, 21, 22}
+    
+    logger.info("Proactive Health Monitoring Routine initiated for Israel timezone.")
+    
+    while True:
+        try:
+            # Capture exact current time in Israel
+            now = datetime.now(israel_tz)
             
-        self.interval = interval
-        self.mode = mode.upper()
-        self.dsm = DataSourceManager(use_ibkr=cfg.EN_IBKR)
-        self.feature_calc = RobustFeatureCalculator(params={})
-        self.ai = StockWiseAI() # GEN-9 CORE
-        
-        # --- SMART ASSISTANT LAYER ---
-        self.pm = PortfolioManager()
-        self.auditor = DailyAuditor(self.pm, self.dsm, self.ai.notifier)
-        
-        self.is_running = True
-        self.eod_run_today = False # Track if EOD ran for current date
+            # Perform the critical check exactly when the minute is 00 for target hours
+            if now.hour in target_hours and now.minute == 0:
+                logger.debug(f"Executing scheduled IB Gateway health check. IST Time: {now.strftime('%H:%M')}")
+                
+                # Verify physical connection using official IBKR API method
+                if not ib_client.isConnected():
+                    logger.error("Health Check Failed: ib_client.isConnected() returned False.")
+                    # Trigger the Headless Control notification
+                    notifier_instance.send_ibkr_disconnect_alert()
+                else:
+                    logger.debug("Health Check Passed: IB Gateway is actively connected.")
+                    
+                # Sleep for 60 seconds to avoid multi-triggering within the exact same minute
+                await asyncio.sleep(60)
+            else:
+                # Wake up every 30 seconds to re-evaluate the time
+                await asyncio.sleep(30)
+                
+        except Exception as e:
+            logger.error(f"Critical failure in scheduled_health_check loop: {str(e)}")
+            await asyncio.sleep(60)
 
-        self.status_file = "logs/live_status.json"
-        self.update_status("Initializing", "Engine starting up...")
-        
-        logger.info(f"--- StockWise Gen-9 Live Engine Started ---")
-        logger.info(f"Targets: {self.symbols} | Interval: {self.interval} | Mode: {self.mode}")
-        logger.info("Strategies: Gen-9 Fusion Sniper (Deep Learning + Hard Filters)")
-        logger.info("Smart Assistant: Enabled (Portfolio Shadowing + Logic Auditing)")
+class TradeJournal:
+    """
+    The Black Box Recorder (Upgraded).
+    Now tracks Trend Prediction Accuracy to measure Analysis Quality vs. Execution Quality.
+    """
+    def __init__(self, filename="StockWise_Trade_Journal.csv"):
+        self.filepath = os.path.join(cfg.BASE_DIR, filename)
+        self._initialize_csv()
 
-    def is_trading_day(self, date_obj):
-        """Check if date is a valid trading day (Mon-Fri, not a holiday)."""
-        # 1. Check Weekend (5=Sat, 6=Sun)
-        if date_obj.weekday() >= 5:
+    def _initialize_csv(self):
+        # Create file with NEW headers if it doesn't exist
+        if not os.path.exists(self.filepath):
+            with open(self.filepath, mode='w', newline='', encoding='utf-8') as f:
+                    writer = csv.writer(f)
+                    writer.writerow([
+                        "Timestamp",        # Time of signal
+                        "Symbol",           # Ticker
+                        "Action",           # BUY/WAIT
+                        "Master_Score",     # Final Weighted Score
+                        "Tech_Score",       # Technical Pattern Score
+                        "AI_Score",         # AI Probability
+                        "Setups_Found",     # List of active patterns (e.g., "SQUEEZE|VSA")
+                        "Trend_Pre",        # Trend Direction at Entry (UP/DOWN/CHOP)
+                        "Trend_Post",       # Trend Direction at Exit (Filled later)
+                        "Trend_Success",    # 1 = Correct Prediction, 0 = Failed
+                        "Entry_Price",      # Signal Price
+                        "Stop_Loss",        # Calculated Stop
+                        "Target_Price",     # Calculated Target
+                        "Risk_Ratio",       # Reward / Risk
+                        "Status",           # SIGNAL_ONLY, EXECUTED, REJECTED
+                        "Execution_Price",  # Actual Fill Price
+                        "Exit_Price",       # Actual Exit Price
+                        "PnL_Percent"       # Final Profit/Loss
+                    ])
+
+    def log_signal(self, ticket, df_snapshot=None, status="SIGNAL_ONLY", exec_price=0, exit_price=0, pnl=0):
+        """
+        Logs a signal event with Trend Verification data.
+        """
+        try:
+            with open(self.filepath, mode='a', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                
+                # --- CALCULATION LOGIC ---
+                
+                # 1. Determine Trend BEFORE (At Entry)
+                # We use the slope of the 50SMA or the Regime calculated by StrategyEngine
+                trend_pre = "UNKNOWN"
+                if df_snapshot is not None and not df_snapshot.empty:
+                    last = df_snapshot.iloc[-1]
+                    # Logic: If Close > SMA50 -> UP, Else DOWN
+                    sma50 = last.get('SMA_50', last['close'])
+                    if last['close'] > sma50:
+                        trend_pre = "UP"
+                    else:
+                        trend_pre = "DOWN"
+                
+                # 2. Determine Trend AFTER (At Exit)
+                # Only relevant if we are logging a closed trade
+                trend_post = "PENDING"
+                trend_success = 0 # Default to 0 until proven correct
+                
+                if status in ["EXECUTED", "CLOSED"]:
+                    # If we closed with profit -> The trend prediction was likely correct
+                    if pnl > 0:
+                        trend_post = trend_pre # Confirmed
+                        trend_success = 1      # SUCCESS (100%)
+                    else:
+                        # Reversal occurred
+                        trend_post = "REVERSAL" if trend_pre == "UP" else "BOUNCE"
+                        trend_success = 0      # FAILURE (0%)
+
+                # 3. Risk/Reward Calculation
+                entry = ticket.get('limit_price', 0)
+                stop = ticket.get('stop_loss', 0)
+                target = ticket.get('target_price', 0)
+                
+                risk = abs(entry - stop)
+                reward = abs(target - entry)
+                rr_ratio = round(reward / risk, 2) if risk > 0 else 0
+                
+                # # --- WRITE ROW ---
+                # writer.writerow([
+                #     datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                #     ticket.get('symbol'),
+                #     ticket.get('action'),
+                #     f"{ticket.get('master_score', 0):.1f}",
+                #     f"{ticket.get('tech_score', 0):.1f}",
+                #     f"{ticket.get('ai_score', 0):.1f}",
+                #     "|".join(ticket.get('setups_found', [])),
+                #     trend_pre,          # Column 1: Trend Before
+                #     trend_post,         # Column 2: Trend After
+                #     trend_success,      # Column 3: Success Boolean (for averaging in Excel)
+                #     f"{entry:.2f}",
+                #     f"{stop:.2f}",
+                #     f"{target:.2f}",
+                #     rr_ratio,
+                #     status,
+                #     f"{exec_price:.2f}",
+                #     f"{exit_price:.2f}",
+                #     f"{pnl:.2f}%"
+                # ])
+                # Extract Nested Scores
+                scores = ticket.get('scores', {})
+                master = scores.get('master', ticket.get('master_score', 0.0))
+                tech = scores.get('tech', ticket.get('tech_score', 0.0))
+                ai = scores.get('ai', ticket.get('ai_score', 0.0))
+
+                # --- WRITE ROW ---
+                writer.writerow([
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    ticket.get('symbol'),
+                    ticket.get('action'),
+                    f"{master:.1f}",
+                    f"{tech:.1f}",
+                    f"{ai:.1f}",
+                    "|".join(ticket.get('setups_found', [])),
+                    trend_pre,          
+                    trend_post,         
+                    trend_success,      
+                    f"{entry:.2f}",
+                    f"{stop:.2f}",
+                    f"{target:.2f}",
+                    rr_ratio,
+                    status,
+                    f"{exec_price:.2f}",
+                    f"{exit_price:.2f}",
+                    f"{pnl:.2f}%"
+                ])
+            
+        except Exception as e:
+            logger.error(f"Failed to write to Trade Journal: {e}")
+
+
+class Notifier:
+    """
+    The Alert Bridge.
+    Ensures the human operator knows exactly when to execute a trade.
+    """
+    @staticmethod
+    def trigger_alert(message):
+        # 1. Loud Console Output
+        print("\n" + "="*60)
+        print(f"!!! TRADE ALERT !!!\n{message}")
+        print("="*60 + "\n")
+        
+        # 2. Telegram Output (If configured)
+        token = cfg.TELEGRAM_TOKEN
+        chat_id = cfg.TELEGRAM_CHAT_ID
+        if token and chat_id:
+            try:
+                url = f"https://api.telegram.org/bot{token}/sendMessage"
+                payload = {"chat_id": chat_id, "text": f"🤖 STOCKWISE:\n{message}"}
+                requests.post(url, json=payload, timeout=5)
+            except Exception as e:
+                logger.debug(f"Telegram notification failed: {e}")
+
+
+class LifecycleManager:
+    """
+    AGENT 4: The Lifecycle Manager.
+    Responsibility: Manage open positions. 
+    1. Ratchet Kinetic Trailing Stops based on profit thresholds.
+    2. Execute the 'Zombie Protocol' for Orphaned Trades.
+    """
+    def __init__(self):
+        self.stop_cfg = cfg.KINETIC_STOP_CONFIG
+        self.defense_cfg = cfg.PORTFOLIO_DEFENSE
+        
+    def manage_kinetic_stop(self, symbol, position, current_price, current_atr):
+        """
+        The Asymptotic Acceleration Curve.
+        As the trade becomes more profitable, the stop-loss chokes the price 
+        tighter to mathematically guarantee we capture the alpha.
+        """
+        entry_price = position.get("entry_price", current_price)
+        current_stop = position.get("stop_loss", current_price - current_atr)
+        
+        # Track the highest high the stock has reached since we bought it
+        highest_high = max(position.get("highest_high", entry_price), current_price)
+        
+        # Calculate raw percentage profit (ignoring fees for the trigger thresholds)
+        profit_pct = (current_price - entry_price) / entry_price
+        
+        new_stop = current_stop
+        phase = "PHASE_1_BREATHING"
+
+        # --- STORY: The Parabolic Choke (Phase 3) ---
+        # If the stock has exploded +3.0% into profit, we do not want to give it back.
+        # We shrink the stop to just 1.0 ATR from the highest peak. 
+        # If it blinks, we take the money and run.
+        if profit_pct >= self.stop_cfg["phase3_parabolic_trigger_pct"]:
+            choke_stop = highest_high - (current_atr * self.stop_cfg["phase3_atr_mult"])
+            new_stop = max(current_stop, choke_stop)
+            phase = "PHASE_3_PARABOLIC"
+            
+        # --- STORY: The Breakeven Ratchet (Phase 2) ---
+        # If the stock hits +1.5% profit, we have enough room to cover our taxes and fees.
+        # We instantly pull the stop loss up to our entry price. The trade is now "Risk Free".
+        elif profit_pct >= self.stop_cfg["phase2_breakeven_trigger_pct"]:
+            breakeven_stop = entry_price * (1 + cfg.COSTS_CONFIG["slippage_pct"])
+            new_stop = max(current_stop, breakeven_stop)
+            phase = "PHASE_2_BREAKEVEN"
+            
+        # --- STORY: The Breathing Room (Phase 1) ---
+        # The trade is new. It needs room to bounce around without getting stopped out by HFT noise.
+        # We use a wide 2.0 ATR trailing stop.
+        else:
+            trail_stop = highest_high - (current_atr * self.stop_cfg["phase1_atr_mult"])
+            new_stop = max(current_stop, trail_stop) # 'max' ensures the stop only moves UP, never down.
+
+        logger.debug(f"[{symbol}] Kinetic Stop Math -> Pnl: {profit_pct:.2%}, State: {phase}, Old Stop: {current_stop:.2f}, New Stop: {new_stop:.2f}")
+        
+        return new_stop, highest_high
+
+    def check_zombie_protocol(self, symbol, position, current_regime):
+        """
+        The Orphaned Trade Protocol.
+        If we bought NVDA because it was in a "TREND", but today Agent 1 says NVDA is "CHOP",
+        the fundamental reason we entered the trade is dead. It is now a Zombie.
+        """
+        entry_regime = position.get("entry_regime", current_regime)
+        
+        # 1. Identify Mismatch
+        if entry_regime != current_regime:
+            # The trade is an orphan. Tag it with a death timer.
+            if "zombie_timestamp" not in position:
+                logger.info(f"[{symbol}] REGIME SHIFT DETECTED ({entry_regime} -> {current_regime}). Trade declared ZOMBIE. TTL initiated.")
+                position["zombie_timestamp"] = datetime.now().isoformat()
+            
+            # 2. Check Time-To-Live (TTL)
+            zombie_time = datetime.fromisoformat(position["zombie_timestamp"])
+            hours_alive = (datetime.now() - zombie_time).total_seconds() / 3600
+            
+            if hours_alive >= self.defense_cfg["zombie_trade_ttl_hours"]:
+                logger.info(f"[{symbol}] ZOMBIE TTL EXPIRED ({hours_alive:.1f} hours). Initiating Force Liquidation.")
+                return True # True = Force Liquidate Now
+        
+        # Trade is either healthy or still within its 72-hour grace period
+        return False
+
+
+class LiveTradingEngine:
+    """
+    The Execution Gateway.
+    Reads open positions, updates stops via Agent 4, and executes new tickets from the Conductor.
+    """
+    def __init__(self, broker_api=None):
+        self.broker = broker_api # This will connect to IBKR/Alpaca later
+        self.lifecycle = LifecycleManager()
+        self.notifier = NotificationManager() # Initialize the Voice
+        
+        # We use a stateful JSON file to track open positions independently of the broker API
+        self.positions_file = os.path.join(cfg.DB_DIR, "open_positions.json")
+        self.positions = self._load_json(self.positions_file)
+
+    def _process_closed_position(self, ticker, buy_date, buy_price, sell_price):
+        """
+        [Lifecycle Resolution]
+        Calculates net PnL dynamically and triggers the Gen-13 Notification 
+        and centralized CSV logging immediately upon position liquidation.
+        """
+        try:
+            if buy_price and float(buy_price) > 0:
+                pnl_net = ((float(sell_price) - float(buy_price)) / float(buy_price)) * 100.0
+            else:
+                pnl_net = 0.0
+                
+            # Call the updated Notification Manager
+            if hasattr(self, 'notifier') and self.notifier:
+                self.notifier.send_closed_position_report(
+                    ticker=ticker,
+                    buy_date=buy_date,
+                    buy_price=float(buy_price),
+                    sell_price=float(sell_price),
+                    pnl_net=pnl_net
+                )
+                
+            logger.info(f"Position Closed Processed: [{ticker}] PnL: {pnl_net:.2f}%")
+            
+        except Exception as e:
+            logger.error(f"Failed to process closed position for {ticker}: {str(e)}")
+
+    
+    def _load_json(self, path):
+        if os.path.exists(path):
+            try:
+                with open(path, "r") as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.error(f"Failed to load positions JSON: {e}")
+        return {}
+
+    def _save_json(self, data, path):
+        try:
+            with open(path, "w") as f:
+                json.dump(data, f, indent=4)
+        except Exception as e:
+            logger.error(f"Failed to save positions JSON: {e}")
+
+    def _write_cooldown(self, symbol, reason="STOP_LOSS_HIT"):
+        """
+        [Bug 1.4 Fix] Writes a ticker to cooldown_list.json when stop-loss fires.
+        The strategy engine reads this file to blacklist the ticker.
+        """
+        cooldown_path = getattr(cfg, 'COOLDOWN_FILE_PATH', 'data/cooldown_list.json')
+        cooldown_hours = getattr(cfg, 'COOLDOWN_PERIOD_HOURS', 24)
+        try:
+            cooldown_data = {}
+            if os.path.exists(cooldown_path):
+                with open(cooldown_path, 'r', encoding='utf-8') as f:
+                    cooldown_data = json.load(f)
+
+            cooldown_data[symbol] = {
+                "timestamp": time.time(),
+                "reason": reason,
+                "cooldown_hours": cooldown_hours
+            }
+
+            os.makedirs(os.path.dirname(cooldown_path) or '.', exist_ok=True)
+            with open(cooldown_path, 'w', encoding='utf-8') as f:
+                json.dump(cooldown_data, f, indent=4)
+            logger.info(f"[{symbol}] Added to cooldown blacklist for {cooldown_hours}h. Reason: {reason}")
+        except Exception as e:
+            logger.error(f"[{symbol}] Failed to write cooldown: {e}")
+
+    def execute_ticket(self, ticket, current_regime):
+        """
+        Receives the "BUY" ticket from the StrategyEngine (Conductor).
+        Secures the entry price and hands it to Agent 4 to manage.
+        """
+        symbol = ticket["symbol"]
+        
+        if symbol in self.positions:
+            logger.debug(f"[{symbol}] Ticket rejected. Position already exists.")
             return False
             
-        # 2. Check Holidays
-        date_str = date_obj.strftime('%Y-%m-%d')
-        if date_str in cfg.SchedulerConfig.MARKET_HOLIDAYS:
-             return False
-             
-        return True
-
-    def get_next_run_time(self, now_dt):
-        """Calculate the next valid start time (Open - PreBuffer)."""
-        tz = now_dt.tzinfo
+        # --- STORY: The Execution Wrapper ---
+        # In production, we fire the API call to Alpaca/IBKR here.
+        # For our logic loop, we register the trade in the memory bank so Agent 4 can wake up.
         
-        # Define today's end boundary
-        today_session_end = datetime.combine(now_dt.date(), cfg.SchedulerConfig.CLOSE_TIME).replace(tzinfo=tz) + timedelta(hours=cfg.SchedulerConfig.POST_BUFFER_HOURS)
-        
-        target_date = now_dt.date()
-        
-        # If today is invalid OR we are past today's session, start checking from tomorrow
-        if not self.is_trading_day(target_date) or now_dt > today_session_end:
-            target_date += timedelta(days=1)
-            
-        # Find next valid trading day
-        while not self.is_trading_day(target_date):
-            target_date += timedelta(days=1)
-            
-        # Construct start time
-        next_open = datetime.combine(target_date, cfg.SchedulerConfig.OPEN_TIME).replace(tzinfo=tz)
-        next_start = next_open - timedelta(hours=cfg.SchedulerConfig.PRE_BUFFER_HOURS)
-        
-        return next_start
-
-    def fetch_and_process(self, symbol):
-        """Pipeline: Fetch -> Features -> Fundamentals."""
-        # Determine strict days_back based on interval to minimize API load but ensure indicators
-        days_back = 200 # Safe default for indicators
-        
-        try:
-            # 1. Fetch Data
-            df = self.dsm.get_stock_data(symbol, days_back=days_back, interval=self.interval)
-            
-            if df is None or df.empty:
-                logger.warning(f"No data for {symbol}")
-                return None, None
-                
-            # FIX: Flatten MultiIndex (YFinance)
-            if hasattr(df, 'columns') and isinstance(df.columns, pd.MultiIndex):
-                 df.columns = ['_'.join(col).strip() if col[1] else col[0] for col in df.columns.values]
-                 
-            # Standardize Names
-            df.columns = [str(c).lower() for c in df.columns]
-            
-            # Clean names
-            new_cols = {}
-            for c in df.columns:
-                if 'close' in c: new_cols[c] = 'close'
-                elif 'open' in c: new_cols[c] = 'open'
-                elif 'high' in c: new_cols[c] = 'high'
-                elif 'low' in c: new_cols[c] = 'low'
-                elif 'volume' in c: new_cols[c] = 'volume'
-            df.rename(columns=new_cols, inplace=True)
-            
-            # 2. Fundamentals
-            fund_data = self.dsm.get_fundamentals(symbol)
-            if not fund_data: fund_data = {} # Handle empty
-            
-            # 3. Add Features
-            df = self.feature_calc.calculate_features(df)
-            
-            return df, fund_data
-            
-        except Exception as e:
-            logger.error(f"Pipeline Error {symbol}: {e}")
-            return None, None
-
-    def update_stop_loss(self, ticker, new_stop):
-        """Updates the stop_loss for an open SHADOW trade."""
-        updated = False
-        for trade in self.shadow_portfolio.get("trades", []):
-            if trade["status"] == "OPEN" and trade["ticker"] == ticker:
-                trade["stop_loss"] = float(new_stop)
-                updated = True
-                logger.info(f"[Shadow] Stop Loss Updated for {ticker}: ${new_stop:.2f}")
-        
-        if updated:
-            self._save_json(self.shadow_file, self.shadow_portfolio)
-
-    def close_shadow_trade(self, ticker, exit_price, reason):
-        """Closes a SHADOW trade (Automated System)."""
-        closed = False
-        for trade in self.shadow_portfolio.get("trades", []):
-            if trade["status"] == "OPEN" and trade["ticker"] == ticker:
-                trade["status"] = "CLOSED"
-                trade["exit_price"] = float(exit_price)
-                trade["exit_reason"] = reason
-                trade["exit_timestamp"] = datetime.now().isoformat()
-                
-                # Calc PnL
-                pct_change = (float(exit_price) - trade["entry_price"]) / trade["entry_price"]
-                trade["pnl"] = pct_change * trade["allocation"]
-                closed = True
-                
-        if closed:
-            self._save_json(self.shadow_file, self.shadow_portfolio)
-            logger.info(f"[Shadow] Trade Closed: {ticker} @ {exit_price} ({reason})")
-
-    def analyze_market(self, symbol, df, fund_data):
-        """Ask the AI for a decision."""
-        if len(df) < 60:
-            logger.warning(f"Not enough data for {symbol} (Need 60+ bars). Skipping...")
-            return None
-
-        # --- 🔥 CRASH FIX: ROBUST DATA SANITIZATION ---
-        try:
-            # 1. Identify Numeric Columns (Avoid processing strings/objects)
-            numeric_cols = df.select_dtypes(include=[np.number]).columns
-            
-            # 2. Replace Infinity with NaN (Only in numeric columns)
-            df[numeric_cols] = df[numeric_cols].replace([np.inf, -np.inf], np.nan)
-            
-            # 3. Forward Fill (Fix FutureWarning: use ffill() instead of method='ffill')
-            df.ffill(inplace=True)
-            
-            # 4. Fill remaining NaNs with 0
-            df.fillna(0, inplace=True)
-
-            # 5. Final Safety Check (Check ONLY numeric columns)
-            check_data = df[numeric_cols].values
-            if np.isnan(check_data).any() or np.isinf(check_data).any():
-                 logger.error(f"[{symbol}] CORRUPT DATA DETECTED (NaN/Inf). Skipping.")
-                 return None
-                 
-        except Exception as e:
-            logger.error(f"[{symbol}] Data Sanitization Failed: {e}")
-            return None
-
-        # Latest Candle Context
-        latest_bar = df.iloc[-1]
-        features = latest_bar.to_dict()
-        
-        # --- Dynamic ATR Stop Loss ---
-        # Try to get ATR (usually 'atrr_14' from pandas_ta, fallback to 2% if missing)
-        atr = features.get('atr_14') or features.get('atrr_14') or (features.get('close') * 0.02)
-
-        # Use the multiplier from system_config (Conservative = 2.0)
-        atr_multiplier = cfg.ACTIVE_PROFILE["stop_atr"] 
-        
-        stop_price = features.get('close') - (atr * atr_multiplier)
-
-        current_params = {
-            "price": features.get('close'),
-            "target": features.get('close') * (1 + cfg.SniperConfig.TARGET_PROFIT),
-            "stop_loss": stop_price,
-            "timestamp": str(latest_bar.name)
+        self.positions[symbol] = {
+            "entry_price": ticket["limit_price"],
+            "qty": ticket["qty"],
+            "stop_loss": ticket["stop_loss"],
+            "take_profit": ticket["take_profit"],
+            "highest_high": ticket["limit_price"],
+            "entry_regime": current_regime,
+            "entry_time": datetime.now().isoformat()
         }
         
-        # --- GET AI CONFIDENCE (Raw Prob) ---
-        _, prob, trace = self.ai.predict_trade_confidence(
-            symbol, features, fundamentals=fund_data, df_window=df
-        )
-
-        # --- ASK STRATEGY ORCHESTRA (The Brain) ---
-        analysis_packet = {
-            'AI_Probability': prob,
-            'Fundamental_Score': fund_data.get('Score', 50)
-        }
+        self._save_json(self.positions, self.positions_file)
         
-        # Use the updated Strategy Logic
-        decision = StrategyOrchestra.decide_action(symbol, features, analysis_packet)
+        # --- NOTIFICATION ---
+        # --- NEW: Send Notification ---
+        msg = (f"🟢 **BUY SIGNAL DETECTED: {symbol}**\n"
+               f"Qty: {ticket['qty']} @ ${ticket['limit_price']:.2f}\n"
+               f"Stop: ${ticket['stop_loss']:.2f}\n"
+               f"Target: ${ticket['take_profit']:.2f}\n"
+               f"Regime: {current_regime}")
         
-        price = features.get('close')
-        logger.info(f"[{latest_bar.name}] {symbol} | Price: {price:.2f} | Decision: {decision} | Conf: {prob:.2%}")
+        if hasattr(self, 'notifier') and self.notifier:
+            self.notifier.send_message(msg)
+
+        logger.info(f"[{symbol}] Order Executed. Handed to Agent 4.")
         
-        # --- SWING TRADE MANAGEMENT LOGIC ---
-        
-        # 1. Check if we already have an OPEN trade for this ticker
-        active_position = self.pm.get_active_position(symbol)
-        
-        if active_position:
-            # WE ARE IN A TRADE -> MANAGE IT (Quiet Mode)
-            entry_price = active_position['entry_price']
-            current_stop = active_position['stop_loss']
-            current_target = active_position['target_price']
-            price = features.get('close')
-            
-            # A. Check for EXIT (Target Hit)
-            if price >= current_target:
-                # --- DYNAMIC EXIT (Let Winners Run) ---
-                ema_20 = features.get('ema_20') or features.get('sma_20') # Fallback to SMA if EMA missing
-                
-                if ema_20 and price > ema_20:
-                    # Trend is still strong! Don't sell yet.
-                    # Instead, move Stop Loss to Breakeven or slightly below current price to lock gains
-                    new_sl = max(current_stop, price * 0.95) # Lock in some profit but keep room
-                    if new_sl > current_stop:
-                        self.pm.update_stop_loss(symbol, new_sl)
-                        logger.info(f"Target Hit but Trend Strong (Price > EMA20). Holding & Trailing SL to {new_sl:.2f}")
-                    return 
-                else:
-                    # Trend broken OR no EMA data -> Take Profit
-                    self.pm.close_shadow_trade(symbol, price, active_position['qty'])  
-                    self.ai.notifier.send_sell_alert(symbol, price, (price - entry_price)/entry_price, "TARGET 🎯")
-                    return
+        # Return a dictionary mimicking a standard Broker API JSON response
+        return {"status": "FILLED", "exec_price": ticket["limit_price"]}
 
-            # B. Check for EXIT (Stop Loss Hit)
-            # Use LOW and OPEN to simulate reality better than CLOSE
-            day_low = features.get('low', price)
-            day_open = features.get('open', price)
-            
-            if day_low <= current_stop:
-                # Calculate REALISTIC Exit Price
-                if day_open < current_stop:
-                    exit_price = day_open # Gap Down Reality
-                    reason = "STOP 🛑 (GAP DOWN)"
-                else:
-                    exit_price = current_stop # Standard Stop Hit
-                    reason = "STOP 🛑"
+    def manage_open_positions(self, market_data, agent1_router):
+        if not self.positions:
+            logger.debug("No open positions to manage.")
+            return
 
-                self.pm.close_shadow_trade(symbol, exit_price, active_position['qty'])
-                self.ai.notifier.send_sell_alert(symbol, exit_price, (exit_price - entry_price)/entry_price, reason)
-                return 
+        liquidated = []
 
-            # C. Trailing Stop Logic (Only update if significant move)
-            # Only send an alert if we move the stop up by at least 1%
-            new_suggested_stop = current_params['stop_loss']
-            if new_suggested_stop > (current_stop * 1.01): 
-                # Update the position in the file
-                self.pm.update_stop_loss(symbol, new_suggested_stop)
-                # Send Quiet Update
-                self.ai.notifier.send_risk_update(symbol, new_suggested_stop, current_target, price, "Trailing Stop 🛡️")
-            
-        else:
-            # NO POSITION -> LOOK FOR ENTRY
-            # We now use the 'decision' from StrategyOrchestra (which handles the Falling Knife check)
-            if decision == "BUY":
-                # Send the Buy Signal
-                self.ai.notifier.send_buy_alert(
-                    symbol, price, current_params['stop_loss'], current_params['target'], 
-                    prob, fund_data.get('Score', 50)
-                )
-                return (decision, prob, price, trace, current_params)
-
-        return None
-
-    def execute_trade(self, symbol, action, price, details, params):
-        """Execute or Log Trade."""
-
-        # 1. Get the Fixed Amount from Config (The line you asked about)
-        max_dollars = cfg.INVESTMENT_AMOUNT
-
-        # --- VOLATILITY POSITION SIZING ---
-        # 2. Calculate Risk-Based Sizing
-        stop_loss_price = params['stop_loss']
-        risk_per_share = price - stop_loss_price
-        
-        # Account Settings (Hardcoded for now, move to config later)
-        account_balance = 100000 # Example: $100k account
-        risk_per_trade_pct = 0.02 # Risk 2% per trade ($2000)
-        
-        if risk_per_share > 0:
-            qty_risk = int((account_balance * risk_per_trade_pct) / risk_per_share)
-        else:
-            qty_risk = 1 
-            
-        # 3. Calculate Quantity based on Dollar Cap
-        qty_cap = int(max_dollars / price)
-        
-        # 4. FINAL DECISION: Take the SMALLER of the two
-        qty = min(qty_risk, qty_cap)
-            
-        logger.info(f"Calculated Position Size: {qty} shares (Risk: ${risk_per_share*qty:.2f})")
-
-        if self.mode == 'PAPER':
-            logger.info(f"!!! PAPER TRADE SIGNAL: {action} {symbol} !!!")
-            logger.info(f"Price: {price} | Reason: {details}")
-            
-            # --- SHADOW PORTFOLIO TRACKING ---
-            if action == "BUY":
-                self.pm.add_shadow_trade(
-                    ticker=symbol, 
-                    entry_price=price,
-                    stop_loss=params['stop_loss'],
-                    target_price=params['target'],
-                    qty=qty
-                )
-            
-            self.log_trade_csv(symbol, "BUY", price, params['stop_loss'], params['target'])
-            
-            # Log to dedicated signals file
-            with open("logs/signals.csv", "a") as f:
-                f.write(f"{datetime.now()},{symbol},{action},{price},{details}\n")
-                
-        elif self.mode == 'LIVE':
-            logger.warning("LIVE TRADING NOT YET ENABLED. Switch to Paper Mode.")
-
-    def smart_sleep(self, seconds):
-        """
-        Sleeps for `seconds` but polls Telegram every 2 seconds.
-        Keeps bot interactive during idle times.
-        """
-        end_time = time.time() + seconds
-        while time.time() < end_time:
-            # Poll Telegram
+        for symbol, position in self.positions.items():
             try:
-                self.ai.notifier.check_for_updates(self.pm)
-            except Exception as e:
-                # Log error but DO NOT CRASH
-                logger.warning(f"Telegram Poll Error: {e} (Retrying...)")
-            
-            # Short sleep to prevent CPU spin
-            time.sleep(2)
-
-    def update_status(self, state, message, last_scan=None):
-        """Saves heartbeat for the GUI to read."""
-        status = {
-            "status": state,
-            "message": message,
-            "last_heartbeat": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "last_scan_time": last_scan
-        }
-        with open(self.status_file, 'w') as f:
-            json.dump(status, f)
-
-    def log_trade_csv(self, symbol, type, price, stop, target):
-        """Saves trade to CSV for the GUI PnL table."""
-        file = "logs/portfolio_trades.csv"
-        new_row = pd.DataFrame([{
-            "Date": datetime.now(), "Symbol": symbol, "Type": type, 
-            "Price": price, "Stop": stop, "Target": target, "Status": "OPEN"
-        }])
-        
-        if os.path.exists(file):
-            new_row.to_csv(file, mode='a', header=False, index=False)
-        else:
-            new_row.to_csv(file, mode='w', header=True, index=False)
-
-    def run(self):
-        """Main Loop."""
-        try:
-            while self.is_running:
-                self.update_status("Active", "Checking Scheduler...", datetime.now().strftime("%H:%M"))
-
-                # 0. Startup Notification (First Run Only)
-                if not hasattr(self, '_startup_sent'):
-                    msg = (f"**StockWise Gen-9 Engine Started**\n"
-                           f"Targets: {len(self.symbols)}\n"
-                           f"Mode: {self.mode}\n"
-                           f"Interval: {self.interval}")
-                    self.ai.notifier.send_alert(msg)
-                    self._startup_sent = True
-
-                # 1. Timezone Awareness
-                tz = pytz.timezone(cfg.SchedulerConfig.MARKET_TIMEZONE)
-                now = datetime.now(tz)
-                
-                # 2. Define Window for Today
-                today_open = datetime.combine(now.date(), cfg.SchedulerConfig.OPEN_TIME).replace(tzinfo=tz)
-                today_close = datetime.combine(now.date(), cfg.SchedulerConfig.CLOSE_TIME).replace(tzinfo=tz)
-                
-                active_start = today_open - timedelta(hours=cfg.SchedulerConfig.PRE_BUFFER_HOURS)
-                active_end = today_close + timedelta(hours=cfg.SchedulerConfig.POST_BUFFER_HOURS)
-                
-                # 3. Check Scheduler Status
-                is_active = False
-                if self.is_trading_day(now.date()):
-                    if active_start <= now <= active_end:
-                        is_active = True
-                        self.eod_run_today = False # Reset flag if market is open/active
-                
-                # --- EOD AUDIT TRIGGER ---
-                # Run once after market close
-                if now > today_close and not self.eod_run_today and self.is_trading_day(now.date()):
-                    logger.info("Market Closed. Running EOD Maintenance...")
+                df = market_data.get_stock_data(symbol, days_back=20)
+                if df is None or df.empty: continue
                     
-                    # 1. Run Maintenance (Audit + Retrain)
-                    # We import it here to avoid circular imports at top level if possible
-                    from daily_maintenance import AutoCorrector
-                    ac = AutoCorrector()
-                    ac.run_routine()
-                    
-                    # 2. CRITICAL: HOT RELOAD THE BRAIN
-                    # We must re-initialize the AI to load the NEW .keras file we just trained
-                    logger.info("RELOADING AI MODEL from Disk...")
-                    self.ai = StockWiseAI() 
-                    logger.info("Brain Reloaded.")
+                last = df.iloc[-1]
+                current_price = last['close']
+                current_atr = last.get('atr', current_price * 0.01)
+                current_regime = agent1_router.classify_regime(df)
 
-                    self.eod_run_today = True
+                # --- CHECK STOPS ---
+                reason = None
+                if current_price <= position["stop_loss"]:
+                    reason = "STOP LOSS HIT"
+                elif current_price >= position["take_profit"]:
+                    reason = "TAKE PROFIT HIT"
+                elif self.lifecycle.check_zombie_protocol(symbol, position, current_regime):
+                    reason = "ZOMBIE PROTOCOL (Time Expired)"
 
-                # 4. Handle Inactive State
-                if not is_active:
-                    next_run = self.get_next_run_time(now)
-                    sleep_seconds = (next_run - now).total_seconds()
+                if reason:
+                    # Execute Sale
+                    logger.info(f"[{symbol}] LIQUIDATION: {reason} at {current_price:.2f}")
+                    # Bug 1.4 Fix: Blacklist ticker on stop-loss or zombie exit
+                    if reason in ("STOP LOSS HIT", "ZOMBIE PROTOCOL (Time Expired)"):
+                        self._write_cooldown(symbol, reason=reason)
                     
-                    # Safety check for negative sleep (shouldn't happen with logic above)
-                    if sleep_seconds < 0: sleep_seconds = 60 
+                    # --- Send Original Execution Reason Notification ---
+                    msg = (f"**SELL SIGNAL: {symbol}**\n"
+                           f"Reason: {reason}\n"
+                           f"Exit Price: ${current_price:.2f}\n"
+                           f"PnL: {((current_price - position['entry_price'])/position['entry_price']):.2%}")
                     
-                    hours = sleep_seconds / 3600
-                    logger.info(f"[SCHEDULER] Market Closed. Sleeping for {hours:.2f} hours (until {next_run.strftime('%Y-%m-%d %H:%M:%S %Z')})...")
-                    # Use Smart Sleep to stay interactive
-                    self.smart_sleep(sleep_seconds)
+                    if hasattr(self, 'notifier') and self.notifier:
+                        self.notifier.send_message(msg)
+                    
+                    # --- GEN-13: Process Position Closure (CSV Logging + Telegram PnL Report) ---
+                    # Extract entry time safely, clean ISO format ("2025-02-05T14:30:00" -> "2025-02-05")
+                    buy_date_raw = position.get("entry_time", "UNKNOWN")
+                    
+                    # Architectural Fix: Extract index  to ensure it remains a String and not a List
+                    buy_date_clean = buy_date_raw.split("T") if "T" in buy_date_raw else buy_date_raw
+                    
+                    self._process_closed_position(
+                        ticker=symbol,
+                        buy_date=buy_date_clean,
+                        buy_price=position["entry_price"],
+                        sell_price=current_price
+                    )
+                    liquidated.append(symbol)
                     continue
-                
-                # --- MARKET OPEN ---
-                logger.info("\n--- Scanning Watchlist ---")
 
-                # --- Update GUI Status ---
-                self.update_status("Scanning", f"Analyzing {len(self.symbols)} items", datetime.now().strftime("%H:%M"))
+                # 4. Agent 4: Kinetic Trailing Stop
+                new_stop, new_high = self.lifecycle.manage_kinetic_stop(symbol, position, current_price, current_atr)
                 
-                for symbol in self.symbols:
-                    # Check Updates Intermittently
-                    self.ai.notifier.check_for_updates(self.pm)
+                if new_stop > position["stop_loss"]:
+                    old_stop = position["stop_loss"]
+                    position["stop_loss"] = new_stop
+                    position["highest_high"] = new_high
                     
-                    df, fund_data = self.fetch_and_process(symbol)
-                    
-                    if df is not None:
-                        # NEW GEN-9 LOGIC
-                        result = self.analyze_market(symbol, df, fund_data)
-                        
-                        if result:
-                            decision, prob, price, trace, params = result
-                            
-                            if decision == "BUY":
-                                 # We pass params to execute for shadow tracking
-                                 self.execute_trade(symbol, "BUY", price, f"AI_Conf: {prob:.2%} | {trace}", params)
-                                 
-                                 # Smart Alert (Pass Ticker/Params to update history)
-                                 # (See reasoning in original)
-                                 self.ai.notifier.signal_history[symbol] = params
-                                 self.ai.notifier._save_history()
+                    # Optional: Notify on Stop Adjustment (Reduce noise by only logging)
+                    logger.info(f"[{symbol}] Kinetic Stop tightened: {old_stop:.2f} -> {new_stop:.2f}")
 
-                    
-                    # Small delay between symbols
-                    time.sleep(2)
-                
-                # Sleep between Full Scans
-                sleep_sec = 60 if self.interval == '1m' else 900 
-                if self.interval == '1d': sleep_sec = 3600 # 1 hour check for daily candles
-                
-                logger.info(f"Scan Complete. Sleeping for {sleep_sec} seconds...")
-                # ---Update GUI Status ---
-                self.update_status("Idle", f"Sleeping ({sleep_sec}s)", datetime.now().strftime("%H:%M"))
-                
-                self.smart_sleep(sleep_sec)
-                
-        except KeyboardInterrupt:
-            logger.info("Stopping Live Engine...")
+            except Exception as e:
+                logger.error(f"[{symbol}] Error managing position: {e}", exc_info=True)
+
+        for sym in liquidated:
+            del self.positions[sym]
+            
+        if liquidated:
+            self._save_json(self.positions, self.positions_file)
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='StockWise Gen-9 Live Trader')
+    from data_source_manager import DataSourceManager
+    from strategy_engine import StrategyEngine
+    from stock_hunter import StockHunter
     
-    # Default basket
-    # Default basket
-    if hasattr(cfg, 'WATCHLIST') and isinstance(cfg.WATCHLIST, list):
-        default_basket = ",".join(cfg.WATCHLIST)
-    else:
-        default_basket = "NVDA,AMD,MSFT" # Fallback    
-    
-    parser.add_argument('--symbols', type=str, default=default_basket, help='Comma-separated ticker symbols')
-    parser.add_argument('--interval', type=str, default='1d', help='Candle interval')
-    parser.add_argument('--mode', type=str, default='PAPER', help='PAPER or LIVE')
-    
+    # Parse Command Line Arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--interval", type=str, default="1m", help="Data interval (1m, 5m, 1h)")
+    parser.add_argument("--mode", type=str, default="PAPER", help="Trading mode (PAPER/LIVE)") # <--- הוסף את השורה הזו
     args = parser.parse_args()
-    
-    # Robust Handling: Ensure we have a list of symbols
-    if isinstance(args.symbols, list):
-        symbols = args.symbols
-    else:
-        symbols = args.symbols.split(',')
-    
-    print(f"\n{'='*50}")
-    print(f"STOCKWISE LIVE ENGINE | Mode: {args.mode}")
-    print(f"{'='*50}\n")
-    
-    try:
-        # Initialize and Run
-        trader = LiveTrader(symbols=symbols, interval=args.interval, mode=args.mode)
-        trader.run()
 
-    except KeyboardInterrupt:
-        # User manually stopped the script (Ctrl+C)
-        logger.info("🛑 Engine stopped by user request.")
-        sys.exit(0)
+    logger.info("=== STOCKWISE LIVE ENGINE: INITIALIZING ===")
+    
+    # 1. Initialize Core Systems
+    # market_data: Gateway to Alpaca/Polygon
+    # orchestra: The Strategy Brain (Tech + AI)
+    # scout: The Nightly Scanner Interface
+    market_data = DataSourceManager()
+    orchestra = StrategyEngine()
+    scout = StockHunter(market_data)
+    
+    # Initialize Execution Engine (Agent 4)
+    live_engine = LiveTradingEngine()
+    
+    # Initialize Statistics Recorder (The Black Box)
+    journal = TradeJournal()
+    
+    logger.info("ENGINE START: Dynamic Heartbeat Protocol Initiated.")
 
-    except Exception as e:
-        # --- CRASH HANDLER ---
-        error_msg = str(e)
-        stack_trace = traceback.format_exc()
+    # EOD Tracker Initialization
+    last_eod_date = None
         
-        # 1. Log Critical Error locally
-        logger.critical(f"CRITICAL ENGINE FAILURE: {error_msg}", exc_info=True)
-        
-        # 2. Send Telegram Alert
+    # Veto Cooldown Cache: Prevents the system from scanning the same rejected stock repeatedly
+    cooldown_cache = {}
+    COOLDOWN_MINUTES = 30
+    
+    # --- THE MAIN INFINITE LOOP ---
+    while True:
         try:
-            logger.info("Attempting to send Telegram Crash Alert...")
-            notifier = nm.NotificationManager()
+            # 2. Refresh VIP Target List
+            vip_list = scout.get_active_vip_watchlist()
             
-            # Format message (Markdown)
-            telegram_msg = (
-                f"**SYSTEM CRASH ALERT**\n\n"
-                f"**Engine:** StockWise Gen-10\n"
-                f"**Time:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-                f"**Error:** `{error_msg}`\n\n"
-                f"**Traceback (Last 10 lines):**\n"
-                f"`{stack_trace[-1000:]}`"  # Truncate to avoid Telegram limit
-            )
-            
-            # Send (assuming .send_message or .send_telegram_message exists)
-            if hasattr(notifier, 'send_message'):
-                notifier.send_message(telegram_msg)
-            elif hasattr(notifier, 'send_telegram_message'):
-                notifier.send_telegram_message(telegram_msg)
-            else:
-                logger.error("Could not find 'send_message' method in NotificationManager")
+            if not vip_list:
+                logger.warning("VIP List is empty! Please run stock_hunter.py. Sleeping 60s...")
+                time.sleep(60)
+                continue
                 
-            logger.info("Crash alert sent successfully.")
+            logger.info(f"Loaded {len(vip_list)} VIP targets. Starting Cycle...")
+
+            # State variables for Dynamic Heartbeat Logic
+            highest_score_detected = 0.0
+            open_positions_count = 0
             
-        except Exception as notify_err:
-            logger.error(f"Failed to send Telegram alert: {notify_err}")
-        
-        # 3. Exit with Error Code 1
-        # This tells the .bat file that a crash occurred (triggering the restart loop)
-        sys.exit(1)
+            # --- PHASE 1: DEFENSE (Manage Open Positions) ---
+            try:
+                # positions = live_engine.api.list_positions()
+                # open_positions_count = len(positions)
+
+                # In Shadow Mode, we check the internal dictionary, not an external API
+                open_positions_count = len(live_engine.positions)
+
+                if open_positions_count > 0:
+                    logger.info(f"Managing {open_positions_count} open positions...")
+                    live_engine.manage_open_positions(market_data, orchestra.router)
+            except Exception as e:
+                logger.error(f"Error checking positions: {e}")
+
+            # --- PHASE 2: OFFENSE (Scan for Opportunities) ---
+            for symbol in vip_list:
+                # 1. Check Cooldown Cache (Amnesia Loop Prevention)
+                if symbol in cooldown_cache:
+                    if datetime.now() < cooldown_cache[symbol]:
+                        continue # Stock is still in timeout
+                    else:
+                        del cooldown_cache[symbol] # Cooldown expired, we can checking it again
+
+                try:
+                    # Fetch Candle Data (730 days back to guarantee deep history)
+                    df = market_data.get_stock_data(symbol, days_back=730, interval=args.interval)
+
+                    if df is not None and not df.empty:
+                        # Architectural Fix: ROW GATEKEEPER (Live Engine)
+                        if len(df) < 100:
+                            logger.warning(f"[{symbol}] Row Gatekeeper Veto: Only {len(df)} rows. Skipping to prevent AI crash.")
+                            cooldown_mins = getattr(cfg, 'DATA_STARVATION_COOLDOWN_MINUTES', 120)
+                            cooldown_cache[symbol] = datetime.now() + timedelta(minutes=cooldown_mins)
+                            continue
+
+                        # Full Analysis: Technical Setups + AI
+                        ticket = orchestra.evaluate_ticker(symbol, df)
+                        score = ticket.get('master_score', 0.0)
+
+                        # Track best score for dynamic sleep
+                        if score > highest_score_detected:
+                            highest_score_detected = score
+
+                        # --- JOURNALING & EXECUTION LOGIC ---
+                        if ticket.get("action") == "BUY":
+                            current_regime = orchestra.router.classify_regime(df)
+                            logger.info(f"Signal Detected: {symbol} (Score: {score}). Logging to Journal...")
+                            
+                            journal.log_signal(ticket, df_snapshot=df, status="SIGNAL_DETECTED")
+                            try:
+                                # Attempt Execution
+                                result = live_engine.execute_ticket(ticket, current_regime)
+                                if result and result.get('status') == 'FILLED':
+                                    journal.log_signal(ticket, df_snapshot=df, status="EXECUTED", exec_price=ticket['limit_price'])
+                                else:
+                                    journal.log_signal(ticket, df_snapshot=df, status="REJECTED_BROKER")
+                            except Exception as exec_error:
+                                logger.error(f"Execution Failed: {exec_error}")
+                                journal.log_signal(ticket, df_snapshot=df, status="ERROR_EXECUTION")
+                        else:
+                            # Architectural Fix: Amnesia Loop Prevention (Dynamic Veto Cooldown)
+                            cooldown_mins = getattr(cfg, 'VETO_COOLDOWN_MINUTES', 30)
+                            logger.debug(f"[{symbol}] Trade Vetoed by Strategy Engine. Initiating {cooldown_mins}m cooldown.")
+                            cooldown_cache[symbol] = datetime.now() + timedelta(minutes=cooldown_mins)
+                            continue
+                            
+                except Exception as inner_e:
+                    logger.error(f"Error processing {symbol}: {inner_e}")
+                    continue
+
+            # --- PHASE 3: DYNAMIC HEARTBEAT (Smart Sleep) ---
+            # Adjust sleep time based on market activity to optimize API usage.
+            
+            sleep_time = 60 # Default: Patrol Mode
+            status_msg = "PATROL MODE"
+
+            if open_positions_count > 0:
+                # Money at risk -> Fast Polling (15s)
+                sleep_time = 15
+                status_msg = f"COMBAT MODE ({open_positions_count} Pos Open)"
+                
+            elif highest_score_detected >= 50.0:
+                # High Potential -> Medium Polling (30s)
+                sleep_time = 30
+                status_msg = f"STALKING MODE (Best Score: {highest_score_detected:.1f})"
+            
+            else:
+                # Quiet Market -> Slow Polling (60s)
+                sleep_time = 60
+                status_msg = "PATROL MODE (Scanning...)"
+
+            logger.info(f"{status_msg} | Sleeping {sleep_time}s...")
+            time.sleep(sleep_time)
+
+            # --- PHASE 4: END OF DAY (EOD) CRON JOB ---
+            current_time = datetime.now()
+            
+            # Fire at 23:00 IST (US Market Close) or later, ensuring it only fires once per day.
+            if current_time.hour >= 23 and current_time.date() != last_eod_date:
+                # Lock the trigger IMMEDIATELY before any operations.
+                # This guarantees the report never fires twice even if the notification crashes.
+                last_eod_date = current_time.date()
+
+                logger.info("Triggering End of Day (EOD) Report...")
+                try:
+                    # Dynamically read today's setups from the Trade Journal
+                    today_signals = 0
+                    journal_path = os.path.join(cfg.BASE_DIR, "StockWise_Trade_Journal.csv")
+                    if os.path.exists(journal_path):
+                        import pandas as pd
+                        df_j = pd.read_csv(journal_path)
+                        # Check if Timestamp column exists and count today's rows
+                        if 'Timestamp' in df_j.columns:
+                            df_j['Timestamp'] = pd.to_datetime(df_j['Timestamp'], errors='coerce')
+                            
+                            # 1. Count Total Suggested Setups (System Signals)
+                            today_mask = (df_j['Timestamp'].dt.date == current_time.date()) & (df_j['Status'] == 'SIGNAL_DETECTED')
+                            today_signals = len(df_j[today_mask])
+                            
+                            # 2. Count Actual Executed Trades by the User (Gen-13 Feedback Loop)
+                            executed_mask = (df_j['Timestamp'].dt.date == current_time.date()) & (df_j['Status'] == getattr(cfg, 'TRADE_STATUS_EXECUTED', 'CONFIRMED'))
+                            user_taken = len(df_j[executed_mask])
+
+                            # Fire the notification with exact suggestion vs execution counts
+                            live_engine.notifier.send_eod_summary(
+                                date_str=current_time.strftime("%Y-%m-%d"),
+                                portfolio_status="Active", 
+                                system_pnl="0.0%",  # Update with actual PnL var if available
+                                win_rate="0.0%",    # Update with actual Win Rate var if available
+                                active_shadow=str(len(live_engine.positions)), 
+                                setups_found=today_signals,
+                                user_taken=user_taken
+                            )
+                        else:
+                            raise ValueError("Timestamp column missing in journal.")
+                    else:
+                        # Architectural Fix: Properly indented 'else' block
+                        # Fire the notification
+                        live_engine.notifier.send_eod_summary(
+                            date_str=current_time.strftime("%Y-%m-%d"),
+                            portfolio_status="No Active Live Trades.",
+                            system_pnl=0.00,  # Will be wired to PnL calculator later
+                            win_rate=0.0,
+                            active_shadow=0,
+                            setups_found=0,
+                            user_taken=0
+                        )
+                    
+                    # Lock the trigger so it doesn't fire again until tomorrow
+                    last_eod_date = current_time.date()
+                    logger.info("EOD Report successfully broadcasted.")
+                    
+                except Exception as e:
+                    logger.error(f"Failed to generate EOD Report: {e}")
+
+        except KeyboardInterrupt:
+            logger.info("Engine manually stopped by User.")
+            break
+        except Exception as e:
+            logger.critical(f"CRITICAL ENGINE FAILURE: {e}")
+            time.sleep(60) # Fail-safe pause

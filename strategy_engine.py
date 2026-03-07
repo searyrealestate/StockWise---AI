@@ -568,8 +568,7 @@ class StrategyEngine:
                 
             if ticker in cooldown_data:
                 timestamp = cooldown_data[ticker].get("timestamp", 0)
-                # 86400 seconds = 24 hours mandatory cooldown penalty
-                cooldown_period = 86400 
+                cooldown_period = getattr(cfg, 'COOLDOWN_PERIOD_HOURS', 24) * 3600
                 
                 if (time.time() - timestamp) < cooldown_period:
                     return True

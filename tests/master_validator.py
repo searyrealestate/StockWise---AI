@@ -221,11 +221,47 @@ class MasterValidator:
             self._record("analyze() return contract", False, f"Exception: {e}")
 
     # ------------------------------------------------------------------
+    # CHECK 6: Cooldown write/read integrity (Bug 1.4)
+    # ------------------------------------------------------------------
+    def check_cooldown_write_exists(self):
+        """Verify _write_cooldown method exists in LiveTradingEngine."""
+        lte_path = os.path.join(PROJECT_ROOT, 'live_trading_engine.py')
+        with open(lte_path, 'r', encoding='utf-8', errors='replace') as f:
+            code = f.read()
+
+        self._record(
+            "_write_cooldown method exists in LiveTradingEngine",
+            '_write_cooldown' in code,
+            "Method not found -- stop-loss cannot write to cooldown file"
+        )
+
+        self._record(
+            "_write_cooldown is called on STOP LOSS HIT",
+            'self._write_cooldown' in code and 'STOP LOSS HIT' in code,
+            "Missing call: _write_cooldown not invoked on stop-loss"
+        )
+
+    def check_cooldown_config_param(self):
+        """Verify COOLDOWN_PERIOD_HOURS exists in system_config."""
+        hours = getattr(cfg, 'COOLDOWN_PERIOD_HOURS', None)
+        self._record(
+            "COOLDOWN_PERIOD_HOURS exists in system_config",
+            hours is not None,
+            "Missing param -- cooldown duration is hardcoded"
+        )
+        if hours is not None:
+            self._record(
+                "COOLDOWN_PERIOD_HOURS in valid range (1-168)",
+                1 <= hours <= 168,
+                f"Value: {hours} -- outside 1h-7d range"
+            )
+
+    # ------------------------------------------------------------------
     # REPORT
     # ------------------------------------------------------------------
     def run_all(self):
         print("=" * 60)
-        print("STOCKWISE AI — MASTER SYSTEM VALIDATOR")
+        print("STOCKWISE AI - MASTER SYSTEM VALIDATOR")
         print("=" * 60)
 
         self.check_column_name_consistency()
@@ -237,6 +273,10 @@ class MasterValidator:
         self.check_no_dead_column_references()
         print()
         self.check_analyze_return_contract()
+        print()
+        self.check_cooldown_write_exists()
+        print()
+        self.check_cooldown_config_param()
 
         total = len(self.results)
         passed = sum(1 for _, p, _ in self.results if p)

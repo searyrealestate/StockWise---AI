@@ -174,6 +174,96 @@ class TestBug1_3_ErTrend:
 
 
 # ============================================================
+# BUG 1.4: Cooldown File Never Written
+# ============================================================
+import json as _json  # alias to avoid shadowing in test bodies
+import tempfile
+import shutil
+
+class TestBug1_4_CooldownWrite:
+    """Verify stop-loss triggers cooldown file write and strategy engine reads it."""
+
+    def setup_method(self, _method=None):
+        self.temp_dir = tempfile.mkdtemp()
+        self.cooldown_path = os.path.join(self.temp_dir, 'cooldown_list.json')
+
+    def teardown_method(self, _method=None):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_write_cooldown_creates_file(self):
+        """_write_cooldown should create the cooldown JSON file."""
+        import system_config as cfg
+        from live_trading_engine import LiveTradingEngine
+        engine = LiveTradingEngine.__new__(LiveTradingEngine)
+        original = cfg.COOLDOWN_FILE_PATH
+        cfg.COOLDOWN_FILE_PATH = self.cooldown_path
+        try:
+            engine._write_cooldown("AAPL", reason="STOP LOSS HIT")
+            assert os.path.exists(self.cooldown_path), "Cooldown file was not created!"
+            with open(self.cooldown_path, 'r') as f:
+                data = _json.load(f)
+            assert "AAPL" in data, f"AAPL not found in cooldown file! Got: {list(data.keys())}"
+            assert data["AAPL"]["reason"] == "STOP LOSS HIT"
+            assert "timestamp" in data["AAPL"]
+        finally:
+            cfg.COOLDOWN_FILE_PATH = original
+
+    def test_write_cooldown_appends_not_overwrites(self):
+        """Writing a second ticker should keep the first."""
+        import system_config as cfg
+        from live_trading_engine import LiveTradingEngine
+        engine = LiveTradingEngine.__new__(LiveTradingEngine)
+        original = cfg.COOLDOWN_FILE_PATH
+        cfg.COOLDOWN_FILE_PATH = self.cooldown_path
+        try:
+            engine._write_cooldown("AAPL", reason="STOP LOSS HIT")
+            engine._write_cooldown("TSLA", reason="ZOMBIE PROTOCOL (Time Expired)")
+            with open(self.cooldown_path, 'r') as f:
+                data = _json.load(f)
+            assert "AAPL" in data and "TSLA" in data, \
+                f"Both tickers should be in cooldown. Got: {list(data.keys())}"
+        finally:
+            cfg.COOLDOWN_FILE_PATH = original
+
+    def test_is_in_cooldown_reads_written_file(self):
+        """strategy_engine._is_in_cooldown should detect a ticker written by live_trading_engine."""
+        import system_config as cfg
+        from live_trading_engine import LiveTradingEngine
+        from strategy_engine import StrategyEngine
+        original = cfg.COOLDOWN_FILE_PATH
+        cfg.COOLDOWN_FILE_PATH = self.cooldown_path
+        try:
+            live = LiveTradingEngine.__new__(LiveTradingEngine)
+            live._write_cooldown("NVDA", reason="STOP LOSS HIT")
+
+            strategy = StrategyEngine.__new__(StrategyEngine)
+            strategy.cooldown_file = self.cooldown_path
+            assert strategy._is_in_cooldown("NVDA") is True, \
+                "Strategy engine should detect NVDA in cooldown!"
+            assert strategy._is_in_cooldown("GOOG") is False, \
+                "GOOG should NOT be in cooldown!"
+        finally:
+            cfg.COOLDOWN_FILE_PATH = original
+
+    def test_cooldown_period_from_config(self):
+        """Verify _is_in_cooldown uses COOLDOWN_PERIOD_HOURS from config, not hardcoded 86400."""
+        import re
+        path = os.path.join(PROJECT_ROOT, 'strategy_engine.py')
+        with open(path, 'r') as f:
+            code = f.read()
+        match = re.search(
+            r'def _is_in_cooldown\(self.*?\n(.*?)(?=\n    def |\nclass |\Z)',
+            code, re.DOTALL
+        )
+        assert match, "_is_in_cooldown method not found in strategy_engine.py"
+        method_body = match.group(1)
+        assert '86400' not in method_body, \
+            "Hardcoded 86400 still in _is_in_cooldown! Should use COOLDOWN_PERIOD_HOURS * 3600"
+        assert 'COOLDOWN_PERIOD_HOURS' in method_body, \
+            "_is_in_cooldown should reference COOLDOWN_PERIOD_HOURS from config"
+
+
+# ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
 if __name__ == '__main__':
@@ -181,14 +271,17 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend]
+    test_classes = [TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")
-        instance = cls()
-        for method_name in sorted(dir(instance)):
+        for method_name in sorted(dir(cls)):
             if not method_name.startswith('test_'):
                 continue
+            instance = cls()
+            # Honour pytest-style setup/teardown if defined
+            if hasattr(instance, 'setup_method'):
+                instance.setup_method()
             try:
                 getattr(instance, method_name)()
                 passed += 1
@@ -201,6 +294,9 @@ if __name__ == '__main__':
                 failed += 1
                 errors.append((cls.__name__, method_name, f"ERROR: {e}"))
                 print(f"  ERROR: {method_name}\n        {e}")
+            finally:
+                if hasattr(instance, 'teardown_method'):
+                    instance.teardown_method()
 
     print(f"\n{'=' * 60}")
     print(f"Results: {passed} passed, {failed} failed out of {passed + failed} tests")
