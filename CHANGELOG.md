@@ -94,3 +94,23 @@
 **Tests added:** 5 unit tests (column creation guards, squeeze_prep fires, squeeze_firing fires, wide-band gate). `pending_investigation` set in master_validator pruned: `squeeze_on` and `mom_sqz` removed.
 
 **Totals:** 23/23 unit tests pass, 20/20 system checks pass.
+
+---
+
+### Bug 1.6b — Dangerous `df.fillna(0)` on price columns (feature_engine.py)
+
+**Problem:** `feature_engine.py` applied `df = df.fillna(0)` globally, zero-filling `open`, `high`, `low`, `close`, and `volume` wherever SMA/indicator warmup NaNs existed (first ~200 rows). This caused:
+- RSI/SMA calculations to divide by zero close price
+- ATR to produce negative values when `high=0`
+- RVOL to become infinite when `vol_avg_20=0`
+
+**Fix:** Replaced the blanket `fillna(0)` with a split strategy:
+
+| Column group | Strategy | Reason |
+|---|---|---|
+| `open`, `high`, `low`, `close`, `volume` | `ffill()` | Last known price is correct; 0 is wrong |
+| All indicator columns | `fillna(0)` | Safe for oscillators, flags, and booleans |
+
+**Tests added:** 3 unit tests (no blanket fillna, ffill present, ffill preserves prices while zeroing indicators).
+
+**Totals:** 26/26 unit tests pass, 20/20 system checks pass.

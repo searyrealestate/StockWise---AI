@@ -360,6 +360,53 @@ class TestBug1_6a_SqueezeColumns:
 
 
 # ============================================================
+# BUG 1.6b: Dangerous df.fillna(0) on Price Columns
+# ============================================================
+class TestBug1_6b_SafeFillna:
+    """Verify feature_engine no longer zero-fills price columns."""
+
+    def test_no_blanket_fillna_zero(self):
+        """The pattern 'df = df.fillna(0)' should not appear in feature_engine.py."""
+        path = os.path.join(PROJECT_ROOT, 'feature_engine.py')
+        with open(path, 'r') as f:
+            code = f.read()
+        assert 'df = df.fillna(0)' not in code, \
+            "Dangerous 'df = df.fillna(0)' still in feature_engine.py!"
+
+    def test_price_columns_use_ffill(self):
+        """feature_engine.py should use ffill() for price columns."""
+        path = os.path.join(PROJECT_ROOT, 'feature_engine.py')
+        with open(path, 'r') as f:
+            code = f.read()
+        assert 'ffill()' in code, \
+            "ffill() not found in feature_engine.py — price columns may still be zero-filled"
+
+    def test_ffill_preserves_prices(self):
+        """Forward-fill should carry last known price, not zero."""
+        df = pd.DataFrame({
+            'open': [100.0, np.nan, np.nan],
+            'high': [105.0, np.nan, np.nan],
+            'low': [95.0, np.nan, np.nan],
+            'close': [102.0, np.nan, np.nan],
+            'volume': [50000, np.nan, np.nan],
+            'rsi': [np.nan, np.nan, np.nan],
+            'sma_50': [np.nan, np.nan, np.nan],
+        })
+
+        price_cols = ['open', 'high', 'low', 'close', 'volume']
+        indicator_cols = [c for c in df.columns if c not in price_cols]
+        df[price_cols] = df[price_cols].ffill()
+        df[indicator_cols] = df[indicator_cols].fillna(0)
+
+        assert df['close'].iloc[2] == 102.0, \
+            f"Close should be ffilled to 102.0, got {df['close'].iloc[2]}"
+        assert df['volume'].iloc[1] == 50000, \
+            f"Volume should be ffilled to 50000, got {df['volume'].iloc[1]}"
+        assert df['rsi'].iloc[0] == 0, \
+            f"RSI NaN should become 0, got {df['rsi'].iloc[0]}"
+
+
+# ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
 if __name__ == '__main__':
@@ -367,7 +414,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns]
+    test_classes = [TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

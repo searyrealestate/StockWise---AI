@@ -66,11 +66,16 @@ class FeatureEngine:
             if run_all or "geometry" in indicators:
                 df = self.add_geometry_block(df)
 
-            # === SURGICAL FIX: FINAL SANITIZATION ===
-            # Fill all indicator NaNs with 0. 
-            # If we do not do this, downstream AI models will drop the entire row 
-            # because a single indicator (like a pivot peak) is empty.
-            df = df.fillna(0)
+            # === SURGICAL FIX: SAFE NaN HANDLING ===
+            # Price columns use forward-fill (last known price is better than 0).
+            # Indicator columns use zero-fill (safe for oscillators and booleans).
+            # Zero-filling prices corrupts RSI, SMA, ATR and all ratio calculations.
+            price_cols = [c for c in ['open', 'high', 'low', 'close', 'volume'] if c in df.columns]
+            indicator_cols = [c for c in df.columns if c not in price_cols]
+            if price_cols:
+                df[price_cols] = df[price_cols].ffill()
+            if indicator_cols:
+                df[indicator_cols] = df[indicator_cols].fillna(0)
 
             # --- STANDARDIZE COLUMN NAMES FOR AI AGENT ---
             rename_map = {}
