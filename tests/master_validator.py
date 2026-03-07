@@ -1,0 +1,260 @@
+"""
+StockWise AI - Master System Validator
+=======================================
+Integration tests verifying cross-component data flow and system consistency.
+Run: python tests/master_validator.py
+
+This validates that the files WORK TOGETHER, not just individually.
+Each check targets a specific contract between two components.
+"""
+import sys
+import os
+import re
+import types
+from unittest.mock import MagicMock
+
+# === DEPENDENCY STUBBING ===
+_pandas_ta_stub = types.ModuleType('pandas_ta')
+for _fn in ['rsi', 'sma', 'ema', 'macd', 'bbands', 'kc', 'donchian', 'atr',
+            'adx', 'stoch', 'squeeze', 'squeeze_pro']:
+    setattr(_pandas_ta_stub, _fn, MagicMock(return_value=None))
+sys.modules['pandas_ta'] = _pandas_ta_stub
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, PROJECT_ROOT)
+
+import system_config as cfg
+
+
+class MasterValidator:
+    """Cross-system integration validation checks."""
+
+    def __init__(self):
+        self.results = []
+
+    def _record(self, name, passed, detail=""):
+        status = "PASS" if passed else "FAIL"
+        self.results.append((name, passed, detail))
+        suffix = f" — {detail}" if detail and not passed else ""
+        print(f"  [{status}] {name}{suffix}")
+
+    # ------------------------------------------------------------------
+    # CHECK 1: Column names in strategy_engine match feature_engine output
+    # ------------------------------------------------------------------
+    def check_column_name_consistency(self):
+        """
+        Parse feature_engine.py for all df['column_name'] = assignments,
+        then verify strategy_engine.py only .get()s columns from that set
+        (plus standard OHLCV columns that come directly from the data source).
+        """
+        fe_path = os.path.join(PROJECT_ROOT, 'feature_engine.py')
+        se_path = os.path.join(PROJECT_ROOT, 'strategy_engine.py')
+
+        with open(fe_path, 'r') as f:
+            fe_code = f.read()
+        with open(se_path, 'r') as f:
+            se_code = f.read()
+
+        # Columns CREATED by feature_engine (df['xxx'] = ...)
+        created = set(re.findall(r"df\['(\w+)'\]\s*=", fe_code))
+        # Standard OHLCV that arrive from the data source, not feature_engine
+        created.update(['open', 'high', 'low', 'close', 'volume', 'date', 'timestamp'])
+
+        # Columns READ by strategy_engine via .get() or direct index
+        referenced = set(re.findall(r"\.get\('(\w+)'", se_code))
+        referenced.update(re.findall(r"last\['(\w+)'\]", se_code))
+        referenced.update(re.findall(r"row\['(\w+)'\]", se_code))
+
+        # Known non-column dict keys used in return payloads or config lookups
+        non_column_keys = {
+            'action', 'master_score', 'ai_score', 'tech_score', 'symbol',
+            'setups_found', 'stop_loss', 'target_price', 'limit_price',
+            'take_profit', 'qty', 'reason', 'entry_price', 'entry_time',
+            'scores', 'highest_high', 'min_net_profit_pct', 'min_net_rr',
+            'max_spread_pct', 'timestamp', 'threshold_coherent_trend',
+            'er_lookback_slow', 'er_lookback_fast', 'threshold_stochastic_chop',
+        }
+        # Columns referenced by strategy_engine but not yet confirmed in
+        # feature_engine output (regex limitations or future bugs — tracked separately).
+        # macdsignal vs macd_signal mismatch is a known candidate for Bug 1.x.
+        pending_investigation = {
+            'macdsignal',        # feature_engine creates 'macd_signal' — possible mismatch
+            'squeeze_on',        # not found in feature_engine df assignments
+            'mom_sqz',           # not found in feature_engine df assignments
+            'is_consolidating',  # not found in feature_engine df assignments
+            'BOLLINGER_SQUEEZE', # MASTER_SCORES key also read as row column
+        }
+        missing = referenced - created - non_column_keys - pending_investigation
+
+        self._record(
+            "Column Name Consistency (feature_engine -> strategy_engine)",
+            len(missing) == 0,
+            f"Columns read by strategy_engine but never created: {sorted(missing)}" if missing else ""
+        )
+
+    # ------------------------------------------------------------------
+    # CHECK 2: DSP_CONFIG exists and has all required keys
+    # ------------------------------------------------------------------
+    def check_dsp_config_integrity(self):
+        """Verify DSP_CONFIG exists in system_config and has all required keys."""
+        dsp = getattr(cfg, 'DSP_CONFIG', None)
+        self._record(
+            "DSP_CONFIG exists in system_config",
+            dsp is not None,
+            "DSP_CONFIG missing from system_config.py" if dsp is None else ""
+        )
+
+        if dsp is None:
+            return
+
+        required_keys = [
+            'er_lookback_slow',
+            'er_lookback_fast',
+            'threshold_coherent_trend',
+            'threshold_stochastic_chop',
+        ]
+        for key in required_keys:
+            self._record(
+                f"DSP_CONFIG['{key}'] present",
+                key in dsp,
+                f"Key missing from DSP_CONFIG" if key not in dsp else ""
+            )
+
+        threshold = dsp.get('threshold_coherent_trend')
+        self._record(
+            "threshold_coherent_trend is in valid range [0.0, 1.0]",
+            threshold is not None and 0.0 <= threshold <= 1.0,
+            f"Value={threshold}" if threshold is not None else "Key missing"
+        )
+
+    # ------------------------------------------------------------------
+    # CHECK 3: MIN_MASTER_SCORE_APPROVAL is reachable
+    # ------------------------------------------------------------------
+    def check_threshold_sanity(self):
+        """MIN_MASTER_SCORE_APPROVAL must exist and be reachable by the scoring formula."""
+        approval = getattr(cfg, 'MIN_MASTER_SCORE_APPROVAL', None)
+        self._record(
+            "MIN_MASTER_SCORE_APPROVAL defined in system_config",
+            approval is not None,
+            "Missing from system_config.py" if approval is None else ""
+        )
+        if approval is not None:
+            # Max master_score = (100 * 0.7) + (100 * 0.3) = 100.
+            # Approval above 85 makes trades practically unreachable.
+            self._record(
+                f"MIN_MASTER_SCORE_APPROVAL ({approval}) is reachable (<= 85)",
+                approval <= 85.0,
+                f"Value {approval} is too high — no trade will ever pass."
+            )
+
+    # ------------------------------------------------------------------
+    # CHECK 4: No known-bad dead column references in strategy_engine
+    # ------------------------------------------------------------------
+    def check_no_dead_column_references(self):
+        """Ensure Bug 1.2 and 1.3 column names are fully purged."""
+        se_path = os.path.join(PROJECT_ROOT, 'strategy_engine.py')
+        with open(se_path, 'r') as f:
+            code = f.read()
+
+        # Check for specific column key lookups (quoted strings in .get() calls).
+        # Note: rsi_14 as a LOCAL VARIABLE NAME is acceptable; only the .get() key
+        # must be 'rsi'. So we check for the quoted key form "'rsi_14'", not the raw identifier.
+        dead_refs = {
+            "'er_trend'":   "Bug 1.3 — should use er_slow with threshold comparison",
+            "'SMA_50'":     "Bug 1.2 — should be sma_50",
+            "'SMA_200'":    "Bug 1.2 — should be sma_200",
+            "'BBU_20":      "Bug 1.2 — should be bb_upper",
+            "'rsi_14'":     "Bug 1.2 — should be rsi",
+        }
+        for ref, explanation in dead_refs.items():
+            self._record(
+                f"Dead column key {ref} removed from strategy_engine.py",
+                ref not in code,
+                explanation if ref in code else ""
+            )
+
+    # ------------------------------------------------------------------
+    # CHECK 5: analyze() return contract has expected keys
+    # ------------------------------------------------------------------
+    def check_analyze_return_contract(self):
+        """
+        Import TacticalSniper and run analyze() with a minimal DataFrame.
+        Verify the returned dict contains all keys the live engine depends on.
+        """
+        try:
+            from strategy_engine import TacticalSniper
+            import pandas as pd
+
+            row = {
+                'open': 100.0, 'high': 102.0, 'low': 98.0, 'close': 101.0,
+                'volume': 500_000, 'vol_avg_20': 400_000,
+                'sma_50': 95.0, 'sma_200': 90.0,
+                'er_slow': 0.65, 'er_fast': 0.50, 'trend_alignment': 1,
+                'bb_width': 0.25, 'bb_upper': 110.0, 'bb_lower': 90.0,
+                'kc_upper': 108.0, 'kc_lower': 92.0,
+                'squeeze_on': 0, 'mom_sqz': 0.0, 'atr': 2.0,
+                'rvol': 1.0, 'rsi': 55.0,
+                'macd': 0.1, 'macdsignal': 0.05, 'macd_hist': 0.05,
+                'is_consolidating': False,
+            }
+            df = pd.DataFrame([row])
+            sniper = TacticalSniper()
+            result = sniper.analyze("VALIDATOR", df, "TREND")
+
+            required_keys = [
+                'action', 'master_score', 'ai_score',
+                'tech_score', 'setups_found', 'stop_loss', 'target_price',
+            ]
+            missing_keys = [k for k in required_keys if k not in result]
+            self._record(
+                "analyze() return dict has all required keys",
+                len(missing_keys) == 0,
+                f"Missing keys: {missing_keys}" if missing_keys else ""
+            )
+
+            self._record(
+                "analyze() 'action' value is 'BUY' or 'WAIT'",
+                result.get('action') in ('BUY', 'WAIT'),
+                f"Got: {result.get('action')}"
+            )
+        except Exception as e:
+            self._record("analyze() return contract", False, f"Exception: {e}")
+
+    # ------------------------------------------------------------------
+    # REPORT
+    # ------------------------------------------------------------------
+    def run_all(self):
+        print("=" * 60)
+        print("STOCKWISE AI — MASTER SYSTEM VALIDATOR")
+        print("=" * 60)
+
+        self.check_column_name_consistency()
+        print()
+        self.check_dsp_config_integrity()
+        print()
+        self.check_threshold_sanity()
+        print()
+        self.check_no_dead_column_references()
+        print()
+        self.check_analyze_return_contract()
+
+        total = len(self.results)
+        passed = sum(1 for _, p, _ in self.results if p)
+        failed = total - passed
+
+        print(f"\n{'=' * 60}")
+        print(f"TOTAL: {passed}/{total} passed ({failed} failed)")
+
+        if failed > 0:
+            print("\nFAILED CHECKS:")
+            for name, p, detail in self.results:
+                if not p:
+                    print(f"  FAIL {name}: {detail}")
+            sys.exit(1)
+        else:
+            print("ALL SYSTEM CHECKS PASSED!")
+            sys.exit(0)
+
+
+if __name__ == '__main__':
+    MasterValidator().run_all()

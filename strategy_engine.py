@@ -229,7 +229,9 @@ class TacticalSniper:
         # --- SETUP 1: DSP SUPER TREND (The King of Trends) ---
         # Checks if the Digital Signal Processing (DSP) Engine confirms a noise-free trend.
         # Requires both the Slow Wave (Trend) and Fast Wave (Cycle) to align.
-        if last.get('er_trend', 0) == 1 and last.get('trend_alignment', 0) == 1:
+        er_slow_val = last.get('er_slow', 0)
+        er_threshold = getattr(cfg, 'DSP_CONFIG', {}).get('threshold_coherent_trend', 0.55)
+        if er_slow_val >= er_threshold and last.get('trend_alignment', 0) == 1:
             active_setups.append("DSP_SUPER_TREND")
             technical_weight += 35  # Very strong signal
             
