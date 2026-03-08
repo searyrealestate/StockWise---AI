@@ -78,10 +78,10 @@ class MasterValidator:
         # feature_engine output (regex limitations or future bugs — tracked separately).
         # macdsignal vs macd_signal mismatch is a known candidate for Bug 1.x.
         pending_investigation = {
-            'macdsignal',        # feature_engine creates 'macd_signal' — possible mismatch
             'is_consolidating',  # not found in feature_engine df assignments
             'BOLLINGER_SQUEEZE', # MASTER_SCORES key also read as row column
             # squeeze_on, mom_sqz — fixed by Bug 1.6a, now created in feature_engine
+            # macdsignal — fixed by Bug 2.1, now correctly 'macd_signal'
         }
         missing = referenced - created - non_column_keys - pending_investigation
 

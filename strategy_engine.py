@@ -281,7 +281,7 @@ class TacticalSniper:
         # Fixes the "Mid-Range Blind Spot". Recognizes RSI 50-75 as bullish momentum.
         rsi = last.get('rsi', 50.0)
         macd = last.get('macd', 0)
-        signal = last.get('macdsignal', 0)
+        signal = last.get('macd_signal', 0)
         
         if 50 < rsi < 75 and macd > signal:
             active_setups.append("MOMENTUM_BREAKOUT")

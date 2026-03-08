@@ -166,3 +166,17 @@ buy_date_clean = buy_date_raw.split("T")[0] if "T" in buy_date_raw else buy_date
 **Tests added:** 6 unit tests + 3 system checks in master_validator.
 
 **Totals:** 36/36 unit tests pass, 23/23 system checks pass.
+
+---
+
+### Bug 2.1 — `macdsignal` vs `macd_signal` column name mismatch (strategy_engine.py)
+
+**Problem:** Setup 5 (`MOMENTUM_BREAKOUT`) read `last.get('macdsignal', 0)` but `feature_engine.py` creates the column as `macd_signal`. The default `0` caused `macd > signal` to be `True` any time MACD was positive — generating false-positive momentum signals with no actual crossover.
+
+**Fix:** `strategy_engine.py:284` — `'macdsignal'` → `'macd_signal'` (one character, underscore vs camelCase).
+
+**Impact:** Setup 5 now correctly detects real MACD crossovers. `macdsignal` removed from `pending_investigation` set in master_validator.
+
+**Tests added:** 4 unit tests (column name guard, crossover fires, blocked below signal, no false positive from default).
+
+**Totals:** 40/40 unit tests pass, 23/23 system checks pass.

@@ -515,6 +515,47 @@ class TestBug1_1_AIFeatureMismatch:
 
 
 # ============================================================
+# BUG 2.1: macdsignal vs macd_signal Column Name Mismatch
+# ============================================================
+class TestBug2_1_MacdSignalName:
+    """Verify Setup 5 uses correct macd_signal column name."""
+
+    def test_macd_signal_column_name_correct(self):
+        """strategy_engine.py should reference 'macd_signal', not 'macdsignal'."""
+        path = os.path.join(PROJECT_ROOT, 'strategy_engine.py')
+        with open(path, 'r') as f:
+            code = f.read()
+        assert "'macdsignal'" not in code, \
+            "Old column name 'macdsignal' still in strategy_engine.py!"
+        assert "'macd_signal'" in code, \
+            "'macd_signal' not found -- Setup 5 can't read MACD signal line"
+
+    def test_momentum_breakout_fires_correctly(self):
+        """Setup 5 should fire when RSI 50-75 AND macd > macd_signal (real crossover)."""
+        sniper = TacticalSniper()
+        df = _make_row(rsi=60.0, macd=1.5, macd_signal=0.5)
+        result = sniper.analyze("TEST", df, "TREND")
+        assert "MOMENTUM_BREAKOUT" in result.get('setups_found', []), \
+            f"Setup 5 should fire on MACD crossover. Got: {result.get('setups_found')}"
+
+    def test_momentum_breakout_blocked_when_macd_below_signal(self):
+        """Setup 5 should NOT fire when macd < macd_signal (bearish)."""
+        sniper = TacticalSniper()
+        df = _make_row(rsi=60.0, macd=0.5, macd_signal=1.5)
+        result = sniper.analyze("TEST", df, "TREND")
+        assert "MOMENTUM_BREAKOUT" not in result.get('setups_found', []), \
+            f"Setup 5 should NOT fire when MACD below signal. Got: {result.get('setups_found')}"
+
+    def test_no_false_positive_from_zero_default(self):
+        """With correct column name, a negative MACD should not trigger breakout."""
+        sniper = TacticalSniper()
+        df = _make_row(rsi=60.0, macd=-0.5, macd_signal=0.3)
+        result = sniper.analyze("TEST", df, "TREND")
+        assert "MOMENTUM_BREAKOUT" not in result.get('setups_found', []), \
+            f"Negative MACD should not trigger breakout. Got: {result.get('setups_found')}"
+
+
+# ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
 if __name__ == '__main__':
@@ -522,7 +563,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")
