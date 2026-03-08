@@ -251,3 +251,41 @@ if regime == "NEUTRAL":
 **Tests added:** 5 unit tests (config exists, values consistent, defaults are None, config-driven labeling, hardcoded call removed). xgboost stubbed in sys.modules so train_model.py can be imported without the package installed.
 
 **Totals:** 52/52 unit tests pass, 25/25 system checks pass.
+
+---
+
+## Phase 2 — Let Winners Run (Milestone Alert System)
+
+### Phase 2.5a — Milestone Alert Infrastructure (live_trading_engine.py + system_config.py)
+
+**Context:** Converting from "sell at fixed take_profit" to "let winners run with milestone-based alerts." This is step 1 of 3 — adds config and helper methods without changing any existing behavior.
+
+**Changes:**
+
+| File | Change |
+|------|--------|
+| `system_config.py` | Added `MILESTONE_ALERT_CONFIG` after `KINETIC_STOP_CONFIG` |
+| `live_trading_engine.py` | Added `_calculate_real_breakeven()` method |
+| `live_trading_engine.py` | Added `_check_and_send_milestone_alert()` method |
+
+**MILESTONE_ALERT_CONFIG keys:**
+
+| Key | Value | Purpose |
+|-----|-------|---------|
+| `safe_zone_buffer_pct` | 0.002 | 0.2% safety margin above true breakeven |
+| `min_stop_change_pct` | 0.01 | Alert only if stop moved > 1% of current price |
+| `min_alert_interval_minutes` | 15 | Minimum minutes between alerts per ticker |
+| `runner_atr_mult` | 0.5 | Runner stop = highest_high - (ATR * 0.5) |
+| `runner_min_distance_pct` | 0.008 | Floor: stop never closer than 0.8% from high |
+
+**`_calculate_real_breakeven(entry_price, qty)`:** Computes true breakeven = entry + (commissions + slippage) / (1 - tax_rate) + buffer. Prevents premature "safe zone" alerts before costs are actually covered.
+
+**`_check_and_send_milestone_alert(symbol, position, new_stop, current_price)`:** 4-gate event-driven alert system:
+- Gate 1: No alerts before real breakeven is reached
+- Gate 2: First alert = "Safe Zone Reached" notification (breakeven covered)
+- Gate 3: Cooldown — minimum `min_alert_interval_minutes` between alerts
+- Gate 4: Stop must have moved > `min_stop_change_pct` to fire
+
+**Impact:** Infrastructure only — methods added but not yet called. No existing behavior changed. Next: Phase 2.5b wires these into `manage_open_positions` and adds Phase 4 Runner Mode.
+
+**Totals:** 52/52 unit tests pass, 25/25 system checks pass (no new tests — no logic changes).

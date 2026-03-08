@@ -389,6 +389,134 @@ class LiveTradingEngine:
         except Exception as e:
             logger.error(f"[{symbol}] Failed to write cooldown: {e}")
 
+    def _calculate_real_breakeven(self, entry_price, qty):
+        """
+        [Phase 2.5] Calculates the TRUE breakeven price including all round-trip costs.
+        The user should not move their stop to breakeven until profit exceeds this.
+
+        Costs: entry commission + exit commission + slippage (both ways) + tax on gain.
+        Formula: breakeven = entry_price + total_costs_per_share / (1 - tax_rate)
+        The division by (1-tax) accounts for the fact that the gain itself is taxed.
+        """
+        costs = cfg.COSTS_CONFIG
+        milestone_cfg = getattr(cfg, 'MILESTONE_ALERT_CONFIG', {})
+
+        commission_per_share = costs.get('commission_per_share', 0.005)
+        min_commission = costs.get('min_commission', 1.00)
+        slippage_pct = costs.get('slippage_pct', 0.001)
+        tax_rate = costs.get('tax_rate', 0.25)
+        buffer_pct = milestone_cfg.get('safe_zone_buffer_pct', 0.002)
+
+        # Round-trip commissions
+        entry_commission = max(qty * commission_per_share, min_commission)
+        exit_commission = max(qty * commission_per_share, min_commission)
+        total_commission = entry_commission + exit_commission
+
+        # Round-trip slippage
+        total_slippage = entry_price * slippage_pct * 2  # both entry and exit
+
+        # Total cost per share
+        cost_per_share = (total_commission / max(qty, 1)) + total_slippage
+
+        # Breakeven must cover costs AFTER tax: gain / (1 - tax_rate) = cost_per_share
+        breakeven_gain_per_share = cost_per_share / (1 - tax_rate) if tax_rate < 1 else cost_per_share
+
+        # Add safety buffer
+        buffer_per_share = entry_price * buffer_pct
+
+        breakeven_price = entry_price + breakeven_gain_per_share + buffer_per_share
+
+        logger.debug(f"Real breakeven for {qty} shares @ ${entry_price:.2f}: "
+                     f"${breakeven_price:.2f} (costs: ${cost_per_share:.4f}/share, "
+                     f"buffer: {buffer_pct:.1%})")
+
+        return round(breakeven_price, 2)
+
+    def _check_and_send_milestone_alert(self, symbol, position, new_stop, current_price):
+        """
+        [Phase 2.5] Event-driven milestone alerts.
+        Sends a Telegram notification when the recommended stop-loss changes significantly.
+
+        Logic:
+        1. First alert: only after real breakeven is reached (covers commissions + tax)
+        2. Subsequent alerts: when stop changes by > min_stop_change_pct
+        3. Cooldown: minimum min_alert_interval_minutes between alerts
+        """
+        milestone_cfg = getattr(cfg, 'MILESTONE_ALERT_CONFIG', {})
+        min_change_pct = milestone_cfg.get('min_stop_change_pct', 0.01)
+        min_interval = milestone_cfg.get('min_alert_interval_minutes', 15)
+
+        entry_price = position.get('entry_price', current_price)
+        qty = position.get('qty', 10)
+
+        # Calculate real breakeven (first time only, then cache in position)
+        if 'real_breakeven' not in position:
+            position['real_breakeven'] = self._calculate_real_breakeven(entry_price, qty)
+
+        real_breakeven = position['real_breakeven']
+
+        # Gate 1: Don't send any alerts until price is above real breakeven
+        if current_price < real_breakeven and not position.get('breakeven_alerted'):
+            return
+
+        # Gate 2: First alert -- breakeven reached for the first time
+        if current_price >= real_breakeven and not position.get('breakeven_alerted'):
+            position['breakeven_alerted'] = True
+            position['last_alerted_stop'] = new_stop
+            position['last_alert_time'] = time.time()
+
+            profit_locked_pct = ((new_stop - entry_price) / entry_price) * 100
+            msg = (f"**{symbol}: SAFE ZONE REACHED**\n"
+                   f"Price: ${current_price:.2f}\n"
+                   f"Recommended Stop: ${new_stop:.2f}\n"
+                   f"Breakeven: ${real_breakeven:.2f}\n"
+                   f"From here you don't lose a cent.\n"
+                   f"Locked P&L: {profit_locked_pct:+.1f}%")
+
+            if hasattr(self, 'notifier') and self.notifier:
+                self.notifier.send_message(msg)
+            logger.info(f"[{symbol}] MILESTONE: Safe Zone reached. Stop: ${new_stop:.2f}")
+            return
+
+        # Gate 3: Check cooldown timer
+        last_alert_time = position.get('last_alert_time', 0)
+        if (time.time() - last_alert_time) < (min_interval * 60):
+            return
+
+        # Gate 4: Check if stop change is significant enough
+        last_alerted_stop = position.get('last_alerted_stop', entry_price)
+        stop_change_pct = abs(new_stop - last_alerted_stop) / current_price
+
+        if stop_change_pct < min_change_pct:
+            return
+
+        # All gates passed -- send milestone alert
+        position['last_alerted_stop'] = new_stop
+        position['last_alert_time'] = time.time()
+
+        profit_pct = ((current_price - entry_price) / entry_price) * 100
+        locked_pct = ((new_stop - entry_price) / entry_price) * 100
+
+        # Determine alert level based on profit
+        if position.get('runner_mode'):
+            phase_label = "RUNNER MODE"
+        elif profit_pct >= 10:
+            phase_label = "EXTENDED RUN"
+        elif profit_pct >= 5:
+            phase_label = "STRONG PROFIT"
+        else:
+            phase_label = "TRAILING UP"
+
+        msg = (f"**{symbol}: {phase_label}**\n"
+               f"Current: ${current_price:.2f} ({profit_pct:+.1f}%)\n"
+               f"Recommended Stop: ${new_stop:.2f}\n"
+               f"Locked Profit: {locked_pct:+.1f}%\n"
+               f"Move your stop-loss to ${new_stop:.2f}")
+
+        if hasattr(self, 'notifier') and self.notifier:
+            self.notifier.send_message(msg)
+        logger.info(f"[{symbol}] MILESTONE: {phase_label}. Stop: ${new_stop:.2f}, Locked: {locked_pct:+.1f}%")
+
     def execute_ticket(self, ticket, current_regime):
         """
         Receives the "BUY" ticket from the StrategyEngine (Conductor).

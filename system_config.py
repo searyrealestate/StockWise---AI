@@ -380,6 +380,21 @@ KINETIC_STOP_CONFIG = {
     "phase3_atr_mult": 1.0                   # The choke mechanism tightens the stop to just 1.0 ATR from the highest high.
 }
 
+MILESTONE_ALERT_CONFIG = {
+    # Real Breakeven: first alert only fires after profit covers all costs
+    # (commissions + slippage + tax). This buffer is added on top of actual costs.
+    "safe_zone_buffer_pct": 0.002,      # 0.2% safety margin above true breakeven
+
+    # Event-driven alert triggers -- controls when user gets notified
+    "min_stop_change_pct": 0.01,         # Alert only if stop moved > 1% of current price
+    "min_alert_interval_minutes": 15,    # Minimum 15 min between alerts per ticker
+
+    # Phase 4 Runner Mode: replaces hard take_profit with ultra-tight trailing
+    "runner_atr_mult": 0.5,              # Runner stop = highest_high - (ATR * 0.5)
+    "runner_min_distance_pct": 0.008,    # Floor: stop never closer than 0.8% from high
+                                          # Prevents noise exit when ATR is tiny
+}
+
 PORTFOLIO_DEFENSE = {
     # Structural risk management to prevent massive account blowups.
     "max_covariance_corr": 0.85,         # If the new stock moves exactly like our current portfolio (>85% correlation), we veto it.
