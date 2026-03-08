@@ -203,3 +203,29 @@ is_squeeze = row.get('squeeze_on', 0) == 1
 **Tests added:** 3 unit tests (bonus fires with squeeze_on=1, old column names absent, squeeze_on present in source).
 
 **Totals:** 43/43 unit tests pass, 23/23 system checks pass.
+
+---
+
+### Bug 2.3 — HALT/NEUTRAL Regime Does Not Block Analysis (strategy_engine.py)
+
+**Problem:** `evaluate_ticker()` classified the regime but never acted on HALT or NEUTRAL outcomes. Both regimes passed straight through to `TacticalSniper.analyze()`, allowing the system to generate BUY signals during a crash (HALT) or in a directionless dead zone (NEUTRAL).
+
+**Fix:** Inserted two early-return gates immediately after `classify_regime()` in `evaluate_ticker()`:
+
+```python
+# [Bug 2.3 Fix] Block analysis for HALT and NEUTRAL regimes
+if regime == "HALT":
+    logger.debug(f"[{symbol}] Regime HALT -- velocity divergence detected. Skipping analysis.")
+    return {"symbol": symbol, "action": "WAIT", "master_score": 0,
+            "reason": "Regime HALT: Velocity Divergence (er_slow/er_fast conflict)"}
+if regime == "NEUTRAL":
+    logger.debug(f"[{symbol}] Regime NEUTRAL -- dead zone. Skipping analysis.")
+    return {"symbol": symbol, "action": "WAIT", "master_score": 0,
+            "reason": "Regime NEUTRAL: No clear trend or chop signal"}
+```
+
+**Impact:** HALT and NEUTRAL tickers now return `WAIT` immediately. TREND and CHOP still pass through to full sniper analysis as before.
+
+**Tests added:** 4 unit tests (HALT returns WAIT, NEUTRAL returns WAIT, TREND still analyzed, CHOP still analyzed). Tests mock `calculate_features` to pass-through hand-crafted er_slow/er_fast values that define the regime under test. 2 system checks added to master_validator.
+
+**Totals:** 47/47 unit tests pass, 25/25 system checks pass.

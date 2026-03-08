@@ -286,6 +286,38 @@ class MasterValidator:
         )
 
     # ------------------------------------------------------------------
+    # CHECK 8: Regime Gate in evaluate_ticker (Bug 2.3)
+    # ------------------------------------------------------------------
+    def check_regime_gate(self):
+        """Verify evaluate_ticker blocks HALT and NEUTRAL regimes."""
+        import re
+        se_path = os.path.join(PROJECT_ROOT, 'strategy_engine.py')
+        with open(se_path, 'r') as f:
+            code = f.read()
+
+        match = re.search(
+            r'def evaluate_ticker\(.*?\n(.*?)(?=\n    def |\nclass |\Z)',
+            code, re.DOTALL
+        )
+        if not match:
+            self._record("evaluate_ticker method exists", False, "Method not found")
+            return
+
+        method_body = match.group(1)
+
+        self._record(
+            "evaluate_ticker blocks HALT regime",
+            'regime == "HALT"' in method_body or "regime == 'HALT'" in method_body,
+            "HALT regime not checked -- system may buy during crash"
+        )
+
+        self._record(
+            "evaluate_ticker blocks NEUTRAL regime",
+            'regime == "NEUTRAL"' in method_body or "regime == 'NEUTRAL'" in method_body,
+            "NEUTRAL regime not checked -- system analyzes in dead zone"
+        )
+
+    # ------------------------------------------------------------------
     # REPORT
     # ------------------------------------------------------------------
     def run_all(self):
@@ -308,6 +340,8 @@ class MasterValidator:
         self.check_cooldown_config_param()
         print()
         self.check_ai_pipeline_integrity()
+        print()
+        self.check_regime_gate()
 
         total = len(self.results)
         passed = sum(1 for _, p, _ in self.results if p)

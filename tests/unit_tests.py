@@ -15,7 +15,7 @@ works (AI score defaults to 50.0 when model is None).
 import sys
 import os
 import types
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 # === DEPENDENCY STUBBING (must happen before any project imports) ===
 # Stub pandas_ta regardless of whether it's installed — tests should not
@@ -592,6 +592,63 @@ class TestBug2_2_SqueezeBonus:
 
 
 # ============================================================
+# BUG 2.3: HALT/NEUTRAL Regime Does Not Block Analysis
+# ============================================================
+class TestBug2_3_RegimeGate:
+    """Verify HALT and NEUTRAL regimes block analysis in evaluate_ticker."""
+
+    def test_halt_regime_returns_wait(self):
+        """HALT regime should return WAIT without running sniper.analyze()."""
+        from strategy_engine import StrategyEngine
+        engine = StrategyEngine()
+        # er_slow > 0.6 AND er_fast < 0.2 -> HALT (velocity divergence)
+        df = _make_row(er_slow=0.70, er_fast=0.15)
+        # Bypass feature calculation so our hand-crafted er_slow/er_fast survive intact
+        with patch.object(engine.features, 'calculate_features', return_value=df):
+            result = engine.evaluate_ticker("TEST_HALT", df)
+        assert result.get('action') == 'WAIT', \
+            f"HALT regime should return WAIT. Got: {result.get('action')}"
+        assert 'HALT' in result.get('reason', ''), \
+            f"Reason should mention HALT. Got: {result.get('reason')}"
+
+    def test_neutral_regime_returns_wait(self):
+        """NEUTRAL regime should return WAIT without running sniper.analyze()."""
+        from strategy_engine import StrategyEngine
+        engine = StrategyEngine()
+        # er_slow between chop_thr (0.30) and trend_thr (0.55) -> NEUTRAL
+        df = _make_row(er_slow=0.42, er_fast=0.40)
+        # Bypass feature calculation so our hand-crafted er_slow/er_fast survive intact
+        with patch.object(engine.features, 'calculate_features', return_value=df):
+            result = engine.evaluate_ticker("TEST_NEUTRAL", df)
+        assert result.get('action') == 'WAIT', \
+            f"NEUTRAL regime should return WAIT. Got: {result.get('action')}"
+        assert 'NEUTRAL' in result.get('reason', ''), \
+            f"Reason should mention NEUTRAL. Got: {result.get('reason')}"
+
+    def test_trend_regime_still_analyzed(self):
+        """TREND regime should still pass through to full analysis."""
+        from strategy_engine import StrategyEngine
+        engine = StrategyEngine()
+        # er_slow >= 0.55 AND er_fast NOT < 0.2 → TREND
+        df = _make_row(er_slow=0.70, er_fast=0.65)
+        result = engine.evaluate_ticker("TEST_TREND", df)
+        reason = result.get('reason', '')
+        assert 'HALT' not in reason and 'NEUTRAL' not in reason, \
+            f"TREND should not be blocked by regime gate. Reason: {reason}"
+
+    def test_chop_regime_still_analyzed(self):
+        """CHOP regime should still pass through to full analysis."""
+        from strategy_engine import StrategyEngine
+        engine = StrategyEngine()
+        # er_slow <= 0.30 → CHOP
+        df = _make_row(er_slow=0.20, er_fast=0.15)
+        result = engine.evaluate_ticker("TEST_CHOP", df)
+        reason = result.get('reason', '')
+        assert 'HALT' not in reason and 'NEUTRAL' not in reason, \
+            f"CHOP should not be blocked by regime gate. Reason: {reason}"
+
+
+# ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
 if __name__ == '__main__':
@@ -599,7 +656,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

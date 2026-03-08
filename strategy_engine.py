@@ -499,7 +499,18 @@ class StrategyEngine:
 
             # 1. Identify Regime (Trend vs Chop)
             regime = self.router.classify_regime(df)
-            
+
+            # [Bug 2.3 Fix] Block analysis for HALT and NEUTRAL regimes
+            if regime == "HALT":
+                logger.debug(f"[{symbol}] Regime HALT -- velocity divergence detected. Skipping analysis.")
+                return {"symbol": symbol, "action": "WAIT", "master_score": 0,
+                        "reason": "Regime HALT: Velocity Divergence (er_slow/er_fast conflict)"}
+
+            if regime == "NEUTRAL":
+                logger.debug(f"[{symbol}] Regime NEUTRAL -- dead zone. Skipping analysis.")
+                return {"symbol": symbol, "action": "WAIT", "master_score": 0,
+                        "reason": "Regime NEUTRAL: No clear trend or chop signal"}
+
             # 2. RUN FULL STRATEGY (Agent 2 - The Sniper)
             verdict = self.sniper.analyze(symbol, df, regime)
             
