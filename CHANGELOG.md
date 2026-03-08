@@ -180,3 +180,26 @@ buy_date_clean = buy_date_raw.split("T")[0] if "T" in buy_date_raw else buy_date
 **Tests added:** 4 unit tests (column name guard, crossover fires, blocked below signal, no false positive from default).
 
 **Totals:** 40/40 unit tests pass, 23/23 system checks pass.
+
+---
+
+### Bug 2.2 — `is_consolidating` / `BOLLINGER_SQUEEZE` columns don't exist (strategy_engine.py)
+
+**Problem:** `apply_checklist_bonus()` computed `is_squeeze` by reading `'is_consolidating'` and `'BOLLINGER_SQUEEZE'` from the row — neither of which is created by `feature_engine.py`. Both always returned `False`, so the squeeze bonus (+10 pts) never fired.
+
+**Fix:** Replaced with `squeeze_on` (created in Bug 1.6a), which performs the same BB-inside-KC detection:
+
+```python
+# Before:
+is_squeeze = row.get('is_consolidating', False) or row.get('BOLLINGER_SQUEEZE', False)
+# After:
+is_squeeze = row.get('squeeze_on', 0) == 1
+```
+
+**Impact:** Squeeze bonus (+10 pts) in `apply_checklist_bonus()` can now fire.
+
+**Cleanup:** `pending_investigation` set in master_validator is now empty — all previously tracked column mismatches have been resolved across Bugs 1.6a, 2.1, and 2.2. Column consistency check now runs with zero exclusions.
+
+**Tests added:** 3 unit tests (bonus fires with squeeze_on=1, old column names absent, squeeze_on present in source).
+
+**Totals:** 43/43 unit tests pass, 23/23 system checks pass.

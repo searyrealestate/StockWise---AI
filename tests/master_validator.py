@@ -77,12 +77,11 @@ class MasterValidator:
         # Columns referenced by strategy_engine but not yet confirmed in
         # feature_engine output (regex limitations or future bugs — tracked separately).
         # macdsignal vs macd_signal mismatch is a known candidate for Bug 1.x.
-        pending_investigation = {
-            'is_consolidating',  # not found in feature_engine df assignments
-            'BOLLINGER_SQUEEZE', # MASTER_SCORES key also read as row column
-            # squeeze_on, mom_sqz — fixed by Bug 1.6a, now created in feature_engine
-            # macdsignal — fixed by Bug 2.1, now correctly 'macd_signal'
-        }
+        # All previously pending columns are now resolved:
+        # squeeze_on, mom_sqz — fixed by Bug 1.6a
+        # macdsignal — fixed by Bug 2.1 (now macd_signal)
+        # is_consolidating, BOLLINGER_SQUEEZE — fixed by Bug 2.2 (replaced with squeeze_on)
+        pending_investigation = set()
         missing = referenced - created - non_column_keys - pending_investigation
 
         self._record(

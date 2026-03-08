@@ -556,6 +556,42 @@ class TestBug2_1_MacdSignalName:
 
 
 # ============================================================
+# BUG 2.2: is_consolidating / BOLLINGER_SQUEEZE Don't Exist
+# ============================================================
+class TestBug2_2_SqueezeBonus:
+    """Verify checklist squeeze bonus uses squeeze_on column."""
+
+    def test_squeeze_bonus_fires_with_squeeze_on(self):
+        """Squeeze bonus +10 should fire when squeeze_on == 1."""
+        from strategy_engine import StrategyEngine
+        engine = StrategyEngine()
+        row_yes = _make_row(squeeze_on=1).iloc[0]
+        row_no = _make_row(squeeze_on=0).iloc[0]
+        result_yes = engine.apply_checklist_bonus(row_yes, 50.0)
+        result_no = engine.apply_checklist_bonus(row_no, 50.0)
+        assert result_yes > result_no, \
+            f"Squeeze bonus not applied. With squeeze_on=1: {result_yes}, Without: {result_no}"
+
+    def test_old_column_names_removed(self):
+        """'is_consolidating' and 'BOLLINGER_SQUEEZE' should not be used as column lookups."""
+        path = os.path.join(PROJECT_ROOT, 'strategy_engine.py')
+        with open(path, 'r') as f:
+            code = f.read()
+        assert "'is_consolidating'" not in code, \
+            "'is_consolidating' still referenced in strategy_engine.py!"
+        assert "'BOLLINGER_SQUEEZE'" not in code, \
+            "'BOLLINGER_SQUEEZE' still referenced in strategy_engine.py!"
+
+    def test_squeeze_on_used_in_checklist(self):
+        """apply_checklist_bonus should reference 'squeeze_on'."""
+        path = os.path.join(PROJECT_ROOT, 'strategy_engine.py')
+        with open(path, 'r') as f:
+            code = f.read()
+        assert "'squeeze_on'" in code, \
+            "'squeeze_on' not found in strategy_engine.py checklist bonus"
+
+
+# ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
 if __name__ == '__main__':
@@ -563,7 +599,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

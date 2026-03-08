@@ -443,7 +443,7 @@ class StrategyEngine:
             bonus += 5.0
             
         # 6. Volatility Contraction (Squeeze): Historic low width
-        is_squeeze = row.get('is_consolidating', False) or row.get('BOLLINGER_SQUEEZE', False)
+        is_squeeze = row.get('squeeze_on', 0) == 1
         if is_squeeze:
             bonus += 10.0
             
