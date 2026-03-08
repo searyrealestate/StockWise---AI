@@ -402,6 +402,12 @@ SCAN_ROUTING_CONFIG = {
 DEFAULT_TRAINING_SYMBOLS = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN',
                              'META', 'TSLA', 'AMD', 'NFLX', 'SPY']
 
+# AI Label Generation Config: defines what counts as a "profitable" trade for training
+AI_LABEL_CONFIG = {
+    "lookahead_days": 5,        # How many days forward to look for profit (range: 1-20)
+    "profit_target_pct": 0.02,  # Minimum gain to label as profitable (range: 0.005-0.10)
+}
+
 # --- 8. GLOBAL SETTINGS ---
 MODE = "PAPER" # Operational Mode: "PAPER" (Simulated) or "LIVE" (Real Money)
 LOG_LEVEL = logging.DEBUG # Default logging level - logging.INFO or logging.DEBUG

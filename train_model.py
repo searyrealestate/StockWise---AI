@@ -179,12 +179,17 @@ class RegimeModelTrainer:
         
         return X_matrix, Y_matrix, Weights_matrix
     
-    def _generate_labels(self, df, lookahead=5, profit_target=0.03):
+    def _generate_labels(self, df, lookahead=None, profit_target=None):
         """
         The Ground Truth Generator.
-        We teach the AI by looking into the future. 
-        Did the stock go up by 3% within the next 5 days? If yes, Label = 1. Else = 0.
+        Looks ahead N days. If the stock's high exceeded the profit target, Label = 1.
+        Config: AI_LABEL_CONFIG in system_config.py
         """
+        label_cfg = getattr(cfg, 'AI_LABEL_CONFIG', {})
+        if lookahead is None:
+            lookahead = label_cfg.get('lookahead_days', 5)
+        if profit_target is None:
+            profit_target = label_cfg.get('profit_target_pct', 0.02)
         logger.debug(f"Generating labels: {lookahead}-day lookahead, {profit_target*100}% target.")
         # Find the maximum high over the next 'lookahead' days
         future_high = df['high'].shift(-1).rolling(window=lookahead, min_periods=1).max()
@@ -219,7 +224,7 @@ class RegimeModelTrainer:
                 df = self.fe.calculate_features(df, strategy_config={"active_indicators": ["all"]})
                 
                 # 3. Apply labels (Ground Truth)
-                df = self._generate_labels(df, lookahead=5, profit_target=0.02)
+                df = self._generate_labels(df)
                 
                 master_data.append(df)
                 logger.debug(f"[{sym}] Processed {len(df)} rows for Universal Dataset.")

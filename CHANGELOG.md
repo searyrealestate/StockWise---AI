@@ -229,3 +229,25 @@ if regime == "NEUTRAL":
 **Tests added:** 4 unit tests (HALT returns WAIT, NEUTRAL returns WAIT, TREND still analyzed, CHOP still analyzed). Tests mock `calculate_features` to pass-through hand-crafted er_slow/er_fast values that define the regime under test. 2 system checks added to master_validator.
 
 **Totals:** 47/47 unit tests pass, 25/25 system checks pass.
+
+---
+
+### Bug 2.4 — `_generate_labels` profit_target Inconsistency + Hardcoded Values (train_model.py + system_config.py)
+
+**Problem:** Two issues in `_generate_labels()`:
+1. Default was `profit_target=0.03` (3%) but `build_universal_dataset()` called it with `profit_target=0.02` (2%) — docstring and call site contradicted each other.
+2. Both `lookahead=5` and `profit_target=0.02` were hardcoded, violating the zero-hardcoded-values rule.
+
+**Fix:**
+
+| File | Change |
+|------|--------|
+| `system_config.py` | Added `AI_LABEL_CONFIG = {"lookahead_days": 5, "profit_target_pct": 0.02}` after `DEFAULT_TRAINING_SYMBOLS` |
+| `train_model.py` | `_generate_labels()` defaults changed to `None`; reads from `AI_LABEL_CONFIG` at runtime |
+| `train_model.py` | `build_universal_dataset()` call changed from `_generate_labels(df, lookahead=5, profit_target=0.02)` to `_generate_labels(df)` |
+
+**Impact:** Label generation parameters are now centrally configurable. Default and explicit calls share the same config source — no more docstring/call-site mismatch.
+
+**Tests added:** 5 unit tests (config exists, values consistent, defaults are None, config-driven labeling, hardcoded call removed). xgboost stubbed in sys.modules so train_model.py can be imported without the package installed.
+
+**Totals:** 52/52 unit tests pass, 25/25 system checks pass.

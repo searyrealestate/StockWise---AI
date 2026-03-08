@@ -26,6 +26,12 @@ for _fn in ['rsi', 'sma', 'ema', 'macd', 'bbands', 'kc', 'donchian', 'atr',
     setattr(_pandas_ta_stub, _fn, MagicMock(return_value=None))
 sys.modules['pandas_ta'] = _pandas_ta_stub
 
+# Stub xgboost so train_model.py can be imported without the package installed.
+_xgb_stub = types.ModuleType('xgboost')
+_xgb_stub.XGBClassifier = MagicMock
+_xgb_stub.XGBRegressor = MagicMock
+sys.modules['xgboost'] = _xgb_stub
+
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
@@ -649,6 +655,78 @@ class TestBug2_3_RegimeGate:
 
 
 # ============================================================
+# BUG 2.4: _generate_labels profit_target Inconsistency + Hardcoded Values
+# ============================================================
+class TestBug2_4_LabelConfig:
+    """Verify _generate_labels reads from AI_LABEL_CONFIG and has no hardcoded defaults."""
+
+    def test_ai_label_config_exists_in_system_config(self):
+        """AI_LABEL_CONFIG must be present in system_config with required keys."""
+        import system_config as cfg
+        label_cfg = getattr(cfg, 'AI_LABEL_CONFIG', None)
+        assert label_cfg is not None, \
+            "AI_LABEL_CONFIG missing from system_config.py"
+        assert 'lookahead_days' in label_cfg, \
+            "AI_LABEL_CONFIG missing 'lookahead_days' key"
+        assert 'profit_target_pct' in label_cfg, \
+            "AI_LABEL_CONFIG missing 'profit_target_pct' key"
+
+    def test_ai_label_config_values_are_consistent(self):
+        """AI_LABEL_CONFIG values must match Bug 2.4 spec: lookahead=5, profit=0.02."""
+        import system_config as cfg
+        label_cfg = cfg.AI_LABEL_CONFIG
+        assert label_cfg['lookahead_days'] == 5, \
+            f"lookahead_days should be 5, got {label_cfg['lookahead_days']}"
+        assert label_cfg['profit_target_pct'] == 0.02, \
+            f"profit_target_pct should be 0.02, got {label_cfg['profit_target_pct']}"
+
+    def test_generate_labels_defaults_are_none(self):
+        """_generate_labels() must use None defaults, not hardcoded 5 and 0.03."""
+        import inspect
+        from train_model import RegimeModelTrainer
+        sig = inspect.signature(RegimeModelTrainer._generate_labels)
+        params = sig.parameters
+        assert params['lookahead'].default is None, \
+            f"lookahead default should be None, got {params['lookahead'].default}"
+        assert params['profit_target'].default is None, \
+            f"profit_target default should be None, got {params['profit_target'].default}"
+
+    def test_generate_labels_reads_config_when_no_args(self):
+        """_generate_labels() called with no args must produce labels using AI_LABEL_CONFIG values."""
+        import pandas as pd
+        import numpy as np
+        from train_model import RegimeModelTrainer
+        # Build a minimal df: close=100, high[1]=103 (3% above close).
+        # The code uses shift(-1).rolling(), so row 0's future_high = high[1]=103.
+        # max_gain[0] = (103-100)/100 = 3% >= 2% target -> label=1.
+        # er_slow is required by the dropna guard at the end of _generate_labels.
+        df = pd.DataFrame({
+            'close': [100.0] * 10,
+            'high': [100.0, 103.0] + [100.0] * 8,
+            'er_slow': [0.6] * 10,
+        })
+        trainer = RegimeModelTrainer()
+        result = trainer._generate_labels(df)
+        assert 'target' in result.columns, "_generate_labels must produce a 'target' column"
+        # Row 0 should be labeled 1 -- future high of 103 is 3% gain, above 2% threshold
+        assert result['target'].iloc[0] == 1, \
+            f"Row 0 should be label=1 (3% gain >= 2% target). Got {result['target'].iloc[0]}"
+
+    def test_hardcoded_call_removed_from_build_universal_dataset(self):
+        """build_universal_dataset must not call _generate_labels with explicit hardcoded args."""
+        import re
+        tm_path = os.path.join(PROJECT_ROOT, 'train_model.py')
+        with open(tm_path, 'r') as f:
+            code = f.read()
+        # The old hardcoded call: _generate_labels(df, lookahead=5, profit_target=0.02)
+        assert 'profit_target=0.02' not in code, \
+            "Hardcoded profit_target=0.02 still present in train_model.py"
+        assert '_generate_labels(df)' in code or '_generate_labels(df,' not in code.replace(
+            '_generate_labels(df)', ''), \
+            "build_universal_dataset should call _generate_labels(df) with no extra args"
+
+
+# ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
 if __name__ == '__main__':
@@ -656,7 +734,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")
