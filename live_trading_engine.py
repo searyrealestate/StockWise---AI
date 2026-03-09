@@ -250,11 +250,29 @@ class LifecycleManager:
         new_stop = current_stop
         phase = "PHASE_1_BREATHING"
 
+        # --- PHASE 4: RUNNER MODE (Let Winners Run) ---
+        # When a position hits its original target, we don't sell.
+        # Instead we trail ultra-tight with a minimum distance floor.
+        if position.get("runner_mode"):
+            milestone_cfg = getattr(cfg, 'MILESTONE_ALERT_CONFIG', {})
+            runner_atr_mult = milestone_cfg.get('runner_atr_mult', 0.5)
+            runner_min_dist = milestone_cfg.get('runner_min_distance_pct', 0.008)
+
+            # ATR-based runner stop
+            runner_stop_atr = highest_high - (current_atr * runner_atr_mult)
+            # Floor-based runner stop (prevents noise exit when ATR is tiny)
+            runner_stop_floor = highest_high * (1 - runner_min_dist)
+            # Use the LOWER of the two (= wider stop = more protection from noise)
+            runner_stop = min(runner_stop_atr, runner_stop_floor)
+
+            new_stop = max(current_stop, runner_stop)
+            phase = "PHASE_4_RUNNER"
+
         # --- STORY: The Parabolic Choke (Phase 3) ---
         # If the stock has exploded +3.0% into profit, we do not want to give it back.
-        # We shrink the stop to just 1.0 ATR from the highest peak. 
+        # We shrink the stop to just 1.0 ATR from the highest peak.
         # If it blinks, we take the money and run.
-        if profit_pct >= self.stop_cfg["phase3_parabolic_trigger_pct"]:
+        elif profit_pct >= self.stop_cfg["phase3_parabolic_trigger_pct"]:
             choke_stop = highest_high - (current_atr * self.stop_cfg["phase3_atr_mult"])
             new_stop = max(current_stop, choke_stop)
             phase = "PHASE_3_PARABOLIC"
@@ -581,8 +599,21 @@ class LiveTradingEngine:
                 reason = None
                 if current_price <= position["stop_loss"]:
                     reason = "STOP LOSS HIT"
-                elif current_price >= position["take_profit"]:
-                    reason = "TAKE PROFIT HIT"
+                elif current_price >= position["take_profit"] and not position.get("runner_mode"):
+                    # [Phase 2.5b] Don't sell at target -- activate Runner Mode instead
+                    position["runner_mode"] = True
+                    position["runner_activated_at"] = current_price
+                    position["runner_activated_time"] = time.time()
+                    logger.info(f"[{symbol}] TARGET REACHED at ${current_price:.2f} -- Runner Mode ACTIVATED")
+                    # Send immediate notification
+                    if hasattr(self, 'notifier') and self.notifier:
+                        entry = position.get('entry_price', 0)
+                        gain_pct = ((current_price - entry) / entry * 100) if entry > 0 else 0
+                        self.notifier.send_message(
+                            f"**{symbol}: TARGET REACHED -- RUNNER MODE**\n"
+                            f"Entry: ${entry:.2f} | Current: ${current_price:.2f} ({gain_pct:+.1f}%)\n"
+                            f"Target was ${position['take_profit']:.2f} -- NOT selling.\n"
+                            f"Trailing stop tightened. Let it run!")
                 elif self.lifecycle.check_zombie_protocol(symbol, position, current_regime):
                     reason = "ZOMBIE PROTOCOL (Time Expired)"
 
@@ -625,9 +656,10 @@ class LiveTradingEngine:
                     old_stop = position["stop_loss"]
                     position["stop_loss"] = new_stop
                     position["highest_high"] = new_high
-                    
-                    # Optional: Notify on Stop Adjustment (Reduce noise by only logging)
                     logger.info(f"[{symbol}] Kinetic Stop tightened: {old_stop:.2f} -> {new_stop:.2f}")
+
+                    # [Phase 2.5b] Check if this stop change warrants a user alert
+                    self._check_and_send_milestone_alert(symbol, position, new_stop, current_price)
 
             except Exception as e:
                 logger.error(f"[{symbol}] Error managing position: {e}", exc_info=True)

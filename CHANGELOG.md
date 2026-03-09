@@ -289,3 +289,46 @@ if regime == "NEUTRAL":
 **Impact:** Infrastructure only — methods added but not yet called. No existing behavior changed. Next: Phase 2.5b wires these into `manage_open_positions` and adds Phase 4 Runner Mode.
 
 **Totals:** 52/52 unit tests pass, 25/25 system checks pass (no new tests — no logic changes).
+
+---
+
+### Phase 2.5b — Runner Mode + Milestone Alert Wiring (live_trading_engine.py)
+
+**Context:** Step 2 of 3 — connects the Phase 2.5a infrastructure into live position management. Winning trades no longer close at `take_profit`; instead they enter Runner Mode and trail with an ultra-tight stop.
+
+**3 changes in `live_trading_engine.py`:**
+
+**Change 1 — `take_profit` activates Runner Mode instead of liquidating:**
+
+```python
+# Before:
+elif current_price >= position["take_profit"]:
+    reason = "TAKE PROFIT HIT"
+
+# After:
+elif current_price >= position["take_profit"] and not position.get("runner_mode"):
+    position["runner_mode"] = True
+    position["runner_activated_at"] = current_price
+    position["runner_activated_time"] = time.time()
+    # Sends "TARGET REACHED -- RUNNER MODE" Telegram notification
+```
+
+**Change 2 — Milestone alert called after every kinetic stop update:**
+
+```python
+self._check_and_send_milestone_alert(symbol, position, new_stop, current_price)
+```
+
+**Change 3 — Phase 4 Runner added to `LifecycleManager.manage_kinetic_stop()`:**
+
+```
+runner_stop = min(highest - ATR*0.5, highest * 0.992)
+new_stop    = max(current_stop, runner_stop)
+phase       = "PHASE_4_RUNNER"
+```
+
+Phase 4 checks `runner_mode` first (before Phase 3 `if`/`elif` chain). Phase 3 header changed from `if` to `elif` to maintain correct mutual exclusion.
+
+**Impact:** Winning trades now run until the trailing stop is hit. No more hard take_profit exit cutting winners short. User receives a Telegram alert at target + subsequent alerts as stop climbs.
+
+**Totals:** 52/52 unit tests pass, 25/25 system checks pass (no new tests — behavioral wiring, not new logic).
