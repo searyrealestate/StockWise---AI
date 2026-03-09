@@ -449,8 +449,8 @@ SCAN_TIER_CONFIG = {
 
     # Full scan schedule (all stocks)
     "full_scan_times": {
-        "morning": "08:00",     # Before market open
-        "evening": "20:00",     # After market close
+        "morning": "08:00",     # EST -- 1.5h before market open (15:00 Israel)
+        "evening": "16:15",     # EST -- 15 min after market close (23:15 Israel)
     }
 }
 
