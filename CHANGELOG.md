@@ -358,3 +358,35 @@ Phase 4 checks `runner_mode` first (before Phase 3 `if`/`elif` chain). Phase 3 h
 `_calculate_real_breakeven` exists, `_check_and_send_milestone_alert` exists, `runner_mode` wired to `take_profit`, `PHASE_4_RUNNER` + floor present, milestone alert called after stop update, `MILESTONE_ALERT_CONFIG` has runner floor key.
 
 **Totals: 62/62 unit tests pass, 31/31 system checks pass.**
+
+---
+
+## Phase 3 — Scanner Upgrade (Mandatory Templates + Priority Tiers)
+
+### Phase 3.1a — Mandatory Scan Templates + Priority Tiers (stock_hunter.py + system_config.py)
+
+**Context:** Upgrading the scanner to classify every stock using 4 mandatory structural templates BEFORE any trading setup analysis. Templates answer "what is the state of this stock" — not "should I buy it." Infrastructure only — not yet wired into the scan loop (next: 3.1b).
+
+**`system_config.py` — 2 new config blocks:**
+
+`MANDATORY_SCAN_CONFIG`: thresholds for all 4 templates (SMA slope, S/R lookback, min volume, BB width bands).
+
+`SCAN_TIER_CONFIG`: score-based scan frequency tiers:
+- Tier 1 (VIP): `master_score >= 85` — every 20 min all day
+- Tier 2 (Watch): `75-84` — 3x/day at 09:30, 12:30, 15:30 (top 10)
+- Tier 3 (Pool): `< 75` — morning/evening full scan only
+
+**`stock_hunter.py` — 6 new methods added after `_save_json`:**
+
+| Method | Returns | Logic |
+|--------|---------|-------|
+| `_classify_trend_direction(df)` | BULLISH / BEARISH / SIDEWAYS | SMA_50 > SMA_200, close alignment, SMA_50 slope |
+| `_classify_structure(df)` | NEAR_SUPPORT / NEAR_RESISTANCE / OPEN_FIELD | Distance to 60-day high/low within 2% |
+| `_classify_volume_health(df)` | HEALTHY / SURGING / DRYING_UP / ILLIQUID | 20-day avg vs 5-day avg ratio; min 500K floor |
+| `_classify_volatility_state(df)` | COMPRESSED / NORMAL / VOLATILE | BB width vs 0.10 / 0.30 thresholds |
+| `classify_stock_state(df)` | `{trend, structure, volume, volatility}` | Calls all 4 templates, returns state dict |
+| `assign_tier(master_score)` | 1 / 2 / 3 | Score thresholds from `SCAN_TIER_CONFIG` |
+
+No existing methods modified. Next: Phase 3.1b wires these into the scan loop.
+
+**Totals: 62/62 unit tests pass, 31/31 system checks pass (no new tests — infrastructure only).**

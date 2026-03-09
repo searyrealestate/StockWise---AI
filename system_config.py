@@ -413,6 +413,47 @@ SCAN_ROUTING_CONFIG = {
     "weight_volatility_mult": 0.3        # 30% of tomorrow's scan priority is based on raw volatility.
 }
 
+# Mandatory Structural Templates: run on every stock before any trading analysis.
+# These classify the stock's state -- they don't generate buy/sell signals.
+MANDATORY_SCAN_CONFIG = {
+    # Trend Direction thresholds
+    "trend_bullish_min_sma_slope": 0.0,     # SMA_50 slope > 0 = rising
+    "trend_weekly_confirmation": True,       # Require weekly SMA alignment too
+
+    # Structure Detection
+    "support_resistance_lookback": 60,       # Days to look back for S/R levels
+    "near_level_pct": 0.02,                  # Within 2% of S/R = "near"
+
+    # Volume Health
+    "min_avg_volume": 500000,                # Minimum 500K avg daily volume
+    "volume_trend_lookback": 20,             # Days for volume trend
+
+    # Volatility State
+    "squeeze_bb_width_threshold": 0.10,      # BB width < 10% = compressed
+    "volatile_bb_width_threshold": 0.30,     # BB width > 30% = volatile
+}
+
+# Priority Tier Configuration -- determines intraday scan frequency based on score
+SCAN_TIER_CONFIG = {
+    # Tier 1 (VIP): master_score >= 85 -- scanned every 20 minutes all day
+    "tier1_min_score": 85.0,
+    "tier1_scan_interval_minutes": 20,
+
+    # Tier 2 (Watch): master_score 75-84.9 -- scanned 3x/day (top 10 from this range)
+    "tier2_min_score": 75.0,
+    "tier2_max_count": 10,
+    "tier2_scan_times": ["09:30", "12:30", "15:30"],
+
+    # Tier 3 (Pool): below 75 -- nightly/morning scan only
+    # (no special config needed -- default full scan behavior)
+
+    # Full scan schedule (all stocks)
+    "full_scan_times": {
+        "morning": "08:00",     # Before market open
+        "evening": "20:00",     # After market close
+    }
+}
+
 # Default symbols for AI training when scanner results are not available
 DEFAULT_TRAINING_SYMBOLS = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN',
                              'META', 'TSLA', 'AMD', 'NFLX', 'SPY']
