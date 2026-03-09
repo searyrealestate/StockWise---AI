@@ -372,18 +372,24 @@ class StockHunter:
                     ai_score = scores.get('ai', verdict.get('ai_score', 0))
                     master_score = scores.get('master', verdict.get('master_score', 0))
                 
-                # 4. Update the Ledger with DETAILED SCORES
+                # 4. Classify stock state using mandatory templates
+                stock_state = self.classify_stock_state(df_features)
+                tier = self.assign_tier(master_score)
+
+                # 5. Update the Ledger with DETAILED SCORES + STATE + TIER
                 self.ledger[symbol] = {
-                    "weight": master_score,     # המיון הראשי יהיה עכשיו לפי הציון המשוקלל הסופי!
+                    "weight": master_score,
                     "er_score": round(er_score, 2),
                     "tech_score": round(tech_score, 1),
                     "ai_score": round(ai_score, 1),
                     "master_score": round(master_score, 1),
                     "regime": regime,
+                    "state": stock_state,
+                    "tier": tier,
                     "last_scanned": datetime.now().isoformat()
                 }
-                
-                logger.debug(f"Scan complete for {symbol}: Master={master_score}, Tech={tech_score}, AI={ai_score}")
+
+                logger.debug(f"[{symbol}] State: {stock_state} | Tier: {tier}")
                 
             except Exception as e:
                 logger.error(f"Scan failed for {symbol}. Moving to next. Error: {e}")
@@ -423,7 +429,28 @@ class StockHunter:
         top_candidates = sorted_items[:limit]
         
         vip_symbols = [item[0] for item in top_candidates]
-        
+
+        # Build tier-based lists for intraday scanner
+        tier1_symbols = [sym for sym, data in self.ledger.items()
+                         if data.get('tier') == 1]
+        tier2_items = [(sym, data) for sym, data in self.ledger.items()
+                       if data.get('tier') == 2]
+        tier2_items.sort(key=lambda x: x[1].get('master_score', 0), reverse=True)
+        tier2_limit = getattr(cfg, 'SCAN_TIER_CONFIG', {}).get('tier2_max_count', 10)
+        tier2_symbols = [item[0] for item in tier2_items[:tier2_limit]]
+
+        # Save tiered lists alongside VIP list
+        tiered_data = {
+            "tier1_vip": tier1_symbols,
+            "tier2_watch": tier2_symbols,
+            "total_scanned": len(self.ledger),
+            "last_updated": datetime.now().isoformat()
+        }
+        tiered_path = os.path.join(cfg.DB_DIR, "tiered_watchlist.json")
+        self._save_json(tiered_path, tiered_data)
+
+        logger.info(f"Tiered Lists: Tier1(VIP)={len(tier1_symbols)}, Tier2(Watch)={len(tier2_symbols)}")
+
         # Save VIP list
         self.watchlist = {"tickers": vip_symbols, "last_updated": datetime.now().isoformat()}
         self._save_json(self.watchlist_file, self.watchlist)
@@ -434,7 +461,7 @@ class StockHunter:
         board.append("🏆 TOP VIP TARGETS - FULL ANALYSIS 🏆")
         board.append("="*85)
         # כותרות חדשות ומפורטות
-        board.append(f"{'RANK':<5} | {'SYMBOL':<6} | {'REGIME':<6} | {'TECH':<6} | {'AI':<6} | {'MASTER SCORE':<12}")
+        board.append(f"{'RANK':<5} | {'SYMBOL':<6} | {'REGIME':<6} | {'TREND':<8} | {'TECH':<6} | {'AI':<6} | {'MASTER':<7} | {'TIER':<4}")
         board.append("-" * 85)
         
         for i, (symbol, data) in enumerate(top_candidates, 1):
@@ -446,7 +473,10 @@ class StockHunter:
             # הדגשה ויזואלית לציון מאסטר גבוה
             fire = "🔥" if master > 60 else "  "
             
-            board.append(f"#{i:<4} | {symbol:<6} | {regime:<6} | {tech:<6} | {ai:<6} | {master:<12} {fire}")
+            trend_dir = data.get('state', {}).get('trend', 'N/A')
+            tier = data.get('tier', 3)
+            tier_label = f"T{tier}"
+            board.append(f"#{i:<4} | {symbol:<6} | {regime:<6} | {trend_dir:<8} | {tech:<6} | {ai:<6} | {master:<7} | {tier_label:<4} {fire}")
             
         board.append("="*85)
         

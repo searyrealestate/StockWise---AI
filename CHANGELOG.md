@@ -390,3 +390,35 @@ Phase 4 checks `runner_mode` first (before Phase 3 `if`/`elif` chain). Phase 3 h
 No existing methods modified. Next: Phase 3.1b wires these into the scan loop.
 
 **Totals: 62/62 unit tests pass, 31/31 system checks pass (no new tests — infrastructure only).**
+
+---
+
+### Phase 3.1b — Wire Templates + Tiers into Scan Loop (stock_hunter.py)
+
+**Context:** Step 2 of 2 — connects Phase 3.1a infrastructure into the live scan loop. Every stock scanned now gets a structural state classification and a priority tier.
+
+**Changes in `stock_hunter.py`:**
+
+**1. `run_nightly_scan()` — ledger entry now includes state + tier:**
+```python
+# New step before ledger update:
+stock_state = self.classify_stock_state(df_features)
+tier = self.assign_tier(master_score)
+
+# Ledger entry adds:
+"state": stock_state,   # {trend, structure, volume, volatility}
+"tier": tier,           # 1, 2, or 3
+```
+
+**2. `_update_daily_review_list()` — generates `tiered_watchlist.json`:**
+- `tier1_vip`: all stocks with `tier == 1` (score >= 85)
+- `tier2_watch`: top 10 stocks with `tier == 2` (score 75-84), sorted by master_score
+- Saved to `DB_DIR/tiered_watchlist.json`
+
+**3. Leaderboard updated** — now shows TREND column and TIER column:
+```
+RANK  | SYMBOL | REGIME | TREND    | TECH   | AI     | MASTER  | TIER
+#1    | NVDA   | TREND  | BULLISH  | 82.5   | 76.0   | 80.6    | T1
+```
+
+**Totals: 62/62 unit tests pass, 31/31 system checks pass (no new tests — wiring only).**
