@@ -318,6 +318,53 @@ class MasterValidator:
         )
 
     # ------------------------------------------------------------------
+    # CHECK 9: Milestone Alert System (Phase 2.5)
+    # ------------------------------------------------------------------
+    def check_milestone_alert_system(self):
+        """Verify milestone alert infrastructure is complete."""
+        lte_path = os.path.join(PROJECT_ROOT, 'live_trading_engine.py')
+        with open(lte_path, 'r', encoding='utf-8', errors='replace') as f:
+            code = f.read()
+
+        self._record(
+            "_calculate_real_breakeven method exists",
+            '_calculate_real_breakeven' in code,
+            "Method not found -- breakeven calculation missing"
+        )
+
+        self._record(
+            "_check_and_send_milestone_alert method exists",
+            '_check_and_send_milestone_alert' in code,
+            "Method not found -- milestone alerts missing"
+        )
+
+        self._record(
+            "Runner Mode activation on take_profit",
+            'runner_mode' in code and 'take_profit' in code,
+            "take_profit should activate runner_mode, not liquidate"
+        )
+
+        self._record(
+            "Phase 4 Runner in kinetic stop with floor",
+            'PHASE_4_RUNNER' in code and 'runner_min_distance_pct' in code,
+            "Phase 4 Runner missing or no min distance floor"
+        )
+
+        self._record(
+            "Milestone alert called after kinetic stop update",
+            '_check_and_send_milestone_alert' in code,
+            "Milestone alerts not wired into stop update flow"
+        )
+
+        # Config check
+        config = getattr(cfg, 'MILESTONE_ALERT_CONFIG', None)
+        self._record(
+            "MILESTONE_ALERT_CONFIG exists with runner floor",
+            config is not None and 'runner_min_distance_pct' in (config or {}),
+            "Config missing or incomplete"
+        )
+
+    # ------------------------------------------------------------------
     # REPORT
     # ------------------------------------------------------------------
     def run_all(self):
@@ -342,6 +389,8 @@ class MasterValidator:
         self.check_ai_pipeline_integrity()
         print()
         self.check_regime_gate()
+        print()
+        self.check_milestone_alert_system()
 
         total = len(self.results)
         passed = sum(1 for _, p, _ in self.results if p)

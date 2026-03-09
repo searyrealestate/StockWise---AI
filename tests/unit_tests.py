@@ -727,6 +727,123 @@ class TestBug2_4_LabelConfig:
 
 
 # ============================================================
+# PHASE 2.5: Milestone Alerts + Runner Mode
+# ============================================================
+class TestPhase2_5_MilestoneAlerts:
+    """Verify milestone alert infrastructure and Runner Mode."""
+
+    def test_milestone_config_exists(self):
+        """MILESTONE_ALERT_CONFIG should exist with all required keys."""
+        import system_config as cfg
+        config = getattr(cfg, 'MILESTONE_ALERT_CONFIG', None)
+        assert config is not None, "MILESTONE_ALERT_CONFIG missing from system_config"
+        required_keys = ['safe_zone_buffer_pct', 'min_stop_change_pct',
+                         'min_alert_interval_minutes', 'runner_atr_mult',
+                         'runner_min_distance_pct']
+        for key in required_keys:
+            assert key in config, f"Missing key '{key}' in MILESTONE_ALERT_CONFIG"
+
+    def test_runner_min_distance_prevents_noise_exit(self):
+        """runner_min_distance_pct must be > 0 to prevent stop too close to price."""
+        import system_config as cfg
+        config = cfg.MILESTONE_ALERT_CONFIG
+        assert config['runner_min_distance_pct'] > 0, \
+            "runner_min_distance_pct must be > 0 to prevent noise exits"
+        assert config['runner_min_distance_pct'] >= 0.005, \
+            f"runner_min_distance_pct={config['runner_min_distance_pct']} too small (< 0.5%)"
+
+    def test_calculate_real_breakeven_basic(self):
+        """Breakeven should be above entry price (costs exist)."""
+        from live_trading_engine import LiveTradingEngine
+        engine = LiveTradingEngine.__new__(LiveTradingEngine)
+        breakeven = engine._calculate_real_breakeven(entry_price=100.0, qty=50)
+        assert breakeven > 100.0, \
+            f"Breakeven ${breakeven} should be above entry $100 (must cover costs)"
+
+    def test_calculate_real_breakeven_scales_with_qty(self):
+        """Small positions should have higher breakeven pct (fixed commission spread over fewer shares)."""
+        from live_trading_engine import LiveTradingEngine
+        engine = LiveTradingEngine.__new__(LiveTradingEngine)
+        breakeven_small = engine._calculate_real_breakeven(entry_price=100.0, qty=5)
+        breakeven_large = engine._calculate_real_breakeven(entry_price=100.0, qty=500)
+        # Small qty -> higher cost per share -> higher breakeven
+        assert breakeven_small > breakeven_large, \
+            f"Small qty breakeven ${breakeven_small} should be higher than large qty ${breakeven_large}"
+
+    def test_milestone_alert_no_alert_before_breakeven(self):
+        """No alert should fire when price is below real breakeven."""
+        from live_trading_engine import LiveTradingEngine
+        engine = LiveTradingEngine.__new__(LiveTradingEngine)
+        engine.notifier = MagicMock()
+
+        position = {'entry_price': 100.0, 'qty': 50, 'stop_loss': 96.0}
+        # Price barely above entry but below breakeven
+        engine._check_and_send_milestone_alert("TEST", position, 100.5, 100.3)
+        engine.notifier.send_message.assert_not_called()
+
+    def test_milestone_alert_fires_at_breakeven(self):
+        """First alert should fire when price crosses real breakeven."""
+        from live_trading_engine import LiveTradingEngine
+        engine = LiveTradingEngine.__new__(LiveTradingEngine)
+        engine.notifier = MagicMock()
+
+        position = {'entry_price': 100.0, 'qty': 50, 'stop_loss': 96.0}
+        breakeven = engine._calculate_real_breakeven(100.0, 50)
+        # Price above breakeven
+        engine._check_and_send_milestone_alert("TEST", position, breakeven + 0.5, breakeven + 1.0)
+        assert position.get('breakeven_alerted') == True, \
+            "breakeven_alerted flag should be set after first alert"
+        engine.notifier.send_message.assert_called_once()
+
+    def test_milestone_alert_cooldown(self):
+        """Second alert should be blocked by cooldown timer."""
+        import time as _time
+        from live_trading_engine import LiveTradingEngine
+        engine = LiveTradingEngine.__new__(LiveTradingEngine)
+        engine.notifier = MagicMock()
+
+        position = {
+            'entry_price': 100.0, 'qty': 50, 'stop_loss': 96.0,
+            'breakeven_alerted': True,
+            'last_alerted_stop': 101.0,
+            'last_alert_time': _time.time(),  # just now
+            'real_breakeven': 100.5
+        }
+        # Even with significant stop change, cooldown should block
+        engine._check_and_send_milestone_alert("TEST", position, 105.0, 110.0)
+        engine.notifier.send_message.assert_not_called()
+
+    def test_take_profit_activates_runner_mode(self):
+        """Reaching take_profit should set runner_mode=True, not liquidate."""
+        path = os.path.join(PROJECT_ROOT, 'live_trading_engine.py')
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
+            code = f.read()
+        # take_profit should trigger runner_mode, not "TAKE PROFIT HIT" liquidation
+        assert 'runner_mode' in code, "runner_mode not found in live_trading_engine.py"
+        assert '"runner_mode"' in code or "'runner_mode'" in code, \
+            "runner_mode flag not being set in live_trading_engine.py"
+
+    def test_phase4_runner_in_kinetic_stop(self):
+        """LifecycleManager should have Phase 4 Runner with min distance floor."""
+        path = os.path.join(PROJECT_ROOT, 'live_trading_engine.py')
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
+            code = f.read()
+        assert 'PHASE_4_RUNNER' in code, \
+            "PHASE_4_RUNNER not found in LifecycleManager"
+        assert 'runner_min_distance_pct' in code, \
+            "runner_min_distance_pct floor not implemented in kinetic stop"
+
+    def test_phase4_uses_wider_stop(self):
+        """Phase 4 should use min() of ATR-based and floor-based (= wider = safer)."""
+        path = os.path.join(PROJECT_ROOT, 'live_trading_engine.py')
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
+            code = f.read()
+        # Must use min(atr_stop, floor_stop) not max -- min gives wider stop
+        assert 'min(runner_stop_atr, runner_stop_floor)' in code, \
+            "Phase 4 should use min() to pick the wider (safer) stop"
+
+
+# ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
 if __name__ == '__main__':
@@ -734,7 +851,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

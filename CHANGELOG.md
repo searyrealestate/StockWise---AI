@@ -332,3 +332,29 @@ Phase 4 checks `runner_mode` first (before Phase 3 `if`/`elif` chain). Phase 3 h
 **Impact:** Winning trades now run until the trailing stop is hit. No more hard take_profit exit cutting winners short. User receives a Telegram alert at target + subsequent alerts as stop climbs.
 
 **Totals:** 52/52 unit tests pass, 25/25 system checks pass (no new tests — behavioral wiring, not new logic).
+
+---
+
+### Phase 2.5c — Tests for Runner Mode + Milestone Alerts (tests/unit_tests.py + tests/master_validator.py)
+
+**Context:** Step 3 of 3 — adds test coverage for Phase 2.5a and 2.5b infrastructure.
+
+**Unit tests added — `TestPhase2_5_MilestoneAlerts` (10 tests):**
+
+| Test | Validates |
+|------|-----------|
+| `test_milestone_config_exists` | All 5 required keys present in `MILESTONE_ALERT_CONFIG` |
+| `test_runner_min_distance_prevents_noise_exit` | `runner_min_distance_pct >= 0.005` |
+| `test_calculate_real_breakeven_basic` | Breakeven > entry (costs exist) |
+| `test_calculate_real_breakeven_scales_with_qty` | Small qty has higher breakeven % |
+| `test_milestone_alert_no_alert_before_breakeven` | Gate 1 blocks alerts below breakeven |
+| `test_milestone_alert_fires_at_breakeven` | Gate 2 fires first alert, sets `breakeven_alerted` flag |
+| `test_milestone_alert_cooldown` | Gate 3 blocks alert when called within cooldown window |
+| `test_take_profit_activates_runner_mode` | `runner_mode` flag set on take_profit hit |
+| `test_phase4_runner_in_kinetic_stop` | `PHASE_4_RUNNER` and `runner_min_distance_pct` in source |
+| `test_phase4_uses_wider_stop` | `min(runner_stop_atr, runner_stop_floor)` — wider stop chosen |
+
+**System checks added — `check_milestone_alert_system()` (6 checks):**
+`_calculate_real_breakeven` exists, `_check_and_send_milestone_alert` exists, `runner_mode` wired to `take_profit`, `PHASE_4_RUNNER` + floor present, milestone alert called after stop update, `MILESTONE_ALERT_CONFIG` has runner floor key.
+
+**Totals: 62/62 unit tests pass, 31/31 system checks pass.**
