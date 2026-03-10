@@ -326,13 +326,56 @@ class SetupTemplate:
         self.statistics = data.get('statistics', self._empty_stats())
 
     def _empty_stats(self):
-        """Returns a fresh statistics block."""
+        """Returns a fresh extended statistics block."""
         return {
-            "total_activations": 0, "wins": 0, "losses": 0,
-            "avg_profit_pct": 0.0, "avg_loss_pct": 0.0, "win_rate": 0.0,
+            # --- Basic Performance ---
+            "total_activations": 0,
+            "wins": 0,
+            "losses": 0,
+            "win_rate": 0.0,
+            "avg_profit_pct": 0.0,
+            "avg_loss_pct": 0.0,
+            "max_profit_pct": 0.0,
+            "max_loss_pct": 0.0,
+            "avg_hold_duration_hours": 0.0,
+
+            # --- Per-Ticker Performance ---
+            "ticker_stats": {},
+            # e.g. {"AAPL": {"wins": 5, "losses": 1, "avg_profit": 2.1, "total": 6}}
+
+            # --- Per-Volume-Range Performance ---
+            "volume_range_stats": {},
+            # e.g. {"high": {"wins": 8, "losses": 2}, "mid": {...}, "low": {...}}
+
+            # --- Per-Trend-Direction Performance ---
+            "trend_stats": {},
+            # e.g. {"BULLISH": {"wins": 12, "losses": 3}, "SIDEWAYS": {...}}
+
+            # --- Per-Volatility-State Performance ---
+            "volatility_stats": {},
+            # e.g. {"COMPRESSED": {"wins": 8, "losses": 1}, "NORMAL": {...}}
+
+            # --- Per-Regime Performance ---
+            "regime_stats": {},
+            # e.g. {"TREND": {"wins": 10, "losses": 2}, "CHOP": {...}}
+
+            # --- Time-Based Performance ---
+            "month_stats": {},
+            # e.g. {"01": {"wins": 2, "losses": 1}, "02": {...}}
+
+            "day_of_week_stats": {},
+            # e.g. {"Mon": {"wins": 5, "losses": 2}, "Tue": {...}}
+
+            # --- Streak Tracking ---
+            "consecutive_wins": 0,
+            "consecutive_losses": 0,
+            "max_consecutive_wins": 0,
+            "max_consecutive_losses": 0,
+
+            # --- Meta ---
             "last_activated": None,
-            "best_tickers": {}, "worst_tickers": {},
-            "best_conditions": [],
+            "last_win_ticker": None,
+            "last_loss_ticker": None,
             "created_at": datetime.now().isoformat(),
             "updated_at": datetime.now().isoformat()
         }
@@ -376,6 +419,97 @@ class SetupTemplate:
         if total == 0:
             return 0.0
         return (self.statistics.get('wins', 0) / total) * 100.0
+
+    def get_best_context(self):
+        """
+        Analyzes statistics to determine the best context for this template.
+        Returns a dict describing when/where this template performs best.
+
+        Example return:
+        {
+            "best_trend": "BULLISH",
+            "best_trend_win_rate": 82.0,
+            "best_volatility": "COMPRESSED",
+            "best_volume": "high",
+            "best_ticker": "AAPL",
+            "best_ticker_win_rate": 85.0,
+            "best_month": "03",
+            "best_day": "Tue",
+            "avoid_trend": "BEARISH",
+            "avoid_ticker": "TSLA",
+        }
+        """
+        result = {}
+        stats = self.statistics
+
+        def _best_from_dict(d):
+            """Find key with highest win rate from a {key: {wins, losses}} dict."""
+            best_key, best_wr = None, 0
+            worst_key, worst_wr = None, 100
+            for key, data in d.items():
+                total = data.get('wins', 0) + data.get('losses', 0)
+                if total < 3:  # Need minimum sample
+                    continue
+                wr = (data['wins'] / total) * 100
+                if wr > best_wr:
+                    best_wr = wr
+                    best_key = key
+                if wr < worst_wr:
+                    worst_wr = wr
+                    worst_key = key
+            return best_key, best_wr, worst_key, worst_wr
+
+        # Best/worst trend
+        trend_stats = stats.get('trend_stats', {})
+        if trend_stats:
+            b, bwr, w, wwr = _best_from_dict(trend_stats)
+            if b:
+                result['best_trend'] = b
+                result['best_trend_win_rate'] = round(bwr, 1)
+            if w:
+                result['avoid_trend'] = w
+
+        # Best/worst volatility
+        vol_stats = stats.get('volatility_stats', {})
+        if vol_stats:
+            b, bwr, w, wwr = _best_from_dict(vol_stats)
+            if b:
+                result['best_volatility'] = b
+            if w:
+                result['avoid_volatility'] = w
+
+        # Best volume range
+        volume_stats = stats.get('volume_range_stats', {})
+        if volume_stats:
+            b, bwr, w, wwr = _best_from_dict(volume_stats)
+            if b:
+                result['best_volume'] = b
+
+        # Best/worst ticker
+        ticker_stats = stats.get('ticker_stats', {})
+        if ticker_stats:
+            b, bwr, w, wwr = _best_from_dict(ticker_stats)
+            if b:
+                result['best_ticker'] = b
+                result['best_ticker_win_rate'] = round(bwr, 1)
+            if w:
+                result['avoid_ticker'] = w
+
+        # Best month
+        month_stats = stats.get('month_stats', {})
+        if month_stats:
+            b, bwr, w, wwr = _best_from_dict(month_stats)
+            if b:
+                result['best_month'] = b
+
+        # Best day
+        day_stats = stats.get('day_of_week_stats', {})
+        if day_stats:
+            b, bwr, w, wwr = _best_from_dict(day_stats)
+            if b:
+                result['best_day'] = b
+
+        return result
 
     def evaluate_conditions(self, row):
         """
@@ -449,41 +583,134 @@ class SetupTemplate:
         # Fallback
         return target_atr(row, [3.0])
 
-    def record_result(self, ticker, profit_pct, won):
+    def record_result(self, ticker, profit_pct, won, context=None):
         """
-        Records the outcome of a template activation.
-        Updates running statistics.
+        Records the outcome of a template activation with full context.
+
+        Args:
+            ticker: Stock symbol (e.g., "AAPL")
+            profit_pct: Realized profit/loss percentage (e.g., 2.5 or -1.3)
+            won: True if profitable, False if loss
+            context: Optional dict with additional info:
+                {
+                    "stock_state": {"trend": "BULLISH", "volume": "SURGING", ...},
+                    "regime": "TREND",
+                    "hold_duration_hours": 48.5,
+                    "avg_volume": 5000000,
+                }
         """
+        if context is None:
+            context = {}
+
         stats = self.statistics
         stats['total_activations'] = stats.get('total_activations', 0) + 1
         stats['last_activated'] = datetime.now().isoformat()
         stats['updated_at'] = datetime.now().isoformat()
 
+        # --- Basic Win/Loss ---
         if won:
             stats['wins'] = stats.get('wins', 0) + 1
-            # Running average profit
             old_avg = stats.get('avg_profit_pct', 0.0)
             n_wins = stats['wins']
             stats['avg_profit_pct'] = old_avg + (profit_pct - old_avg) / n_wins
+            stats['max_profit_pct'] = max(stats.get('max_profit_pct', 0.0), profit_pct)
+            stats['last_win_ticker'] = ticker
+            stats['consecutive_wins'] = stats.get('consecutive_wins', 0) + 1
+            stats['consecutive_losses'] = 0
+            stats['max_consecutive_wins'] = max(stats.get('max_consecutive_wins', 0), stats['consecutive_wins'])
         else:
             stats['losses'] = stats.get('losses', 0) + 1
             old_avg = stats.get('avg_loss_pct', 0.0)
             n_losses = stats['losses']
             stats['avg_loss_pct'] = old_avg + (profit_pct - old_avg) / n_losses
+            stats['max_loss_pct'] = min(stats.get('max_loss_pct', 0.0), profit_pct)
+            stats['last_loss_ticker'] = ticker
+            stats['consecutive_losses'] = stats.get('consecutive_losses', 0) + 1
+            stats['consecutive_wins'] = 0
+            stats['max_consecutive_losses'] = max(stats.get('max_consecutive_losses', 0), stats['consecutive_losses'])
 
-        # Update win rate
+        # --- Win Rate ---
         total = stats['total_activations']
         stats['win_rate'] = (stats['wins'] / total) * 100.0 if total > 0 else 0.0
 
-        # Track per-ticker performance
-        best = stats.get('best_tickers', {})
-        if ticker not in best:
-            best[ticker] = {"wins": 0, "losses": 0}
+        # --- Hold Duration ---
+        hold_hours = context.get('hold_duration_hours', 0)
+        if hold_hours > 0:
+            old_avg_hold = stats.get('avg_hold_duration_hours', 0.0)
+            stats['avg_hold_duration_hours'] = old_avg_hold + (hold_hours - old_avg_hold) / total
+
+        # --- Per-Ticker Stats ---
+        ticker_stats = stats.get('ticker_stats', {})
+        if ticker not in ticker_stats:
+            ticker_stats[ticker] = {"wins": 0, "losses": 0, "total": 0, "avg_profit": 0.0}
+        ts = ticker_stats[ticker]
+        ts['total'] += 1
         if won:
-            best[ticker]["wins"] += 1
+            ts['wins'] += 1
+            old = ts.get('avg_profit', 0.0)
+            ts['avg_profit'] = old + (profit_pct - old) / ts['wins']
         else:
-            best[ticker]["losses"] += 1
-        stats['best_tickers'] = best
+            ts['losses'] += 1
+        stats['ticker_stats'] = ticker_stats
+
+        # --- Per-Volume-Range Stats ---
+        avg_volume = context.get('avg_volume', 0)
+        if avg_volume > 0:
+            if avg_volume >= 5_000_000:
+                vol_key = "high"
+            elif avg_volume >= 1_000_000:
+                vol_key = "mid"
+            else:
+                vol_key = "low"
+            vol_stats = stats.get('volume_range_stats', {})
+            if vol_key not in vol_stats:
+                vol_stats[vol_key] = {"wins": 0, "losses": 0}
+            vol_stats[vol_key]["wins" if won else "losses"] += 1
+            stats['volume_range_stats'] = vol_stats
+
+        # --- Per-Trend Stats ---
+        stock_state = context.get('stock_state', {})
+        trend = stock_state.get('trend', '')
+        if trend:
+            trend_stats = stats.get('trend_stats', {})
+            if trend not in trend_stats:
+                trend_stats[trend] = {"wins": 0, "losses": 0}
+            trend_stats[trend]["wins" if won else "losses"] += 1
+            stats['trend_stats'] = trend_stats
+
+        # --- Per-Volatility Stats ---
+        volatility = stock_state.get('volatility', '')
+        if volatility:
+            vol_st = stats.get('volatility_stats', {})
+            if volatility not in vol_st:
+                vol_st[volatility] = {"wins": 0, "losses": 0}
+            vol_st[volatility]["wins" if won else "losses"] += 1
+            stats['volatility_stats'] = vol_st
+
+        # --- Per-Regime Stats ---
+        regime = context.get('regime', '')
+        if regime:
+            reg_stats = stats.get('regime_stats', {})
+            if regime not in reg_stats:
+                reg_stats[regime] = {"wins": 0, "losses": 0}
+            reg_stats[regime]["wins" if won else "losses"] += 1
+            stats['regime_stats'] = reg_stats
+
+        # --- Time-Based Stats ---
+        now = datetime.now()
+        month_key = now.strftime("%m")
+        month_stats = stats.get('month_stats', {})
+        if month_key not in month_stats:
+            month_stats[month_key] = {"wins": 0, "losses": 0}
+        month_stats[month_key]["wins" if won else "losses"] += 1
+        stats['month_stats'] = month_stats
+
+        day_key = now.strftime("%a")  # Mon, Tue, Wed...
+        day_stats = stats.get('day_of_week_stats', {})
+        if day_key not in day_stats:
+            day_stats[day_key] = {"wins": 0, "losses": 0}
+        day_stats[day_key]["wins" if won else "losses"] += 1
+        stats['day_of_week_stats'] = day_stats
 
     def to_dict(self):
         """Serialize back to dictionary for JSON storage."""
