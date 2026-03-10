@@ -451,3 +451,39 @@ RANK  | SYMBOL | REGIME | TREND    | TECH   | AI     | MASTER  | TIER
 Infrastructure only — no seed templates created yet. Next: Phase 3.3 (Seed Templates).
 
 **Totals: 62/62 unit tests pass, 31/31 system checks pass (no new tests — data model only).**
+
+---
+
+### Phase 3.3 — Block Registry + 5 Seed Templates (setup_templates.py + data/templates/)
+
+**Context:** "LEGO system" for trading templates. Instead of each template defining its own logic, reusable Building Blocks (functions) are referenced by name + params. New template = JSON list of block names + params only. No code changes needed.
+
+**Block Registry added to `setup_templates.py`:**
+
+| Category | Blocks |
+|----------|--------|
+| Trend (5) | `close_above_sma`, `sma_above_sma`, `close_above_ema`, `er_slow_above`, `trend_alignment` |
+| Momentum (5) | `rsi_between`, `rsi_below`, `rsi_above`, `macd_above_signal`, `macd_histogram_positive` |
+| Volume (2) | `volume_surge`, `rvol_above` |
+| Volatility (4) | `squeeze_active`, `squeeze_momentum_positive`, `bb_width_below`, `atr_percent_above` |
+| Price Action (3) | `bullish_candle`, `close_above_ref`, `close_below_ref` |
+| Stop blocks (4) | `atr`, `swing_low`, `fixed_pct`, `sma` |
+| Target blocks (2) | `atr`, `fixed_pct` |
+
+**New `SetupTemplate` methods:**
+- `evaluate_conditions(row)` — runs all blocks, returns `(all_passed, details[])`
+- `calculate_stop_loss(row)` — dispatches to stop block registry with fallback
+- `calculate_take_profit(row)` — dispatches to target block registry with fallback
+- `validate()` updated to check block names against `CONDITION_BLOCKS` registry
+
+**5 Seed Templates (`data/templates/*.json`):**
+
+| Template | Conditions | Required State |
+|----------|-----------|----------------|
+| `MOMENTUM_BREAKOUT` | rsi_between + macd_above_signal + close_above_sma + volume_surge | BULLISH trend |
+| `TREND_PULLBACK_EMA` | rsi_between + close_above_ema + close_above_sma + sma_above_sma | BULLISH + OPEN_FIELD/NEAR_SUPPORT |
+| `SQUEEZE_BREAKOUT` | squeeze_active + squeeze_momentum_positive + bb_width_below + close_above_sma | COMPRESSED volatility |
+| `VSA_INSTITUTIONAL` | volume_surge + bullish_candle + close_above_sma + rsi_between | SURGING volume |
+| `OVERSOLD_BOUNCE` | rsi_below + bullish_candle + volume_surge | NEAR_SUPPORT + SIDEWAYS/BEARISH |
+
+**Totals: 62/62 unit tests pass, 31/31 system checks pass (no new tests — data model + JSON files).**

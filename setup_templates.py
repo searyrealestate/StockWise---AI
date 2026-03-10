@@ -27,6 +27,223 @@ import system_config as cfg
 logger = logging.getLogger("TemplateEngine")
 
 
+# ============================================================
+# CONDITION BLOCK REGISTRY
+# ============================================================
+# Each block is a reusable function: (row, params) -> bool
+# Templates reference blocks by name + params.
+# To add a new block: just add an entry here. No template changes needed.
+#
+# Block categories:
+#   trend_*      -- Trend direction filters
+#   momentum_*   -- RSI, MACD, momentum indicators
+#   volume_*     -- Volume analysis
+#   volatility_* -- BB, ATR, squeeze
+#   price_*      -- Price action and candle patterns
+# ============================================================
+
+def _safe_get(row, key, default=0):
+    """Safely get a value from a row, handling NaN."""
+    import math
+    val = row.get(key, default)
+    if val is None or (isinstance(val, float) and math.isnan(val)):
+        return default
+    return val
+
+
+# --- TREND BLOCKS ---
+
+def block_close_above_sma(row, params):
+    """Close > SMA_N. params: [sma_period]  e.g. [50]"""
+    period = params[0]
+    return _safe_get(row, 'close') > _safe_get(row, f'sma_{period}')
+
+def block_sma_above_sma(row, params):
+    """SMA_A > SMA_B (trend alignment). params: [fast_period, slow_period]  e.g. [50, 200]"""
+    fast = _safe_get(row, f'sma_{params[0]}')
+    slow = _safe_get(row, f'sma_{params[1]}')
+    return fast > slow and slow > 0
+
+def block_close_above_ema(row, params):
+    """Close > EMA_N. params: [ema_period]  e.g. [12]"""
+    period = params[0]
+    return _safe_get(row, 'close') > _safe_get(row, f'ema_{period}')
+
+def block_er_slow_above(row, params):
+    """Efficiency Ratio (slow) above threshold. params: [threshold]  e.g. [0.55]"""
+    return _safe_get(row, 'er_slow') >= params[0]
+
+def block_trend_alignment(row, params):
+    """Full trend alignment flag is active. params: [] (no params)"""
+    return _safe_get(row, 'trend_alignment') == 1
+
+
+# --- MOMENTUM BLOCKS ---
+
+def block_rsi_between(row, params):
+    """RSI is in range. params: [min, max]  e.g. [40, 65]"""
+    rsi = _safe_get(row, 'rsi', 50)
+    return params[0] <= rsi <= params[1]
+
+def block_rsi_below(row, params):
+    """RSI below threshold (oversold). params: [threshold]  e.g. [30]"""
+    return _safe_get(row, 'rsi', 50) < params[0]
+
+def block_rsi_above(row, params):
+    """RSI above threshold. params: [threshold]  e.g. [50]"""
+    return _safe_get(row, 'rsi', 50) > params[0]
+
+def block_macd_above_signal(row, params):
+    """MACD line above signal line (bullish). params: []"""
+    return _safe_get(row, 'macd') > _safe_get(row, 'macd_signal')
+
+def block_macd_histogram_positive(row, params):
+    """MACD histogram > 0 (momentum building). params: []"""
+    return _safe_get(row, 'macd_hist') > 0
+
+
+# --- VOLUME BLOCKS ---
+
+def block_volume_surge(row, params):
+    """Current volume > avg * multiplier. params: [multiplier]  e.g. [1.5]"""
+    vol = _safe_get(row, 'volume')
+    avg = _safe_get(row, 'vol_avg_20', 1)
+    return vol > avg * params[0] if avg > 0 else False
+
+def block_rvol_above(row, params):
+    """Relative Volume above threshold. params: [threshold]  e.g. [1.3]"""
+    return _safe_get(row, 'rvol', 1.0) > params[0]
+
+
+# --- VOLATILITY BLOCKS ---
+
+def block_squeeze_active(row, params):
+    """Bollinger Squeeze is on (BB inside KC). params: []"""
+    return _safe_get(row, 'squeeze_on') == 1
+
+def block_squeeze_momentum_positive(row, params):
+    """Squeeze momentum (MACD hist proxy) is positive. params: []"""
+    return _safe_get(row, 'mom_sqz') > 0
+
+def block_bb_width_below(row, params):
+    """BB width below threshold (narrow bands). params: [threshold]  e.g. [0.15]"""
+    return _safe_get(row, 'bb_width', 1.0) < params[0]
+
+def block_atr_percent_above(row, params):
+    """ATR as % of price above threshold (enough volatility for profit). params: [min_pct]  e.g. [0.01]"""
+    close = _safe_get(row, 'close', 1)
+    atr = _safe_get(row, 'atr', 0)
+    return (atr / close) >= params[0] if close > 0 else False
+
+
+# --- PRICE ACTION BLOCKS ---
+
+def block_bullish_candle(row, params):
+    """Close > Open (green candle). params: []"""
+    return _safe_get(row, 'close') > _safe_get(row, 'open')
+
+def block_close_above_ref(row, params):
+    """Close above a named reference column. params: [column_name]  e.g. ['bb_upper']"""
+    return _safe_get(row, 'close') > _safe_get(row, params[0])
+
+def block_close_below_ref(row, params):
+    """Close below a named reference column. params: [column_name]  e.g. ['bb_lower']"""
+    return _safe_get(row, 'close') < _safe_get(row, params[0])
+
+
+# --- STOP-LOSS METHOD BLOCKS ---
+
+def stop_atr(row, params):
+    """Stop = close - ATR * multiplier. params: [atr_multiplier]  e.g. [1.5]"""
+    close = _safe_get(row, 'close')
+    atr = _safe_get(row, 'atr', close * 0.02)
+    return round(close - atr * params[0], 2)
+
+def stop_swing_low(row, params):
+    """Stop = recent low - ATR * buffer. params: [atr_buffer]  e.g. [0.5]
+    Note: requires 'recent_low' or falls back to close - 2*ATR"""
+    close = _safe_get(row, 'close')
+    atr = _safe_get(row, 'atr', close * 0.02)
+    recent_low = _safe_get(row, 'low', close)
+    return round(recent_low - atr * params[0], 2)
+
+def stop_fixed_pct(row, params):
+    """Stop = close * (1 - pct). params: [pct]  e.g. [0.02] for 2%"""
+    close = _safe_get(row, 'close')
+    return round(close * (1 - params[0]), 2)
+
+def stop_sma(row, params):
+    """Stop = SMA_N - ATR * buffer. params: [sma_period, atr_buffer]  e.g. [50, 0.5]"""
+    sma = _safe_get(row, f'sma_{params[0]}')
+    atr = _safe_get(row, 'atr', _safe_get(row, 'close', 100) * 0.02)
+    buffer = params[1] if len(params) > 1 else 0.5
+    return round(sma - atr * buffer, 2) if sma > 0 else stop_atr(row, [2.0])
+
+
+# --- TARGET METHOD BLOCKS ---
+
+def target_atr(row, params):
+    """Target = close + ATR * multiplier. params: [atr_multiplier]  e.g. [3.0]"""
+    close = _safe_get(row, 'close')
+    atr = _safe_get(row, 'atr', close * 0.02)
+    return round(close + atr * params[0], 2)
+
+def target_fixed_pct(row, params):
+    """Target = close * (1 + pct). params: [pct]  e.g. [0.05] for 5%"""
+    close = _safe_get(row, 'close')
+    return round(close * (1 + params[0]), 2)
+
+
+# ============================================================
+# BLOCK REGISTRY -- Maps block names to functions
+# ============================================================
+# To add a new block: 1) Write the function above  2) Add it here
+# Templates reference blocks by the KEY in this dict.
+
+CONDITION_BLOCKS = {
+    # Trend
+    "close_above_sma": block_close_above_sma,
+    "sma_above_sma": block_sma_above_sma,
+    "close_above_ema": block_close_above_ema,
+    "er_slow_above": block_er_slow_above,
+    "trend_alignment": block_trend_alignment,
+
+    # Momentum
+    "rsi_between": block_rsi_between,
+    "rsi_below": block_rsi_below,
+    "rsi_above": block_rsi_above,
+    "macd_above_signal": block_macd_above_signal,
+    "macd_histogram_positive": block_macd_histogram_positive,
+
+    # Volume
+    "volume_surge": block_volume_surge,
+    "rvol_above": block_rvol_above,
+
+    # Volatility
+    "squeeze_active": block_squeeze_active,
+    "squeeze_momentum_positive": block_squeeze_momentum_positive,
+    "bb_width_below": block_bb_width_below,
+    "atr_percent_above": block_atr_percent_above,
+
+    # Price Action
+    "bullish_candle": block_bullish_candle,
+    "close_above_ref": block_close_above_ref,
+    "close_below_ref": block_close_below_ref,
+}
+
+STOP_BLOCKS = {
+    "atr": stop_atr,
+    "swing_low": stop_swing_low,
+    "fixed_pct": stop_fixed_pct,
+    "sma": stop_sma,
+}
+
+TARGET_BLOCKS = {
+    "atr": target_atr,
+    "fixed_pct": target_fixed_pct,
+}
+
+
 class SetupTemplate:
     """
     A single trading setup template.
@@ -130,16 +347,18 @@ class SetupTemplate:
             if field not in self.data:
                 errors.append(f"Missing required field: {field}")
 
-        # Validate conditions
+        # Validate conditions (block-based)
         for i, cond in enumerate(self.conditions):
-            if 'indicator' not in cond:
-                errors.append(f"Condition {i}: missing 'indicator'")
-            if 'operator' not in cond:
-                errors.append(f"Condition {i}: missing 'operator'")
-            elif cond['operator'] not in self.VALID_OPERATORS:
-                errors.append(f"Condition {i}: invalid operator '{cond['operator']}'")
-            if cond.get('operator') == 'between' and not isinstance(cond.get('value'), list):
-                errors.append(f"Condition {i}: 'between' operator requires list value [min, max]")
+            block_name = cond.get('block')
+            if not block_name:
+                # Support legacy operator-based format too
+                if 'indicator' not in cond:
+                    errors.append(f"Condition {i}: missing 'block' or 'indicator'")
+                continue
+            if block_name not in CONDITION_BLOCKS:
+                errors.append(f"Condition {i}: unknown block '{block_name}'")
+            if 'params' not in cond:
+                errors.append(f"Condition {i}: missing 'params' for block '{block_name}'")
 
         # Validate stop_loss
         if self.stop_loss.get('method') not in ['atr', 'swing_low', 'sma', 'fixed_pct']:
@@ -157,6 +376,78 @@ class SetupTemplate:
         if total == 0:
             return 0.0
         return (self.statistics.get('wins', 0) / total) * 100.0
+
+    def evaluate_conditions(self, row):
+        """
+        Evaluate all conditions against a DataFrame row using the Block Registry.
+        Returns: (all_passed: bool, details: list of dicts)
+        """
+        details = []
+        all_passed = True
+
+        for cond in self.conditions:
+            block_name = cond.get('block')
+            params = cond.get('params', [])
+
+            if block_name and block_name in CONDITION_BLOCKS:
+                try:
+                    result = CONDITION_BLOCKS[block_name](row, params)
+                    details.append({"block": block_name, "params": params, "passed": result})
+                    if not result:
+                        all_passed = False
+                except Exception as e:
+                    logger.debug(f"Block {block_name} error: {e}")
+                    details.append({"block": block_name, "params": params, "passed": False, "error": str(e)})
+                    all_passed = False
+            else:
+                logger.warning(f"Unknown block: {block_name}")
+                details.append({"block": block_name, "passed": False, "error": "unknown block"})
+                all_passed = False
+
+        return all_passed, details
+
+    def calculate_stop_loss(self, row):
+        """Calculate stop-loss price using the configured stop block."""
+        method = self.stop_loss.get('method', 'atr')
+        params = []
+
+        if method == 'atr':
+            params = [self.stop_loss.get('atr_multiplier', 2.0)]
+        elif method == 'swing_low':
+            params = [self.stop_loss.get('atr_multiplier', 0.5)]
+        elif method == 'fixed_pct':
+            params = [self.stop_loss.get('fallback_pct', 0.02)]
+        elif method == 'sma':
+            params = [self.stop_loss.get('sma_period', 50), self.stop_loss.get('atr_multiplier', 0.5)]
+
+        if method in STOP_BLOCKS:
+            try:
+                return STOP_BLOCKS[method](row, params)
+            except Exception as e:
+                logger.debug(f"Stop block {method} error: {e}")
+
+        # Fallback
+        fallback_pct = self.stop_loss.get('fallback_pct', 0.02)
+        return stop_fixed_pct(row, [fallback_pct])
+
+    def calculate_take_profit(self, row):
+        """Calculate take-profit price using the configured target block."""
+        method = self.take_profit.get('method', 'atr')
+        params = []
+
+        if method == 'atr':
+            params = [self.take_profit.get('atr_multiplier', 3.0)]
+        elif method == 'fixed_pct':
+            params = [self.take_profit.get('target_pct', 0.05)]
+
+        if method in TARGET_BLOCKS:
+            try:
+                return TARGET_BLOCKS[method](row, params)
+            except Exception as e:
+                logger.debug(f"Target block {method} error: {e}")
+
+        # Fallback
+        return target_atr(row, [3.0])
 
     def record_result(self, ticker, profit_pct, won):
         """
