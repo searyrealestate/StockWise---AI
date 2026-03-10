@@ -106,9 +106,10 @@ STRATEGY_MAP_FILE = os.path.join(PROJECT_ROOT, "ticker_strategies.json")
 LOGS_DIR = os.path.join(PROJECT_ROOT, 'logs')
 MODELS_DIR = os.path.join(PROJECT_ROOT, 'models')
 DB_DIR = os.path.join(PROJECT_ROOT, 'data')
+TEMPLATES_DIR = os.path.join(DB_DIR, "templates")
 
 # Ensure that the necessary directories exist; create them if they do not
-for d in [LOGS_DIR, MODELS_DIR, DB_DIR]:
+for d in [LOGS_DIR, MODELS_DIR, DB_DIR, TEMPLATES_DIR]:
     os.makedirs(d, exist_ok=True)
 
 # --- 2. API CREDENTIALS ---

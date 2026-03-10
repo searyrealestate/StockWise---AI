@@ -422,3 +422,32 @@ RANK  | SYMBOL | REGIME | TREND    | TECH   | AI     | MASTER  | TIER
 ```
 
 **Totals: 62/62 unit tests pass, 31/31 system checks pass (no new tests — wiring only).**
+
+---
+
+### Phase 3.2 — Template Data Model (setup_templates.py + system_config.py)
+
+**Context:** Templates define WHAT to look for (entry conditions), WHERE to set stops/targets, and HOW the template has performed historically. Templates are DATA (JSON), not CODE — adding/modifying templates requires no changes to strategy_engine.py.
+
+**New file: `setup_templates.py`**
+
+**`SetupTemplate` class:**
+- Initialized from dict (loaded from JSON)
+- Fields: `id`, `name`, `source` (seed/discovered), `enabled`, `required_state`, `conditions`, `entry`, `stop_loss`, `take_profit`, `statistics`
+- `validate()` — checks required fields, condition operators, stop/target methods; returns `(bool, errors[])`
+- `record_result(ticker, profit_pct, won)` — running average win/loss stats, per-ticker tracking
+- `get_win_rate()` — returns win% from statistics block
+- `to_dict()` — serializes back to JSON-ready dict
+
+**`TemplateManager` class:**
+- Loads all `*.json` from `data/templates/` on init; skips invalid files with warning
+- `get_for_state(stock_state)` — filters enabled templates by `required_state` compatibility (each field is a list of acceptable values; missing fields accept any value)
+- `add_template(data)` — validates before adding, saves to disk
+- `save_all()` / `save_template(t)` — persist to individual JSON files
+- `get_statistics_summary()` — sorted leaderboard of all templates by win rate
+
+**`system_config.py`:** Added `TEMPLATES_DIR = os.path.join(DB_DIR, "templates")`, included in auto-mkdir loop.
+
+Infrastructure only — no seed templates created yet. Next: Phase 3.3 (Seed Templates).
+
+**Totals: 62/62 unit tests pass, 31/31 system checks pass (no new tests — data model only).**
