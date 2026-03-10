@@ -539,3 +539,41 @@ Templates loaded: 5 | Signals generated: 2
 **Estimated runtime:** ~10-15 min for 10 stocks × 5000 combos.
 
 **Totals: 62/62 unit tests pass, 31/31 system checks pass (no new tests — offline engine).**
+
+---
+
+### Phase 3.8 — Wire Template Pipeline into Live Trading Loop (live_trading_engine.py + system_config.py)
+
+**Context:** Integration step — connects template_matcher.scan_ticker() into the live trading loop with a config flag controlling which signal pipeline is active. No existing code removed.
+
+**New config flag: `SIGNAL_PIPELINE_MODE` in `system_config.py`**
+
+| Value | Behaviour |
+|-------|-----------|
+| `"legacy"` | Original `orchestra.evaluate_ticker()` (6 hardcoded setups) |
+| `"templates"` | New `template_matcher.scan_ticker()` (block-based, JSON-driven) — **default** |
+| `"dual"` | Runs both; logs legacy score for A/B comparison |
+
+**Changes to `live_trading_engine.py` (`__main__` block):**
+
+1. **Import**: `from template_matcher import TemplateMatcher` added alongside existing imports
+2. **Init**: `matcher = TemplateMatcher()` created after `journal = TradeJournal()`; startup log shows template count + mode
+3. **Signal loop**: old `orchestra.evaluate_ticker()` block replaced with dual-path dispatcher:
+   - **Templates path**: loads `ledger_state` from `scan_ledger.json` → calculates features via `FeatureEngine` → calls `matcher.scan_ticker()` → takes `signals[0]` (highest confidence) → builds broker-compatible `ticket` dict → sends rich Telegram alert (template name, confidence, entry/stop/target/R:R, blocks, stock state) → executes via `live_engine.execute_ticket()`
+   - **Legacy path**: original `orchestra.evaluate_ticker()` flow preserved verbatim; active when `SIGNAL_PIPELINE_MODE = "legacy"` or `"dual"`
+
+**Telegram alert format (templates mode):**
+```
+**BUY SIGNAL: AAPL**
+Template: Momentum Breakout
+Confidence: 72%
+Entry: $150.25
+Stop Loss: $147.00 (2.2%)
+Take Profit: $159.75 (6.3%)
+R:R: 2.9
+Runner Mode: Yes
+Blocks: [rsi_between, macd_above_signal, volume_surge]
+State: trend:BULLISH | structure:OPEN_FIELD | volume:SURGING | volatility:NORMAL
+```
+
+**Totals: 62/62 unit tests pass, 31/31 system checks pass.**
