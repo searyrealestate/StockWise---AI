@@ -455,6 +455,31 @@ SCAN_TIER_CONFIG = {
     }
 }
 
+# Template Discovery Engine: finds new profitable templates from historical data
+DISCOVERY_CONFIG = {
+    # Data collection
+    "history_days": 500,             # ~2 years of trading history
+    "api_throttle_seconds": 1.0,     # Delay between API calls (respect rate limits)
+    "min_history_rows": 200,         # Skip stock if less than 200 rows
+
+    # Combination generation
+    "min_blocks_per_combo": 3,       # Minimum blocks in a template
+    "max_blocks_per_combo": 5,       # Maximum blocks in a template
+    "max_combos_to_test": 5000,      # Cap total combos (safety limit)
+
+    # Quality thresholds for saving a discovered template
+    "min_activations": 10,           # Must trigger at least 10 times in history
+    "min_win_rate": 55.0,            # Must win > 55% of the time
+    "min_avg_profit_pct": 1.0,       # Average profit must be > 1%
+    "min_profit_factor": 1.5,        # Total profits / total losses > 1.5
+    "min_stocks_profitable": 3,      # Must work on at least 3 different stocks
+
+    # Lookahead for labeling (did the stock go up after signal?)
+    "lookahead_days": 5,             # Check if price rose within 5 days
+    "profit_target_pct": 0.02,       # 2% minimum gain to count as "win"
+    "stop_target_pct": 0.03,         # 3% drop = "loss" (wider than profit to account for noise)
+}
+
 # Default symbols for AI training when scanner results are not available
 DEFAULT_TRAINING_SYMBOLS = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN',
                              'META', 'TSLA', 'AMD', 'NFLX', 'SPY']

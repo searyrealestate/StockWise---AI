@@ -517,3 +517,25 @@ Templates loaded: 5 | Signals generated: 2
 ```
 
 **Totals: 62/62 unit tests pass, 31/31 system checks pass (no new tests — pipeline connector).**
+
+---
+
+### Phase 3.5 — Template Discovery Engine (template_discovery.py + system_config.py)
+
+**Context:** Automatically discovers new profitable templates by backtesting all valid block combinations against 2 years of historical data. Runs offline (nightly/weekend) — not during trading hours.
+
+**New file: `template_discovery.py` — `TemplateDiscovery` class**
+
+**`run_discovery(symbols)` pipeline:**
+1. `fetch_and_prepare_data()` — fetches history with configurable API throttle (`api_throttle_seconds`), runs `FeatureEngine.calculate_features()` on each stock
+2. `generate_smart_combos()` — builds all `C(19, k)` combinations for k=3..5, filters 4 incompatible pairs (e.g., `rsi_below` + `rsi_above`); caps at `max_combos_to_test=5000`
+3. `backtest_combo()` — for each row where all blocks fire: checks next `lookahead_days` for `max_high` ≥ 2% (win) or `min_low` ≤ 3% below entry (loss); falls back to close P&L if neither hit
+4. `meets_quality_threshold()` — min 10 trades, 55% win rate, 1% avg profit, 1.5 profit factor, 3+ profitable stocks
+5. `combo_to_template()` — converts winner to JSON with `_infer_required_state()` (derives trend/volume/volatility state from block types used)
+6. Saves discovered templates via `TemplateManager.add_template()`
+
+**`DISCOVERY_CONFIG` added to `system_config.py`:** history_days, throttle, combo limits, all 5 quality thresholds, lookahead parameters.
+
+**Estimated runtime:** ~10-15 min for 10 stocks × 5000 combos.
+
+**Totals: 62/62 unit tests pass, 31/31 system checks pass (no new tests — offline engine).**
