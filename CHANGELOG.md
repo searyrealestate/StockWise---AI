@@ -487,3 +487,33 @@ Infrastructure only — no seed templates created yet. Next: Phase 3.3 (Seed Tem
 | `OVERSOLD_BOUNCE` | rsi_below + bullish_candle + volume_surge | NEAR_SUPPORT + SIDEWAYS/BEARISH |
 
 **Totals: 62/62 unit tests pass, 31/31 system checks pass (no new tests — data model + JSON files).**
+
+---
+
+### Phase 3.4 — Template Matcher (template_matcher.py)
+
+**Context:** The bridge between stock state and trading signals. Called on each ticker every scan cycle to produce actionable BUY signals with entry/stop/target.
+
+**New file: `template_matcher.py` — `TemplateMatcher` class**
+
+**`scan_ticker(symbol, df, stock_state)` pipeline:**
+1. Filter templates by `stock_state` (trend/structure/volume/volatility)
+2. Evaluate each matching template's condition blocks against latest candle
+3. Calculate `entry_price` / `stop_loss` / `take_profit` via block registry
+4. Validate: stop < entry, target > entry, R:R >= `FRICTION_AND_ALPHA.min_net_rr`
+5. Compute confidence score: `win_rate*0.6 + R:R_quality*0.2 + sample_size*0.2`
+   (new templates with <10 trades get baseline 50 + R:R bonus instead of 0%)
+6. Return signals sorted by confidence (best first)
+
+**Signal dict keys:** `symbol`, `template_id`, `template_name`, `action`, `entry_price`, `stop_loss`, `take_profit`, `risk_reward_ratio`, `risk_pct`, `reward_pct`, `template_win_rate`, `template_total_trades`, `conditions_detail`, `stock_state`, `confidence_score`, `use_runner_mode`, `confirmation_candles`, `timestamp`
+
+**Anti-Overflow:** `idle_tracker` per symbol counts scans without signal; logs warning at 50+ consecutive idle scans. `get_idle_report()` returns sorted idle summary.
+
+**Verification result with synthetic BULLISH data:**
+```
+Templates loaded: 5 | Signals generated: 2
+  MOMENTUM_BREAKOUT: Entry=$151.0, Stop=$147.25, Target=$158.5, R:R=2.0, Conf=60.0
+  VSA_INSTITUTIONAL: Entry=$151.0, Stop=$145.75, Target=$158.5, R:R=1.43, Conf=57.2
+```
+
+**Totals: 62/62 unit tests pass, 31/31 system checks pass (no new tests — pipeline connector).**
