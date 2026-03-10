@@ -577,3 +577,54 @@ State: trend:BULLISH | structure:OPEN_FIELD | volume:SURGING | volatility:NORMAL
 ```
 
 **Totals: 62/62 unit tests pass, 31/31 system checks pass.**
+
+---
+
+### Phase 3.7 — Extended Statistics for Templates (setup_templates.py)
+
+**Context:** Templates now collect rich multi-dimensional performance data on every activation, enabling the system to learn when and where each template works best.
+
+**Change 1: `_empty_stats()` — 10 stat categories (was 3)**
+
+| Category | Fields |
+|----------|--------|
+| Basic | `wins`, `losses`, `win_rate`, `avg_profit_pct`, `avg_loss_pct`, `max_profit_pct`, `max_loss_pct`, `avg_hold_duration_hours` |
+| Per-ticker | `ticker_stats`: `{AAPL: {wins, losses, total, avg_profit}}` |
+| Per-volume-range | `volume_range_stats`: `{high/mid/low: {wins, losses}}` (>5M / 1-5M / <1M) |
+| Per-trend | `trend_stats`: `{BULLISH/BEARISH/SIDEWAYS: {wins, losses}}` |
+| Per-volatility | `volatility_stats`: `{COMPRESSED/NORMAL/VOLATILE: {wins, losses}}` |
+| Per-regime | `regime_stats`: `{TREND/CHOP: {wins, losses}}` |
+| Per-month | `month_stats`: `{"01": {wins, losses}, ...}` |
+| Per-day-of-week | `day_of_week_stats`: `{"Mon": {wins, losses}, ...}` |
+| Streaks | `consecutive_wins`, `consecutive_losses`, `max_consecutive_wins`, `max_consecutive_losses` |
+| Meta | `last_win_ticker`, `last_loss_ticker` |
+
+**Change 2: `record_result(ticker, profit_pct, won, context=None)`**
+
+New `context` parameter accepts:
+```python
+{
+    "stock_state": {"trend": "BULLISH", "volume": "SURGING", ...},
+    "regime": "TREND",
+    "hold_duration_hours": 48.5,
+    "avg_volume": 5000000,
+}
+```
+Distributes each result across all relevant stat dictionaries in one call.
+
+**Change 3: `get_best_context()` — new analysis method**
+
+Reads accumulated stats, requires minimum 3 samples per category, returns:
+```python
+{
+    "best_trend": "BULLISH", "best_trend_win_rate": 82.0,
+    "avoid_trend": "BEARISH",
+    "best_volatility": "COMPRESSED",
+    "best_volume": "high",
+    "best_ticker": "AAPL", "best_ticker_win_rate": 85.0,
+    "best_month": "03",
+    "best_day": "Tue",
+}
+```
+
+**Totals: 62/62 unit tests pass, 31/31 system checks pass.**
