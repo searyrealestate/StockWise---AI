@@ -675,6 +675,7 @@ if __name__ == "__main__":
     from data_source_manager import DataSourceManager
     from strategy_engine import StrategyEngine
     from stock_hunter import StockHunter
+    from template_matcher import TemplateMatcher
     
     # Parse Command Line Arguments
     parser = argparse.ArgumentParser()
@@ -697,7 +698,12 @@ if __name__ == "__main__":
     
     # Initialize Statistics Recorder (The Black Box)
     journal = TradeJournal()
-    
+
+    # Initialize Template Pipeline (Phase 3.8)
+    matcher = TemplateMatcher()
+    logger.info(f"Template Pipeline loaded: {len(matcher.tm.templates)} templates, "
+                f"mode={getattr(cfg, 'SIGNAL_PIPELINE_MODE', 'legacy')}")
+
     logger.info("ENGINE START: Dynamic Heartbeat Protocol Initiated.")
 
     # EOD Tracker Initialization
@@ -759,36 +765,123 @@ if __name__ == "__main__":
                             cooldown_cache[symbol] = datetime.now() + timedelta(minutes=cooldown_mins)
                             continue
 
-                        # Full Analysis: Technical Setups + AI
-                        ticket = orchestra.evaluate_ticker(symbol, df)
-                        score = ticket.get('master_score', 0.0)
+                        # --- SIGNAL GENERATION (Pipeline Mode) ---
+                        pipeline_mode = getattr(cfg, 'SIGNAL_PIPELINE_MODE', 'legacy')
 
-                        # Track best score for dynamic sleep
-                        if score > highest_score_detected:
-                            highest_score_detected = score
-
-                        # --- JOURNALING & EXECUTION LOGIC ---
-                        if ticket.get("action") == "BUY":
-                            current_regime = orchestra.router.classify_regime(df)
-                            logger.info(f"Signal Detected: {symbol} (Score: {score}). Logging to Journal...")
-                            
-                            journal.log_signal(ticket, df_snapshot=df, status="SIGNAL_DETECTED")
+                        if pipeline_mode in ('templates', 'dual'):
+                            # New template-based pipeline
+                            # Load stock state from scanner ledger
+                            ledger_state = {}
                             try:
-                                # Attempt Execution
-                                result = live_engine.execute_ticket(ticket, current_regime)
-                                if result and result.get('status') == 'FILLED':
-                                    journal.log_signal(ticket, df_snapshot=df, status="EXECUTED", exec_price=ticket['limit_price'])
+                                ledger_path = os.path.join(cfg.DB_DIR, "scan_ledger.json")
+                                if os.path.exists(ledger_path):
+                                    with open(ledger_path, 'r') as f:
+                                        full_ledger = json.load(f)
+                                    ledger_state = full_ledger.get(symbol, {}).get('state', {})
+                            except Exception as e:
+                                logger.debug(f"[{symbol}] Could not load ledger state: {e}")
+
+                            # Calculate features for template evaluation
+                            from feature_engine import FeatureEngine
+                            fe = FeatureEngine()
+                            df_features = fe.calculate_features(df, strategy_config={"active_indicators": ["all"]})
+
+                            # Run template matcher
+                            signals = matcher.scan_ticker(symbol, df_features, stock_state=ledger_state)
+
+                            if signals:
+                                # Use the best signal (highest confidence)
+                                best = signals[0]
+                                score = best.get('confidence_score', 0)
+
+                                # Track best score for dynamic sleep
+                                if score > highest_score_detected:
+                                    highest_score_detected = score
+
+                                # Build ticket compatible with existing execution flow
+                                ticket = {
+                                    "symbol": symbol,
+                                    "action": "BUY",
+                                    "master_score": score,
+                                    "limit_price": best['entry_price'],
+                                    "stop_loss": best['stop_loss'],
+                                    "take_profit": best['take_profit'],
+                                    "qty": 10,  # Default, will be overridden by RiskActuary
+                                    "template_id": best['template_id'],
+                                    "template_name": best['template_name'],
+                                    "confidence_score": best['confidence_score'],
+                                    "risk_reward_ratio": best['risk_reward_ratio'],
+                                    "use_runner_mode": best.get('use_runner_mode', False),
+                                    "conditions_detail": best.get('conditions_detail', []),
+                                    "stock_state": ledger_state,
+                                }
+
+                                # Send detailed Telegram alert
+                                state_str = " | ".join(f"{k}:{v}" for k, v in ledger_state.items()) if ledger_state else "N/A"
+                                blocks_str = ", ".join(d.get('block', '?') for d in best.get('conditions_detail', []))
+
+                                alert_msg = (
+                                    f"**BUY SIGNAL: {symbol}**\n"
+                                    f"Template: {best['template_name']}\n"
+                                    f"Confidence: {best['confidence_score']}%\n"
+                                    f"Entry: ${best['entry_price']:.2f}\n"
+                                    f"Stop Loss: ${best['stop_loss']:.2f} ({best.get('risk_pct', 0):.1f}%)\n"
+                                    f"Take Profit: ${best['take_profit']:.2f} ({best.get('reward_pct', 0):.1f}%)\n"
+                                    f"R:R: {best['risk_reward_ratio']:.1f}\n"
+                                    f"Runner Mode: {'Yes' if best.get('use_runner_mode') else 'No'}\n"
+                                    f"Blocks: [{blocks_str}]\n"
+                                    f"State: {state_str}"
+                                )
+
+                                if hasattr(live_engine, 'notifier') and live_engine.notifier:
+                                    live_engine.notifier.send_message(alert_msg)
+
+                                logger.info(f"[{symbol}] TEMPLATE SIGNAL: {best['template_name']} | "
+                                            f"Conf: {score:.0f}% | Entry: ${best['entry_price']:.2f}")
+
+                                # Journal logging
+                                journal.log_signal(ticket, df_snapshot=df, status="SIGNAL_DETECTED")
+
+                                # Execute if in auto mode
+                                try:
+                                    current_regime = orchestra.router.classify_regime(df_features)
+                                    result = live_engine.execute_ticket(ticket, current_regime)
+                                    if result and result.get('status') == 'FILLED':
+                                        journal.log_signal(ticket, df_snapshot=df, status="EXECUTED", exec_price=ticket['limit_price'])
+                                    else:
+                                        journal.log_signal(ticket, df_snapshot=df, status="REJECTED_BROKER")
+                                except Exception as exec_error:
+                                    logger.error(f"Execution Failed: {exec_error}")
+                                    journal.log_signal(ticket, df_snapshot=df, status="ERROR_EXECUTION")
+                            else:
+                                # No template signals
+                                cooldown_mins = getattr(cfg, 'VETO_COOLDOWN_MINUTES', 30)
+                                cooldown_cache[symbol] = datetime.now() + timedelta(minutes=cooldown_mins)
+
+                        if pipeline_mode in ('legacy', 'dual'):
+                            # Original pipeline (kept for comparison/fallback)
+                            ticket = orchestra.evaluate_ticker(symbol, df)
+                            score = ticket.get('master_score', 0.0)
+
+                            if score > highest_score_detected:
+                                highest_score_detected = score
+
+                            if pipeline_mode == 'dual':
+                                logger.info(f"[{symbol}] DUAL MODE — Legacy score: {score:.1f}")
+
+                            if pipeline_mode == 'legacy':
+                                if ticket.get("action") == "BUY":
+                                    current_regime = orchestra.router.classify_regime(df)
+                                    journal.log_signal(ticket, df_snapshot=df, status="SIGNAL_DETECTED")
+                                    try:
+                                        result = live_engine.execute_ticket(ticket, current_regime)
+                                        if result and result.get('status') == 'FILLED':
+                                            journal.log_signal(ticket, df_snapshot=df, status="EXECUTED", exec_price=ticket['limit_price'])
+                                    except Exception as exec_error:
+                                        logger.error(f"Execution Failed: {exec_error}")
                                 else:
-                                    journal.log_signal(ticket, df_snapshot=df, status="REJECTED_BROKER")
-                            except Exception as exec_error:
-                                logger.error(f"Execution Failed: {exec_error}")
-                                journal.log_signal(ticket, df_snapshot=df, status="ERROR_EXECUTION")
-                        else:
-                            # Architectural Fix: Amnesia Loop Prevention (Dynamic Veto Cooldown)
-                            cooldown_mins = getattr(cfg, 'VETO_COOLDOWN_MINUTES', 30)
-                            logger.debug(f"[{symbol}] Trade Vetoed by Strategy Engine. Initiating {cooldown_mins}m cooldown.")
-                            cooldown_cache[symbol] = datetime.now() + timedelta(minutes=cooldown_mins)
-                            continue
+                                    cooldown_mins = getattr(cfg, 'VETO_COOLDOWN_MINUTES', 30)
+                                    cooldown_cache[symbol] = datetime.now() + timedelta(minutes=cooldown_mins)
                             
                 except Exception as inner_e:
                     logger.error(f"Error processing {symbol}: {inner_e}")

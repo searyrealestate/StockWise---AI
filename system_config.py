@@ -32,6 +32,12 @@ except ImportError:
 # Feature Flags
 EN_ORCHESTRAL = True  # Enable AI Orchestrator
 
+# Signal generation pipeline mode
+# "legacy": use orchestra.evaluate_ticker() (original 6 hardcoded setups)
+# "templates": use template_matcher.scan_ticker() (block-based templates)
+# "dual": run both and log comparison (testing mode)
+SIGNAL_PIPELINE_MODE = "templates"
+
 # Paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # DATA DIRECTORY
