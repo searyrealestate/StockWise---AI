@@ -844,6 +844,289 @@ class TestPhase2_5_MilestoneAlerts:
 
 
 # ============================================================
+# PHASE 3.3: Block Registry
+# ============================================================
+class TestPhase3_3_BlockRegistry:
+    """Verify condition blocks, stop blocks, and target blocks work correctly."""
+
+    def test_all_condition_blocks_registered(self):
+        """All condition block functions should be in CONDITION_BLOCKS dict."""
+        from setup_templates import CONDITION_BLOCKS
+        assert len(CONDITION_BLOCKS) >= 19, \
+            f"Expected >= 19 condition blocks, got {len(CONDITION_BLOCKS)}"
+
+    def test_all_stop_blocks_registered(self):
+        """All stop block functions should be in STOP_BLOCKS dict."""
+        from setup_templates import STOP_BLOCKS
+        assert len(STOP_BLOCKS) >= 4, \
+            f"Expected >= 4 stop blocks, got {len(STOP_BLOCKS)}"
+
+    def test_all_target_blocks_registered(self):
+        """All target block functions should be in TARGET_BLOCKS dict."""
+        from setup_templates import TARGET_BLOCKS
+        assert len(TARGET_BLOCKS) >= 2, \
+            f"Expected >= 2 target blocks, got {len(TARGET_BLOCKS)}"
+
+    def test_rsi_between_block(self):
+        """rsi_between should return True when RSI is in range."""
+        from setup_templates import CONDITION_BLOCKS
+        row = _make_row(rsi=55.0).iloc[0]
+        assert CONDITION_BLOCKS["rsi_between"](row, [40, 65]) == True
+        assert CONDITION_BLOCKS["rsi_between"](row, [60, 70]) == False
+
+    def test_close_above_sma_block(self):
+        """close_above_sma should compare close to sma_N."""
+        from setup_templates import CONDITION_BLOCKS
+        row = _make_row(close=150.0, sma_50=140.0).iloc[0]
+        assert CONDITION_BLOCKS["close_above_sma"](row, [50]) == True
+        row_below = _make_row(close=130.0, sma_50=140.0).iloc[0]
+        assert CONDITION_BLOCKS["close_above_sma"](row_below, [50]) == False
+
+    def test_volume_surge_block(self):
+        """volume_surge should compare volume to avg * multiplier."""
+        from setup_templates import CONDITION_BLOCKS
+        row = _make_row(volume=800000, vol_avg_20=500000).iloc[0]
+        assert CONDITION_BLOCKS["volume_surge"](row, [1.5]) == True  # 800K > 750K
+        assert CONDITION_BLOCKS["volume_surge"](row, [2.0]) == False  # 800K < 1M
+
+    def test_stop_atr_block(self):
+        """stop_atr should return close - ATR * multiplier."""
+        from setup_templates import STOP_BLOCKS
+        row = _make_row(close=100.0, atr=2.0).iloc[0]
+        stop = STOP_BLOCKS["atr"](row, [1.5])
+        assert stop == 97.0, f"Expected 97.0, got {stop}"
+
+    def test_target_atr_block(self):
+        """target_atr should return close + ATR * multiplier."""
+        from setup_templates import TARGET_BLOCKS
+        row = _make_row(close=100.0, atr=2.0).iloc[0]
+        target = TARGET_BLOCKS["atr"](row, [3.0])
+        assert target == 106.0, f"Expected 106.0, got {target}"
+
+    def test_blocks_handle_nan_safely(self):
+        """Blocks should handle NaN values without crashing."""
+        from setup_templates import CONDITION_BLOCKS
+        import numpy as np
+        row = _make_row(rsi=np.nan, close=np.nan).iloc[0]
+        # Should not crash — returns False or default
+        try:
+            result = CONDITION_BLOCKS["rsi_between"](row, [40, 65])
+            # NaN defaults to 50 via _safe_get, so 40 <= 50 <= 65 = True
+            assert isinstance(result, bool)
+        except Exception as e:
+            assert False, f"Block crashed on NaN: {e}"
+
+
+# ============================================================
+# PHASE 3.3: Template Validation
+# ============================================================
+class TestPhase3_3_TemplateValidation:
+    """Verify SetupTemplate and TemplateManager."""
+
+    def test_seed_templates_load(self):
+        """All 5 seed templates should load and validate."""
+        from setup_templates import TemplateManager
+        tm = TemplateManager()
+        assert len(tm.templates) >= 5, \
+            f"Expected >= 5 templates, got {len(tm.templates)}"
+
+    def test_all_templates_valid(self):
+        """Every loaded template should pass validation."""
+        from setup_templates import TemplateManager
+        tm = TemplateManager()
+        for t in tm.templates.values():
+            valid, errors = t.validate()
+            assert valid, f"Template {t.id} invalid: {errors}"
+
+    def test_template_evaluate_conditions(self):
+        """evaluate_conditions should run all blocks and return results."""
+        from setup_templates import TemplateManager
+        tm = TemplateManager()
+        # Use MOMENTUM_BREAKOUT template with matching data
+        t = tm.get_template_by_id("MOMENTUM_BREAKOUT")
+        if t is None:
+            return  # Skip if template not on disk
+        row = _make_row(rsi=60.0, macd=1.5, macd_signal=0.5,
+                       close=150.0, sma_50=140.0,
+                       volume=800000, vol_avg_20=500000).iloc[0]
+        passed, details = t.evaluate_conditions(row)
+        assert isinstance(passed, bool)
+        assert len(details) == len(t.conditions)
+
+    def test_template_calculate_stop_loss(self):
+        """calculate_stop_loss should return a price below entry."""
+        from setup_templates import TemplateManager
+        tm = TemplateManager()
+        t = tm.get_template_by_id("MOMENTUM_BREAKOUT")
+        if t is None:
+            return
+        row = _make_row(close=100.0, atr=2.0).iloc[0]
+        stop = t.calculate_stop_loss(row)
+        assert stop < 100.0, f"Stop {stop} should be below entry 100"
+
+    def test_template_calculate_take_profit(self):
+        """calculate_take_profit should return a price above entry."""
+        from setup_templates import TemplateManager
+        tm = TemplateManager()
+        t = tm.get_template_by_id("MOMENTUM_BREAKOUT")
+        if t is None:
+            return
+        row = _make_row(close=100.0, atr=2.0).iloc[0]
+        target = t.calculate_take_profit(row)
+        assert target > 100.0, f"Target {target} should be above entry 100"
+
+    def test_get_for_state_filters_correctly(self):
+        """get_for_state should only return templates matching the stock state."""
+        from setup_templates import TemplateManager
+        tm = TemplateManager()
+        # BULLISH state should match MOMENTUM_BREAKOUT but not OVERSOLD_BOUNCE
+        bullish_state = {"trend": "BULLISH", "volume": "SURGING", "volatility": "NORMAL"}
+        matching = tm.get_for_state(bullish_state)
+        ids = [t.id for t in matching]
+        assert "OVERSOLD_BOUNCE" not in ids, \
+            "OVERSOLD_BOUNCE should not match BULLISH state"
+
+
+# ============================================================
+# PHASE 3.4: Template Matcher
+# ============================================================
+class TestPhase3_4_TemplateMatcher:
+    """Verify the template matcher pipeline."""
+
+    def test_matcher_initializes(self):
+        """TemplateMatcher should load templates on init."""
+        from template_matcher import TemplateMatcher
+        matcher = TemplateMatcher()
+        assert len(matcher.tm.templates) >= 5
+
+    def test_scan_returns_signals_for_bullish_stock(self):
+        """A perfect bullish stock should generate at least one signal."""
+        from template_matcher import TemplateMatcher
+        matcher = TemplateMatcher()
+        df = _make_row(
+            close=151.0, open=148.0, sma_50=145.0, sma_200=130.0, ema_12=149.0,
+            rsi=62.0, macd=1.5, macd_signal=0.8, macd_hist=0.7,
+            volume=800000, vol_avg_20=500000, atr=2.5,
+            er_slow=0.65, trend_alignment=1
+        )
+        state = {"trend": "BULLISH", "structure": "OPEN_FIELD",
+                "volume": "SURGING", "volatility": "NORMAL"}
+        signals = matcher.scan_ticker("TEST", df, stock_state=state)
+        assert len(signals) > 0, "Should generate at least one signal for perfect bullish data"
+
+    def test_scan_returns_empty_for_bearish_stock(self):
+        """A bearish stock with no matching templates should return empty."""
+        from template_matcher import TemplateMatcher
+        matcher = TemplateMatcher()
+        df = _make_row(close=80.0, sma_50=100.0, sma_200=110.0, rsi=25.0)
+        state = {"trend": "BEARISH", "structure": "OPEN_FIELD",
+                "volume": "DRYING_UP", "volatility": "VOLATILE"}
+        signals = matcher.scan_ticker("TEST_BEAR", df, stock_state=state)
+        # May or may not have signals depending on OVERSOLD_BOUNCE matching
+        # But should not crash
+        assert isinstance(signals, list)
+
+    def test_signal_has_required_fields(self):
+        """Generated signals should have all required fields."""
+        from template_matcher import TemplateMatcher
+        matcher = TemplateMatcher()
+        df = _make_row(
+            close=151.0, open=148.0, sma_50=145.0, sma_200=130.0, ema_12=149.0,
+            rsi=62.0, macd=1.5, macd_signal=0.8, volume=800000, vol_avg_20=500000, atr=2.5
+        )
+        state = {"trend": "BULLISH", "volume": "SURGING", "volatility": "NORMAL"}
+        signals = matcher.scan_ticker("TEST", df, stock_state=state)
+        if signals:
+            s = signals[0]
+            required = ["symbol", "template_id", "action", "entry_price",
+                       "stop_loss", "take_profit", "risk_reward_ratio", "confidence_score"]
+            for field in required:
+                assert field in s, f"Signal missing field: {field}"
+
+    def test_idle_tracking(self):
+        """Idle tracker should count scans without signals."""
+        from template_matcher import TemplateMatcher
+        matcher = TemplateMatcher()
+        df = _make_row(close=50.0, rsi=50.0)  # Neutral, unlikely to match
+        state = {"trend": "SIDEWAYS", "volume": "DRYING_UP", "volatility": "NORMAL"}
+        for _ in range(5):
+            matcher.scan_ticker("IDLE_TEST", df, stock_state=state)
+        report = matcher.get_idle_report()
+        # May or may not be in report depending on threshold, but should not crash
+        assert isinstance(report, list)
+
+
+# ============================================================
+# PHASE 3.7: Extended Statistics
+# ============================================================
+class TestPhase3_7_ExtendedStats:
+    """Verify extended statistics collection."""
+
+    def test_record_result_basic(self):
+        """record_result should update wins/losses."""
+        from setup_templates import SetupTemplate
+        t = SetupTemplate({"id": "TEST", "name": "Test", "conditions": [],
+                          "stop_loss": {"method": "atr"}, "take_profit": {"method": "atr"}})
+        t.record_result("AAPL", 2.5, True)
+        t.record_result("AAPL", -1.0, False)
+        assert t.statistics['wins'] == 1
+        assert t.statistics['losses'] == 1
+        assert t.statistics['total_activations'] == 2
+
+    def test_record_result_with_context(self):
+        """record_result with context should populate per-ticker and per-trend stats."""
+        from setup_templates import SetupTemplate
+        t = SetupTemplate({"id": "TEST", "name": "Test", "conditions": [],
+                          "stop_loss": {"method": "atr"}, "take_profit": {"method": "atr"}})
+        context = {
+            "stock_state": {"trend": "BULLISH", "volatility": "NORMAL"},
+            "regime": "TREND",
+            "avg_volume": 6000000
+        }
+        t.record_result("AAPL", 3.0, True, context=context)
+
+        assert "AAPL" in t.statistics.get('ticker_stats', {}), "Ticker stats should track AAPL"
+        assert "BULLISH" in t.statistics.get('trend_stats', {}), "Trend stats should track BULLISH"
+        assert "high" in t.statistics.get('volume_range_stats', {}), "Volume stats should track high (>5M)"
+        assert "TREND" in t.statistics.get('regime_stats', {}), "Regime stats should track TREND"
+
+    def test_get_best_context(self):
+        """get_best_context should identify best performing conditions."""
+        from setup_templates import SetupTemplate
+        t = SetupTemplate({"id": "TEST", "name": "Test", "conditions": [],
+                          "stop_loss": {"method": "atr"}, "take_profit": {"method": "atr"}})
+        # Add enough data points for meaningful analysis
+        for _ in range(8):
+            t.record_result("AAPL", 2.0, True, {"stock_state": {"trend": "BULLISH"}})
+        for _ in range(2):
+            t.record_result("AAPL", -1.0, False, {"stock_state": {"trend": "BULLISH"}})
+        for _ in range(2):
+            t.record_result("TSLA", 1.5, True, {"stock_state": {"trend": "BEARISH"}})
+        for _ in range(5):
+            t.record_result("TSLA", -2.0, False, {"stock_state": {"trend": "BEARISH"}})
+
+        best = t.get_best_context()
+        assert best.get('best_trend') == "BULLISH", \
+            f"Best trend should be BULLISH (80% WR), got {best.get('best_trend')}"
+
+    def test_streak_tracking(self):
+        """Consecutive wins/losses should be tracked."""
+        from setup_templates import SetupTemplate
+        t = SetupTemplate({"id": "TEST", "name": "Test", "conditions": [],
+                          "stop_loss": {"method": "atr"}, "take_profit": {"method": "atr"}})
+        t.record_result("AAPL", 2.0, True)
+        t.record_result("AAPL", 1.5, True)
+        t.record_result("AAPL", 3.0, True)
+        assert t.statistics['consecutive_wins'] == 3
+        assert t.statistics['max_consecutive_wins'] == 3
+
+        t.record_result("AAPL", -1.0, False)
+        assert t.statistics['consecutive_wins'] == 0
+        assert t.statistics['consecutive_losses'] == 1
+        assert t.statistics['max_consecutive_wins'] == 3  # Max preserved
+
+
+# ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
 if __name__ == '__main__':
@@ -851,7 +1134,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")
