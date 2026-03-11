@@ -628,3 +628,26 @@ Reads accumulated stats, requires minimum 3 samples per category, returns:
 ```
 
 **Totals: 62/62 unit tests pass, 31/31 system checks pass.**
+
+---
+
+## Phase 3 — Tests: Block Registry, Templates, Matcher, Discovery, Extended Stats
+
+### Test Infrastructure — Phase 3 comprehensive tests (`tests/unit_tests.py` + `master_validator.py`)
+
+**Added 4 test classes (22 tests total) to `tests/unit_tests.py`:**
+
+| Class | Tests | Coverage |
+|-------|-------|----------|
+| `TestPhase3_3_BlockRegistry` | 9 | Block count (condition/stop/target), `rsi_between`, `close_above_sma`, `volume_surge`, `stop_atr`, `target_atr`, NaN safety |
+| `TestPhase3_3_TemplateValidation` | 6 | Seed template loading (>=5), validation pass, `evaluate_conditions`, `calculate_stop_loss`, `calculate_take_profit`, `get_for_state` filtering |
+| `TestPhase3_4_TemplateMatcher` | 5 | Init loads templates, bullish stock generates signals, bearish stock doesn't crash, signal has required fields, idle tracking |
+| `TestPhase3_7_ExtendedStats` | 4 | Basic `record_result` wins/losses, context-aware stats (ticker/trend/volume/regime), `get_best_context` analysis, streak tracking |
+
+**Added CHECK 10 to `master_validator.py` (`StockWiseMasterValidator`):**
+- `setup_templates.py` exists
+- `template_matcher.py` exists
+- Seed templates >= 5 in `data/templates/`
+- `SIGNAL_PIPELINE_MODE` configured (`legacy`/`templates`/`dual`)
+
+**Totals: 86/86 unit tests pass, 102/120 validator checks pass (pre-existing pandas_ta gaps unchanged).**
