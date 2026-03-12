@@ -402,6 +402,19 @@ MILESTONE_ALERT_CONFIG = {
                                           # Prevents noise exit when ATR is tiny
 }
 
+# Position Management Configuration
+POSITION_MANAGEMENT_CONFIG = {
+    # PHASE_PAUSE: Healthy pullback detection
+    "max_healthy_pullback_pct": 0.03,    # Up to 3% pullback = still healthy
+    "min_er_for_pause": 0.45,            # ER must be above this for "trend intact"
+    "min_rsi_for_pause": 40,             # RSI must be above this for "not oversold"
+
+    # Re-entry: after stop-loss exit, when to recommend re-entry
+    "re_entry_enabled": True,
+    "re_entry_min_wait_candles": 3,      # Wait at least 3 candles after exit
+    "re_entry_requires_new_signal": True, # Must get a fresh template signal
+}
+
 PORTFOLIO_DEFENSE = {
     # Structural risk management to prevent massive account blowups.
     "max_covariance_corr": 0.85,         # If the new stock moves exactly like our current portfolio (>85% correlation), we veto it.

@@ -250,6 +250,21 @@ class LifecycleManager:
         new_stop = current_stop
         phase = "PHASE_1_BREATHING"
 
+        # --- Pre-compute PHASE_PAUSE conditions ---
+        pullback_pct = (highest_high - current_price) / highest_high if highest_high > 0 else 0
+        er_slow = position.get('last_er_slow', 0.5)
+        rsi = position.get('last_rsi', 50)
+        _pause_cfg = getattr(cfg, 'POSITION_MANAGEMENT_CONFIG', {})
+        _max_pullback = _pause_cfg.get('max_healthy_pullback_pct', 0.03)
+        _min_er = _pause_cfg.get('min_er_for_pause', 0.45)
+        _min_rsi = _pause_cfg.get('min_rsi_for_pause', 40)
+        _is_healthy_pullback = (
+            not position.get("runner_mode") and
+            0.005 < pullback_pct <= _max_pullback and
+            er_slow >= _min_er and
+            rsi >= _min_rsi
+        )
+
         # --- PHASE 4: RUNNER MODE (Let Winners Run) ---
         # When a position hits its original target, we don't sell.
         # Instead we trail ultra-tight with a minimum distance floor.
@@ -267,6 +282,16 @@ class LifecycleManager:
 
             new_stop = max(current_stop, runner_stop)
             phase = "PHASE_4_RUNNER"
+
+        # --- PHASE_PAUSE: Healthy Pullback Detection ---
+        # If the stock pulled back slightly but trend is still intact,
+        # DON'T tighten the stop. Let it breathe.
+        # Stop never goes down — it just stops going up temporarily.
+        elif _is_healthy_pullback:
+            phase = "PHASE_PAUSE"
+            # new_stop stays at current_stop (no change)
+            logger.info(f"[{symbol}] PHASE_PAUSE: Pullback {pullback_pct:.1%} "
+                        f"but trend intact (ER={er_slow:.2f}, RSI={rsi:.0f}). Stop frozen at {current_stop:.2f}")
 
         # --- STORY: The Parabolic Choke (Phase 3) ---
         # If the stock has exploded +3.0% into profit, we do not want to give it back.
@@ -578,6 +603,37 @@ class LiveTradingEngine:
         # Return a dictionary mimicking a standard Broker API JSON response
         return {"status": "FILLED", "exec_price": ticket["limit_price"]}
 
+    def send_daily_position_summary(self):
+        """
+        Sends a daily summary of open positions to the user.
+        Asks for confirmation that positions are still open.
+        """
+        if not self.positions:
+            return
+
+        lines = [f"**DAILY POSITION CHECK ({len(self.positions)} open):**\n"]
+
+        for symbol, pos in self.positions.items():
+            entry = pos.get('entry_price', 0)
+            stop = pos.get('stop_loss', 0)
+            pnl_str = ""
+            if entry > 0 and pos.get('last_price'):
+                pnl = ((pos['last_price'] - entry) / entry) * 100
+                pnl_str = f" | PnL: {pnl:+.1f}%"
+
+            runner = " [RUNNER]" if pos.get('runner_mode') else ""
+            phase = pos.get('last_phase', '')
+            phase_str = f" | {phase}" if phase else ""
+
+            lines.append(f"  {symbol}: Entry ${entry:.2f} | Stop ${stop:.2f}{pnl_str}{runner}{phase_str}")
+
+        lines.append(f"\nReply with ticker name to mark as SOLD (e.g., 'sold AAPL')")
+
+        msg = "\n".join(lines)
+        if hasattr(self, 'notifier') and self.notifier:
+            self.notifier.send_message(msg)
+        logger.info(f"Daily position summary sent: {len(self.positions)} positions")
+
     def manage_open_positions(self, market_data, agent1_router):
         if not self.positions:
             logger.debug("No open positions to manage.")
@@ -593,6 +649,9 @@ class LiveTradingEngine:
                 last = df.iloc[-1]
                 current_price = last['close']
                 current_atr = last.get('atr', current_price * 0.01)
+                # Store indicators for PHASE_PAUSE pullback analysis
+                position['last_er_slow'] = last.get('er_slow', 0.5)
+                position['last_rsi'] = last.get('rsi', 50)
                 current_regime = agent1_router.classify_regime(df)
 
                 # --- CHECK STOPS ---
@@ -615,7 +674,17 @@ class LiveTradingEngine:
                             f"Target was ${position['take_profit']:.2f} -- NOT selling.\n"
                             f"Trailing stop tightened. Let it run!")
                 elif self.lifecycle.check_zombie_protocol(symbol, position, current_regime):
-                    reason = "ZOMBIE PROTOCOL (Time Expired)"
+                    # Zombie = trend changed, but don't exit — let stop handle it
+                    # Just warn the user
+                    if not position.get('zombie_warned'):
+                        position['zombie_warned'] = True
+                        if hasattr(self, 'notifier') and self.notifier:
+                            self.notifier.send_message(
+                                f"**{symbol}: TREND CHANGE WARNING**\n"
+                                f"Original regime: {position.get('entry_regime', '?')}\n"
+                                f"Current regime: {current_regime}\n"
+                                f"Stop-loss will handle exit. Stay alert.")
+                        logger.info(f"[{symbol}] Zombie warning sent. Stop at {position['stop_loss']:.2f}")
 
                 if reason:
                     # Execute Sale
@@ -920,6 +989,8 @@ if __name__ == "__main__":
                 # This guarantees the report never fires twice even if the notification crashes.
                 last_eod_date = current_time.date()
 
+                # Daily position confirmation check
+                live_engine.send_daily_position_summary()
                 logger.info("Triggering End of Day (EOD) Report...")
                 try:
                     # Dynamically read today's setups from the Trade Journal

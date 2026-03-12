@@ -631,6 +631,51 @@ Reads accumulated stats, requires minimum 3 samples per category, returns:
 
 ---
 
+## Phase 4 — Position Management Architecture (`live_trading_engine.py` + `system_config.py`)
+
+### Phase 4.0 — Smart position management: PHASE_PAUSE, zombie warning, daily summary
+
+**Added `POSITION_MANAGEMENT_CONFIG` to `system_config.py`:**
+
+| Key | Value | Purpose |
+|-----|-------|---------|
+| `max_healthy_pullback_pct` | 0.03 | Pullbacks ≤ 3% from the peak are considered healthy |
+| `min_er_for_pause` | 0.45 | ER must be above this for trend to be "intact" |
+| `min_rsi_for_pause` | 40 | RSI must be above this to confirm not oversold |
+| `re_entry_enabled` | True | Re-entry recommendations enabled after stop-loss exit |
+| `re_entry_min_wait_candles` | 3 | Minimum candles to wait before re-entry |
+| `re_entry_requires_new_signal` | True | Must get a fresh template signal to re-enter |
+
+**`PHASE_PAUSE` added to `LifecycleManager.manage_kinetic_stop()`:**
+
+- Fires between Phase 4 (Runner) and Phase 3 (Parabolic) in the kinetic stop chain
+- Detects healthy pullbacks: price retreated > 0.5% but ≤ 3% from `highest_high`, while `er_slow ≥ 0.45` and `rsi ≥ 40`
+- When active: stop is **frozen** at its current level — does not tighten, does not drop
+- Falls through to Phase 3/2/1 normally when pullback is outside the healthy range
+
+**Zombie Protocol changed from auto-liquidation to WARNING:**
+
+- Previously: zombie TTL expiry set `reason = "ZOMBIE PROTOCOL"` → forced liquidation
+- Now: sends a single Telegram warning (`zombie_warned` flag prevents repeat) and lets the stop-loss handle exit naturally
+- Rationale: regime change alone doesn't mean the trade is bad; stop-loss is the authoritative exit
+
+**`send_daily_position_summary()` added to `LiveTradingEngine`:**
+
+- Fires at EOD (before the EOD report) when positions are open
+- Lists each position: entry price, current stop, PnL%, runner mode flag, phase label
+- Prompts user to reply `sold AAPL` to manually mark a position as closed
+
+**`er_slow` and `rsi` stored per-position each loop** (used by PHASE_PAUSE in the next kinetic stop evaluation)
+
+**Design constraints (unchanged):**
+- No scaling in
+- No system-initiated partial profit
+- Exit is always via stop-loss hit — no exceptions
+
+**Totals: 86/86 unit tests pass, 120/120 validator checks pass.**
+
+---
+
 ## Phase 3 — Tests: Block Registry, Templates, Matcher, Discovery, Extended Stats
 
 ### Test Infrastructure — Phase 3 comprehensive tests (`tests/unit_tests.py` + `master_validator.py`)
