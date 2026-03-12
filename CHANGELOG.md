@@ -631,6 +631,39 @@ Reads accumulated stats, requires minimum 3 samples per category, returns:
 
 ---
 
+## Phase 6 — Comprehensive Testing (`tests/test_integration.py` + `tests/backtest_real_stocks.py`)
+
+### Phase 6.0 — Integration tests + walk-forward backtest script
+
+**`tests/test_integration.py`** (new, 17 tests, no API):
+
+| Class | Tests |
+|-------|-------|
+| `TestIntegration_FullPipeline` | Bullish/bearish pipeline, sector block, sector allow, circuit breaker, weekly trend gate, exposure limit |
+| `TestIntegration_PositionManagement` | PHASE_PAUSE activates, PHASE_PAUSE skips large pullback, stop monotonically increases, daily summary format |
+| `TestIntegration_EdgeCases` | Empty DataFrame, NaN-heavy data, single row, unknown sector, zero portfolio value, broken template block |
+
+All 17 pass on first run. Notable findings:
+- Bullish synthetic stock lands in `BEARISH` state (OPEN_FIELD, VOLATILE) — no signals. Confirms templates are conservative on noisy synthetic data. Live data will differ.
+- `PHASE_PAUSE` correctly freezes stop at 97.0 on 1.8% pullback with ER=0.6, RSI=55.
+- Circuit breaker fires at 11% drawdown; exposure gate fires at 70%.
+- Weekly trend correctly reports BEARISH on 500-day downtrend.
+
+**`tests/backtest_real_stocks.py`** (new, requires API):
+- Walk-forward simulation: scans every day from day 200 onward for each symbol
+- Per-template stats: signal count, wins, losses, win rate, avg profit/loss, profit factor
+- Overall stats: total trades, win rate, total PnL, avg PnL per trade
+- Weakness report: worst-performing template, max consecutive losing streak, idle rate
+- CLI flags: `--provider`, `--days`, `--symbols`
+
+**Also fixed in this phase:**
+- `manage_kinetic_stop()` now returns `(new_stop, highest_high, phase)` — 3 values
+- Call site stores `position['last_phase'] = phase` each loop (used by daily summary)
+
+**Totals: 17/17 integration tests pass, 120/120 validator checks pass.**
+
+---
+
 ## Code Review Fixes — Priority A + D (`live_trading_engine.py`, `portfolio_risk.py`, `system_config.py`, `notification_manager.py`, `setup_templates.py`)
 
 ### 8 fixes from final code review

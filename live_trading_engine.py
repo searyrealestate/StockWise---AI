@@ -318,8 +318,8 @@ class LifecycleManager:
             new_stop = max(current_stop, trail_stop) # 'max' ensures the stop only moves UP, never down.
 
         logger.debug(f"[{symbol}] Kinetic Stop Math -> Pnl: {profit_pct:.2%}, State: {phase}, Old Stop: {current_stop:.2f}, New Stop: {new_stop:.2f}")
-        
-        return new_stop, highest_high
+
+        return new_stop, highest_high, phase
 
     def check_zombie_protocol(self, symbol, position, current_regime):
         """
@@ -742,8 +742,9 @@ class LiveTradingEngine:
                     continue
 
                 # 4. Agent 4: Kinetic Trailing Stop
-                new_stop, new_high = self.lifecycle.manage_kinetic_stop(symbol, position, current_price, current_atr)
-                
+                new_stop, new_high, phase = self.lifecycle.manage_kinetic_stop(symbol, position, current_price, current_atr)
+                position['last_phase'] = phase
+
                 if new_stop > position["stop_loss"]:
                     old_stop = position["stop_loss"]
                     position["stop_loss"] = new_stop
