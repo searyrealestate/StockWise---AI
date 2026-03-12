@@ -310,16 +310,18 @@ class TemplateDiscovery:
             result['stocks_profitable'] >= min_stocks
         )
 
-    def combo_to_template(self, result, default_params):
+    def combo_to_template(self, result, default_params, optimized_params=None):
         """
         Convert a successful combo backtest result into a SetupTemplate JSON.
+        Uses optimized_params when available, falls back to default_params.
         """
         combo = result['combo']
+        params_source = optimized_params if optimized_params else default_params
 
         # Build conditions from blocks
         conditions = []
         for block_name in combo:
-            params = default_params.get(block_name, [])
+            params = params_source.get(block_name, default_params.get(block_name, []))
             conditions.append({"block": block_name, "params": params})
 
         # Generate a descriptive ID
@@ -360,6 +362,95 @@ class TemplateDiscovery:
         }
 
         return template_data
+
+    def optimize_params_for_combo(self, combo, datasets):
+        """
+        For a winning combo, find the best parameter values for each block.
+        Tests all variations from PARAM_RANGES config.
+
+        Returns: dict of {block_name: best_params}
+        """
+        param_ranges = getattr(cfg, 'PARAM_RANGES', {})
+        best_params = {}
+
+        lookahead = self.config.get('lookahead_days', 5)
+        profit_target = self.config.get('profit_target_pct', 0.02)
+        stop_target = self.config.get('stop_target_pct', 0.03)
+
+        for block_name in combo:
+            variations = param_ranges.get(block_name, [[]])
+
+            if len(variations) <= 1:
+                # No variations to test — use the single entry (or empty)
+                best_params[block_name] = variations[0] if variations else []
+                continue
+
+            best_wr = -1
+            best_p = variations[0]
+
+            for params in variations:
+                wins = 0
+                losses = 0
+
+                for symbol, df in datasets.items():
+                    for i in range(len(df) - lookahead):
+                        row = df.iloc[i]
+
+                        # Check ALL blocks in combo; use current variation only for block_name
+                        all_pass = True
+                        for bn in combo:
+                            if bn not in CONDITION_BLOCKS:
+                                all_pass = False
+                                break
+                            p = params if bn == block_name else best_params.get(
+                                bn, param_ranges.get(bn, [[]])[0] if param_ranges.get(bn) else []
+                            )
+                            try:
+                                if not CONDITION_BLOCKS[bn](row, p):
+                                    all_pass = False
+                                    break
+                            except Exception:
+                                all_pass = False
+                                break
+
+                        if not all_pass:
+                            continue
+
+                        entry_price = row.get('close', 0)
+                        if entry_price <= 0:
+                            continue
+
+                        future = df.iloc[i+1:i+1+lookahead]
+                        if future.empty:
+                            continue
+
+                        max_gain = (future['high'].max() - entry_price) / entry_price
+                        max_loss = (entry_price - future['low'].min()) / entry_price
+
+                        if max_gain >= profit_target and max_loss < stop_target:
+                            wins += 1
+                        elif max_loss >= stop_target:
+                            losses += 1
+                        else:
+                            exit_pnl = (future.iloc[-1]['close'] - entry_price) / entry_price
+                            if exit_pnl > 0:
+                                wins += 1
+                            else:
+                                losses += 1
+
+                total = wins + losses
+                wr = (wins / total * 100) if total > 0 else 0
+
+                logger.debug(f"  Param test: {block_name}{params} -> WR={wr:.1f}% ({total} trades)")
+
+                if wr > best_wr and total >= 5:
+                    best_wr = wr
+                    best_p = params
+
+            best_params[block_name] = best_p
+            logger.debug(f"  Best params for {block_name}: {best_p} (WR={best_wr:.1f}%)")
+
+        return best_params
 
     def _infer_required_state(self, combo):
         """
@@ -466,10 +557,18 @@ class TemplateDiscovery:
                             f"Trades: {result['total_trades']} | "
                             f"Stocks: {result['stocks_profitable']}")
 
+        # 4b. Optimize params for each winning combo
+        logger.info(f"Optimizing params for {len(discovered)} winners...")
+        for result in discovered:
+            optimized = self.optimize_params_for_combo(result['combo'], datasets)
+            result['optimized_params'] = optimized
+            logger.info(f"  Optimized: {result['combo']} -> {optimized}")
+
         # 5. Save discovered templates
         saved_count = 0
         for result in discovered:
-            template_data = self.combo_to_template(result, default_params)
+            optimized_params = result.get('optimized_params')
+            template_data = self.combo_to_template(result, default_params, optimized_params)
             if self.tm.add_template(template_data):
                 saved_count += 1
 

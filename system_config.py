@@ -486,6 +486,40 @@ DISCOVERY_CONFIG = {
     "stop_target_pct": 0.03,         # 3% drop = "loss" (wider than profit to account for noise)
 }
 
+# Parameter ranges for block optimization.
+# Discovery Engine tests each variation to find optimal params per ticker.
+# Format: block_name -> list of param variations to try
+PARAM_RANGES = {
+    # Trend blocks
+    "close_above_sma": [[20], [50], [100], [150], [200]],
+    "sma_above_sma": [[20, 50], [20, 100], [50, 100], [50, 200], [100, 200]],
+    "close_above_ema": [[8], [12], [21], [26], [50]],
+    "er_slow_above": [[0.40], [0.45], [0.50], [0.55], [0.60]],
+    "trend_alignment": [[]],  # No params to vary
+
+    # Momentum blocks
+    "rsi_between": [[30, 60], [35, 65], [40, 70], [45, 75], [50, 80]],
+    "rsi_below": [[25], [30], [35]],
+    "rsi_above": [[45], [50], [55], [60]],
+    "macd_above_signal": [[]],
+    "macd_histogram_positive": [[]],
+
+    # Volume blocks
+    "volume_surge": [[1.2], [1.3], [1.5], [2.0], [2.5]],
+    "rvol_above": [[1.1], [1.2], [1.3], [1.5]],
+
+    # Volatility blocks
+    "squeeze_active": [[]],
+    "squeeze_momentum_positive": [[]],
+    "bb_width_below": [[0.08], [0.10], [0.12], [0.15], [0.20]],
+    "atr_percent_above": [[0.005], [0.008], [0.01], [0.015], [0.02]],
+
+    # Price action blocks
+    "bullish_candle": [[]],
+    "close_above_ref": [["bb_upper"], ["sma_50"], ["ema_12"]],
+    "close_below_ref": [["bb_lower"], ["sma_50"]],
+}
+
 # Default symbols for AI training when scanner results are not available
 DEFAULT_TRAINING_SYMBOLS = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN',
                              'META', 'TSLA', 'AMD', 'NFLX', 'SPY']
