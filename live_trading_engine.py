@@ -911,6 +911,29 @@ if __name__ == "__main__":
                                 # Journal logging
                                 journal.log_signal(ticket, df_snapshot=df, status="SIGNAL_DETECTED")
 
+                                # Portfolio Risk Gate (Phase 5)
+                                from portfolio_risk import PortfolioRiskManager
+                                if not hasattr(live_engine, '_risk_mgr'):
+                                    live_engine._risk_mgr = PortfolioRiskManager()
+
+                                risk_ok, risk_reasons = live_engine._risk_mgr.check_all_gates(
+                                    symbol=symbol,
+                                    df=df,
+                                    open_positions=live_engine.positions,
+                                    market_data=market_data,
+                                    portfolio_value=getattr(live_engine, 'portfolio_value', 0)
+                                )
+
+                                if not risk_ok:
+                                    logger.warning(f"[{symbol}] PORTFOLIO RISK VETO: {risk_reasons}")
+                                    if hasattr(live_engine, 'notifier') and live_engine.notifier:
+                                        live_engine.notifier.send_message(
+                                            f"**{symbol}: ENTRY BLOCKED (Risk)**\n" +
+                                            "\n".join(f"  - {r}" for r in risk_reasons))
+                                    journal.log_signal(ticket, df_snapshot=df, status="RISK_VETOED")
+                                    cooldown_cache[symbol] = datetime.now() + timedelta(minutes=60)
+                                    continue
+
                                 # Execute if in auto mode
                                 try:
                                     current_regime = orchestra.router.classify_regime(df_features)

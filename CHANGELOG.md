@@ -631,6 +631,38 @@ Reads accumulated stats, requires minimum 3 samples per category, returns:
 
 ---
 
+## Phase 5 — Portfolio Risk Management (`portfolio_risk.py` + `system_config.py` + `live_trading_engine.py`)
+
+### Phase 5.0 — Correlation, drawdown circuit breaker, weekly trend filter
+
+**New file: `portfolio_risk.py` — `PortfolioRiskManager` class with three pre-entry gates:**
+
+| Gate | What it checks | Block condition |
+|------|---------------|-----------------|
+| **Gate 1: Correlation & Sector** | Sector exposure + return correlation with open positions | Same sector ≥ 2 positions, OR correlation > 0.80 with any held stock |
+| **Gate 2: Drawdown & Exposure** | Portfolio drawdown from high water mark + total invested % | Drawdown ≥ 10% (activates 24h circuit breaker), OR total exposure ≥ 60% |
+| **Gate 3: Weekly Trend** | Daily data resampled to weekly, close vs SMA(40w) | Weekly close < weekly SMA_40 (bearish macro trend) |
+
+**`PORTFOLIO_RISK_CONFIG` added to `system_config.py`** (after `POSITION_MANAGEMENT_CONFIG`):
+- Sector: max 2 positions per sector, 60-day lookback for correlation, threshold 0.80
+- Drawdown: 10% circuit breaker, 20% max single position, 60% max total exposure, 24h cooldown
+- Weekly: enabled, SMA period = 40 weeks (~200 trading days), bullish required
+
+**`live_trading_engine.py` wired in templates pipeline:**
+- `PortfolioRiskManager` lazy-initialised on `live_engine._risk_mgr`
+- Called after `SIGNAL_DETECTED` journal entry, before `execute_ticket`
+- On veto: logs `RISK_VETOED` to journal, sends Telegram with reason(s), adds 60-min cooldown
+- `continue` skips execution cleanly; signal is preserved in journal for analysis
+
+**Closes 3 institutional gaps:**
+1. No more holding 5 correlated tech stocks simultaneously
+2. Portfolio-level circuit breaker stops digging when already down 10%
+3. Weekly macro trend filter prevents entries into structurally broken stocks
+
+**Totals: 86/86 unit tests pass, 120/120 validator checks pass.**
+
+---
+
 ## Phase 4 — Position Management Architecture (`live_trading_engine.py` + `system_config.py`)
 
 ### Phase 4.0 — Smart position management: PHASE_PAUSE, zombie warning, daily summary

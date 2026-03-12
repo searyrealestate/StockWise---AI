@@ -415,6 +415,25 @@ POSITION_MANAGEMENT_CONFIG = {
     "re_entry_requires_new_signal": True, # Must get a fresh template signal
 }
 
+# Portfolio Risk Management (Phase 5)
+PORTFOLIO_RISK_CONFIG = {
+    # --- Correlation Check ---
+    "max_sector_positions": 2,           # Max positions in same sector
+    "correlation_lookback_days": 60,     # Days to calculate correlation
+    "max_correlation": 0.80,             # Don't hold 2 stocks with corr > 0.80
+
+    # --- Max Drawdown Protection ---
+    "max_portfolio_drawdown_pct": 0.10,  # 10% max drawdown -> stop all new entries
+    "max_single_position_pct": 0.20,     # No single position > 20% of portfolio
+    "max_total_exposure_pct": 0.60,      # Total invested <= 60% of portfolio
+    "drawdown_cooldown_hours": 24,       # After circuit breaker, wait 24h before resuming
+
+    # --- Multi-Timeframe ---
+    "weekly_trend_enabled": True,
+    "weekly_sma_period": 40,             # 40 weeks ~= 200 days (same as SMA_200 daily)
+    "weekly_trend_must_be_bullish": True, # Only enter if weekly trend is up
+}
+
 PORTFOLIO_DEFENSE = {
     # Structural risk management to prevent massive account blowups.
     "max_covariance_corr": 0.85,         # If the new stock moves exactly like our current portfolio (>85% correlation), we veto it.
