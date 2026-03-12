@@ -432,6 +432,10 @@ PORTFOLIO_RISK_CONFIG = {
     "weekly_trend_enabled": True,
     "weekly_sma_period": 40,             # 40 weeks ~= 200 days (same as SMA_200 daily)
     "weekly_trend_must_be_bullish": True, # Only enter if weekly trend is up
+
+    # --- Zombie & Event Horizon (merged from PORTFOLIO_DEFENSE) ---
+    "zombie_trade_ttl_hours": 72,        # If regime changes, 72h grace before force-exit
+    "event_horizon_buffer_days": 2,      # Force-sell 2 days before earnings/FDA events
 }
 
 PORTFOLIO_DEFENSE = {

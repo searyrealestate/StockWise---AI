@@ -631,6 +631,25 @@ Reads accumulated stats, requires minimum 3 samples per category, returns:
 
 ---
 
+## Code Review Fixes — Priority A + D (`live_trading_engine.py`, `portfolio_risk.py`, `system_config.py`, `notification_manager.py`, `setup_templates.py`)
+
+### 8 fixes from final code review
+
+| Fix | File | Change |
+|-----|------|--------|
+| **A1** | `live_trading_engine.py` | `FeatureEngine()` initialized once at startup, not per-ticker in the scan loop |
+| **A2** | `live_trading_engine.py` | `scan_ledger.json` read once per cycle before `for symbol in vip_list`, not per-ticker |
+| **A3** | `live_trading_engine.py` | `record_result()` wired into `_process_closed_position()` — template stats now update on every close; `position_data` param added to call site |
+| **A4** | `notification_manager.py` | `sold TICKER` Telegram command handler added before `/sell`; calls `mark_position_sold()` if available on controller |
+| **A5** | `portfolio_risk.py` | DatetimeIndex guard added before `resample('W')` — handles DataFrames with integer or column-based date index |
+| **A6** | `system_config.py` + `live_trading_engine.py` | `zombie_trade_ttl_hours` and `event_horizon_buffer_days` merged into `PORTFOLIO_RISK_CONFIG`; `LifecycleManager.defense_cfg` reads `PORTFOLIO_RISK_CONFIG` with fallback to `PORTFOLIO_DEFENSE` |
+| **B3** | `portfolio_risk.py` | Removed unused `import numpy as np` |
+| **C3** | `setup_templates.py` | Removed unused `import time` |
+
+**Totals: 86/86 unit tests pass, 120/120 validator checks pass.**
+
+---
+
 ## Phase 5 — Portfolio Risk Management (`portfolio_risk.py` + `system_config.py` + `live_trading_engine.py`)
 
 ### Phase 5.0 — Correlation, drawdown circuit breaker, weekly trend filter

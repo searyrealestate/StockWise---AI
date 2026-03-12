@@ -20,7 +20,6 @@ They can be:
 import os
 import json
 import logging
-import time
 from datetime import datetime
 import system_config as cfg
 

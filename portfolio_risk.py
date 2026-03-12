@@ -12,7 +12,6 @@ Called by live_trading_engine BEFORE execute_ticket().
 """
 
 import logging
-import numpy as np
 import pandas as pd
 from datetime import datetime
 import system_config as cfg
@@ -206,6 +205,14 @@ class PortfolioRiskManager:
 
         try:
             weekly_sma = self.config.get('weekly_sma_period', 40)
+
+            # Ensure DatetimeIndex for resample
+            if not isinstance(df.index, pd.DatetimeIndex):
+                if 'date' in df.columns:
+                    df = df.set_index('date')
+                elif 'Date' in df.columns:
+                    df = df.set_index('Date')
+                df.index = pd.to_datetime(df.index)
 
             # Resample daily to weekly
             df_weekly = df.resample('W').agg({

@@ -230,7 +230,7 @@ class LifecycleManager:
     """
     def __init__(self):
         self.stop_cfg = cfg.KINETIC_STOP_CONFIG
-        self.defense_cfg = cfg.PORTFOLIO_DEFENSE
+        self.defense_cfg = getattr(cfg, 'PORTFOLIO_RISK_CONFIG', cfg.PORTFOLIO_DEFENSE)
         
     def manage_kinetic_stop(self, symbol, position, current_price, current_atr):
         """
@@ -362,10 +362,10 @@ class LiveTradingEngine:
         self.positions_file = os.path.join(cfg.DB_DIR, "open_positions.json")
         self.positions = self._load_json(self.positions_file)
 
-    def _process_closed_position(self, ticker, buy_date, buy_price, sell_price):
+    def _process_closed_position(self, ticker, buy_date, buy_price, sell_price, position_data=None):
         """
         [Lifecycle Resolution]
-        Calculates net PnL dynamically and triggers the Gen-13 Notification 
+        Calculates net PnL dynamically and triggers the Gen-13 Notification
         and centralized CSV logging immediately upon position liquidation.
         """
         try:
@@ -373,7 +373,7 @@ class LiveTradingEngine:
                 pnl_net = ((float(sell_price) - float(buy_price)) / float(buy_price)) * 100.0
             else:
                 pnl_net = 0.0
-                
+
             # Call the updated Notification Manager
             if hasattr(self, 'notifier') and self.notifier:
                 self.notifier.send_closed_position_report(
@@ -383,9 +383,31 @@ class LiveTradingEngine:
                     sell_price=float(sell_price),
                     pnl_net=pnl_net
                 )
-                
+
             logger.info(f"Position Closed Processed: [{ticker}] PnL: {pnl_net:.2f}%")
-            
+
+            # Update template statistics (Phase 3.7)
+            position_data = position_data or {}
+            template_id = position_data.get('template_id')
+            if template_id:
+                try:
+                    from setup_templates import TemplateManager
+                    tm = TemplateManager()
+                    template = tm.get_template_by_id(template_id)
+                    if template:
+                        won = pnl_net > 0
+                        context = {
+                            "stock_state": position_data.get('stock_state', {}),
+                            "regime": position_data.get('entry_regime', ''),
+                            "hold_duration_hours": position_data.get('hold_duration_hours', 0),
+                            "avg_volume": position_data.get('avg_volume', 0),
+                        }
+                        template.record_result(ticker, pnl_net, won, context=context)
+                        tm.save_template(template)
+                        logger.info(f"[{ticker}] Template stats updated: {template_id} ({'WIN' if won else 'LOSS'})")
+                except Exception as e:
+                    logger.debug(f"Failed to update template stats: {e}")
+
         except Exception as e:
             logger.error(f"Failed to process closed position for {ticker}: {str(e)}")
 
@@ -713,7 +735,8 @@ class LiveTradingEngine:
                         ticker=symbol,
                         buy_date=buy_date_clean,
                         buy_price=position["entry_price"],
-                        sell_price=current_price
+                        sell_price=current_price,
+                        position_data=position
                     )
                     liquidated.append(symbol)
                     continue
@@ -773,6 +796,9 @@ if __name__ == "__main__":
     logger.info(f"Template Pipeline loaded: {len(matcher.tm.templates)} templates, "
                 f"mode={getattr(cfg, 'SIGNAL_PIPELINE_MODE', 'legacy')}")
 
+    from feature_engine import FeatureEngine
+    fe = FeatureEngine()
+
     logger.info("ENGINE START: Dynamic Heartbeat Protocol Initiated.")
 
     # EOD Tracker Initialization
@@ -813,6 +839,16 @@ if __name__ == "__main__":
             except Exception as e:
                 logger.error(f"Error checking positions: {e}")
 
+            # Load scan ledger once per cycle (not per ticker)
+            full_ledger = {}
+            try:
+                ledger_path = os.path.join(cfg.DB_DIR, "scan_ledger.json")
+                if os.path.exists(ledger_path):
+                    with open(ledger_path, 'r') as f:
+                        full_ledger = json.load(f)
+            except Exception as e:
+                logger.debug(f"Could not load scan ledger: {e}")
+
             # --- PHASE 2: OFFENSE (Scan for Opportunities) ---
             for symbol in vip_list:
                 # 1. Check Cooldown Cache (Amnesia Loop Prevention)
@@ -839,20 +875,9 @@ if __name__ == "__main__":
 
                         if pipeline_mode in ('templates', 'dual'):
                             # New template-based pipeline
-                            # Load stock state from scanner ledger
-                            ledger_state = {}
-                            try:
-                                ledger_path = os.path.join(cfg.DB_DIR, "scan_ledger.json")
-                                if os.path.exists(ledger_path):
-                                    with open(ledger_path, 'r') as f:
-                                        full_ledger = json.load(f)
-                                    ledger_state = full_ledger.get(symbol, {}).get('state', {})
-                            except Exception as e:
-                                logger.debug(f"[{symbol}] Could not load ledger state: {e}")
+                            ledger_state = full_ledger.get(symbol, {}).get('state', {})
 
                             # Calculate features for template evaluation
-                            from feature_engine import FeatureEngine
-                            fe = FeatureEngine()
                             df_features = fe.calculate_features(df, strategy_config={"active_indicators": ["all"]})
 
                             # Run template matcher
