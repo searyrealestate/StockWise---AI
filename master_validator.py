@@ -53,8 +53,16 @@ sys.modules['alpaca_trade_api'] = MagicMock()
 sys.modules['requests'] = MagicMock()
 
 # 2. Pandas TA (Critical for imports)
+import types
 try:
-    # import pandas_ta_classic as pandas_ta
+    import pandas_ta
+except ImportError:
+    try:
+        import pandas_ta_classic as _ptc
+        sys.modules['pandas_ta'] = _ptc
+    except ImportError:
+        sys.modules['pandas_ta'] = types.ModuleType('pandas_ta')
+try:
     import pandas_ta as pandas_ta
     import system_config as cfg
     from feature_engine import FeatureEngine
