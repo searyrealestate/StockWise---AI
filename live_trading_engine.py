@@ -785,6 +785,10 @@ if __name__ == "__main__":
     market_data = DataSourceManager()
     orchestra = StrategyEngine()
     scout = StockHunter(market_data)
+    if hasattr(orchestra, 'sniper'):
+        t_model = 'loaded' if orchestra.sniper.trend_model else 'MISSING'
+        c_model = 'loaded' if orchestra.sniper.chop_model else 'MISSING'
+        logger.info(f"AI Models: trend={t_model}, chop={c_model}")
     
     # Initialize Execution Engine (Agent 4)
     live_engine = LiveTradingEngine()
@@ -816,9 +820,19 @@ if __name__ == "__main__":
             vip_list = scout.get_active_vip_watchlist()
             
             if not vip_list:
-                logger.warning("VIP List is empty! Please run stock_hunter.py. Sleeping 60s...")
-                time.sleep(60)
-                continue
+                logger.warning("VIP List is empty. Auto-triggering nightly scan...")
+                try:
+                    scout.run_nightly_scan()
+                    vip_list = scout.get_active_vip_watchlist()
+                    if not vip_list:
+                        logger.warning("Scan complete but VIP list still empty. Sleeping 60s...")
+                        time.sleep(60)
+                        continue
+                    logger.info(f"Auto-scan complete: {len(vip_list)} VIP targets found.")
+                except Exception as scan_err:
+                    logger.error(f"Auto-scan failed: {scan_err}. Sleeping 60s...")
+                    time.sleep(60)
+                    continue
                 
             logger.info(f"Loaded {len(vip_list)} VIP targets. Starting Cycle...")
 
