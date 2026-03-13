@@ -86,16 +86,10 @@ MIN_NET_PROFIT = 0.005
 VIP_LIST_PATH = os.path.join(DATA_DIR, "daily_review_list.json")
 LEDGER_PATH = os.path.join(DATA_DIR, "scan_ledger.json")
 LOG_DIR_LOCAL = os.path.join(BASE_DIR, "logs")
-# Exact requested path for Google Drive
-DIR_DRIVE = r"G:\My Drive\StockWise_AI_Trading_System"
-LOG_DIR_DRIVE = os.path.join(DIR_DRIVE,"logs")
-CODE_DIR_DRIVE = os.path.join(DIR_DRIVE,"Code")
+# Google Drive removed — all logs saved locally in logs/ directory
 
 # Ensure Log Directories Exist
 os.makedirs(LOG_DIR_LOCAL, exist_ok=True)
-if os.path.exists(DIR_DRIVE): 
-    os.makedirs(LOG_DIR_DRIVE, exist_ok=True)
-    os.makedirs(CODE_DIR_DRIVE, exist_ok=True)
 
 # --- LOGGING SILENCERS ---
 # Silence verbose third-party libraries
@@ -663,7 +657,7 @@ class LoggerSetup:
         # Generate a unique timestamp for this specific run session
         run_id = datetime.now().strftime('%Y%m%d_%H%M%S')
         
-        local_filename = f"{prefix}_{run_id}.log"
+        local_filename = f"{prefix}_{run_id}.txt"
 
         local_file = os.path.join(LOG_DIR_LOCAL, local_filename)
 
@@ -677,18 +671,7 @@ class LoggerSetup:
         except Exception as e:
             print(f"Failed to create local log: {e}")
 
-        # --- UNIFIED DRIVE LOG ---
-        if os.path.exists(LOG_DIR_DRIVE):
-            drive_filename = f"StockWise_Master_{datetime.now().strftime('%Y%m%d')}.txt"
-            drive_file = os.path.join(LOG_DIR_DRIVE, drive_filename)
-            try:
-                f_handler_drive = logging.FileHandler(drive_file, mode='a', encoding='utf-8')
-                f_handler_drive.setFormatter(formatter)
-                f_handler_drive.setLevel(logging.DEBUG)
-                f_handler_drive.addFilter(emoji_filter)
-                logger.addHandler(f_handler_drive)
-            except Exception as e:
-                pass
+        # Google Drive log removed — all logs go to local logs/ directory only
 
         return logger
 
