@@ -777,7 +777,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     logger.info("=== STOCKWISE LIVE ENGINE: INITIALIZING ===")
-    
+
+    # --- CONFIG SNAPSHOT: Save active configuration for Simulator reproducibility ---
+    from system_config import snapshot_configuration
+    snapshot_configuration(logger_instance=logger)
+    logger.info("Session config snapshot saved to Master Log and logs/ directory.")
+
     # 1. Initialize Core Systems
     # market_data: Gateway to Alpaca/Polygon
     # orchestra: The Strategy Brain (Tech + AI)

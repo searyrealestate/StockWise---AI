@@ -796,32 +796,105 @@ def clean_raw_data(df: pd.DataFrame) -> pd.DataFrame:
     return df[existing_cols]
 
 
-def snapshot_configuration():
+def snapshot_configuration(logger_instance=None):
     """
-    Saves the current system configuration to a JSON file for debugging.
-    Proposed Usage: Run this at system startup to log the exact config used.
+    Saves complete system configuration snapshot.
+    Output A: Line in Master Log (parseable by Simulator)
+    Output B: Separate JSON file in logs/ directory
+
+    Called automatically at session startup by live_trading_engine.py
+
+    Args:
+        logger_instance: Logger to write the CONFIG_SNAPSHOT line to.
+                         If None, only writes JSON file.
     """
     try:
-        # Collect all config dictionaries into a single snapshot object
         snapshot = {
-            "TIMESTAMP": datetime.now().isoformat(),
-            "MODE": MODE,
-            "STRATEGY_CONFIG": STRATEGY_CONFIG,
-            "RISK_CONFIG": RISK_CONFIG,
-            "SCAN_SCHEDULE": SCAN_SCHEDULE,
-            "COSTS_CONFIG": COSTS_CONFIG,
-            # Handle MASTER_SCORES dynamically in case it's missing (though it shouldn't be)
-            "MASTER_SCORES": globals().get('MASTER_SCORES', {}) 
+            "config_version": "13.1",
+            "timestamp": datetime.now().isoformat(),
+
+            # Strategy & Signals
+            "signal_pipeline_mode": SIGNAL_PIPELINE_MODE,
+            "min_master_score_approval": MIN_MASTER_SCORE_APPROVAL,
+            "premium_trade_threshold": PREMIUM_TRADE_THRESHOLD,
+            "strategy_config": STRATEGY_CONFIG,
+            "master_scores": MASTER_SCORES,
+
+            # Risk Management
+            "risk_config": RISK_CONFIG,
+            "costs_config": COSTS_CONFIG,
+            "friction_and_alpha": FRICTION_AND_ALPHA,
+            "volumetric_limits": VOLUMETRIC_LIMITS,
+
+            # Position Lifecycle
+            "kinetic_stop_config": KINETIC_STOP_CONFIG,
+            "milestone_alert_config": MILESTONE_ALERT_CONFIG,
+            "position_management_config": POSITION_MANAGEMENT_CONFIG,
+
+            # Portfolio Level
+            "portfolio_risk_config": PORTFOLIO_RISK_CONFIG,
+            "portfolio_defense": PORTFOLIO_DEFENSE,
+
+            # DSP & Regime
+            "dsp_config": DSP_CONFIG,
+
+            # Scanner
+            "scan_routing_config": SCAN_ROUTING_CONFIG,
+
+            # Data Providers
+            "provider_delay": PROVIDER_DELAY,
+            "historical_source": HISTORICAL_SOURCE,
+            "realtime_source": REALTIME_SOURCE,
+            "en_ibkr": EN_IBKR,
+            "en_alpaca": EN_ALPACA,
+            "en_massive": EN_MASSIVE,
+            "en_yfinance": EN_YFINANCE,
+
+            # Indicator Parameters (for Simulator reproducibility)
+            "indicators": {
+                "rsi_period": 14,
+                "macd_fast": 12,
+                "macd_slow": 26,
+                "macd_signal": 9,
+                "atr_period": 14,
+                "stochastic_k_period": 14,
+                "stochastic_d_period": 3,
+                "bb_period": 20,
+                "bb_std_dev": 2,
+                "er_lookback_slow": DSP_CONFIG.get("er_lookback_slow", 20),
+                "er_lookback_fast": DSP_CONFIG.get("er_lookback_fast", 5)
+            },
+
+            # Cooldowns
+            "cooldown_period_hours": COOLDOWN_PERIOD_HOURS,
+            "veto_cooldown_minutes": VETO_COOLDOWN_MINUTES,
+            "data_starvation_cooldown_minutes": DATA_STARVATION_COOLDOWN_MINUTES,
+
+            # Investment
+            "investment_amount": INVESTMENT_AMOUNT,
+            "base_friction": BASE_FRICTION,
+            "min_net_profit": MIN_NET_PROFIT,
         }
-        
-        # Create a timestamped filename
-        filename = f"config_snapshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        path = os.path.join(LOGS_DIR, filename)
-        
-        # Write to JSON file
-        with open(path, 'w') as f:
-            json.dump(snapshot, f, indent=4)
-            
-        print(f"Configuration snapshot saved to: {path}")
+
+        # --- Output A: Write to Master Log ---
+        if logger_instance:
+            # Compact JSON on one line for easy parsing
+            snapshot_json = json.dumps(snapshot, separators=(',', ':'))
+            logger_instance.info(f"CONFIG_SNAPSHOT|{snapshot_json}")
+
+        # --- Output B: Save as separate JSON file ---
+        run_id = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"config_snapshot_{run_id}.json"
+        filepath = os.path.join(LOGS_DIR, filename)
+
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(snapshot, f, indent=2, ensure_ascii=False)
+
+        print(f"Config snapshot saved: {filepath}")
+        return snapshot
+
     except Exception as e:
         print(f"Failed to save config snapshot: {e}")
+        if logger_instance:
+            logger_instance.error(f"Config snapshot failed: {e}")
+        return None
