@@ -1,33 +1,56 @@
-"""
-⚙️ Data Source Manager - Professional Version (Triple Fallback)
-=============================================================
-Logic: IBKR -> Alpaca -> YFinance
-This manager ensures data is fetched from the best available source.
-"""
+# data_source_manager.py
 
 """
-⚙️ Data Source Manager - Professional Version (Triple Fallback)
-=============================================================
-Logic: IBKR -> Alpaca -> YFinance
-This manager ensures data is fetched from the best available source.
+Data Source Manager - Gen-12 Professional
+=========================================
+The Gateway to the Market.
+Implements the "Waterfall" Data Retrieval Strategy:
+1. IBKR (Interactive Brokers): Premium, Real-time (if connected).
+2. Alpaca: Reliable, Free Historical Data.
+3. Massive (formerly Polygon): High-Granularity Backup.
+4. YFinance: The "Last Resort" (delayed/unofficial).
+
+Handles:
+- connection management (TWS API)
+- data normalization (cleaning columns, timestamps)
+- fallback logic errors
+- real-time streaming simulation
 """
 
+import urllib3
 import threading
 import time
 import logging
 import random
+import asyncio
 from datetime import datetime, timedelta
 import pandas as pd
 import yfinance as yf
 import pytz
 import os
 import streamlit as st
+import numpy as np
 # import datetime (Removed to avoid conflict with 'from datetime import datetime')
 import system_config as cfg
 import logging
 
 logger = logging.getLogger(__name__)
 
+# --- SILENCE NOISY LIBRARIES ---
+logging.getLogger("ibapi").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("asyncio").setLevel(logging.WARNING)
+
+# --- Increase Global Connection Pool ---
+# This prevents "Connection pool is full" when streaming multiple stocks
+# Default is 10/10. We increase to 50 to handle the watchlist threads.
+http = urllib3.PoolManager(
+    num_pools=50, 
+    maxsize=50, 
+    block=True
+)
+# Monkey-patch default pool for libraries that don't allow configuration
+urllib3.connectionpool.HTTPConnectionPool.QueueCls.maxsize = 50
 
 # --- IBKR IMPORT ---
 # Check imports
@@ -40,30 +63,108 @@ except ImportError:
     class EClient: pass
     class EWrapper: pass
     class Contract: pass
-    logger.debug("[X] IBKR API (ibapi) not found. Install with: pip install ibapi")
+    logger.critical("[CRITICAL] IBKR API (ibapi) NOT FOUND. Install with: 'pip install ibapi'. System effectively crippled.")
     IBKR_AVAILABLE = False
 
 # --- ALPACA IMPORT ---
+# --- ALPACA IMPORT ---
 try:
-    from alpaca.data.historical import StockHistoricalDataClient
-    from alpaca.data.requests import StockBarsRequest
-    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
-    from alpaca.common.exceptions import APIError
+    import alpaca_trade_api as tradeapi
+    from alpaca_trade_api.rest import TimeFrame, TimeFrameUnit
     ALPACA_AVAILABLE = True
 except ImportError:
     class TimeFrame: Day, Minute15, Hour = '1D', '15M', '1H'
     class TimeFrameUnit: Minute = 'Min'
-    class StockBarsRequest:
-        def __init__(self, **kwargs): pass
-    class APIError(Exception): pass
-    class StockHistoricalDataClient:
-        def __init__(self, **kwargs): pass
     logger.debug("[!] Alpaca SDK not found. Alpaca fallback disabled.")
     ALPACA_AVAILABLE = False
 
+# --- MASSIVE IMPORT ---
+try:
+    from massive import RESTClient
+    MASSIVE_AVAILABLE = True
+except ImportError:
+    MASSIVE_AVAILABLE = False
+    logger.debug("[!] Massive SDK not found.")
+
+def clean_raw_data(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Standardizer for Financial DataFrames.
+    Ensures input data (regardless of source) adheres to the 'Schema':
+    - Lowercase Columns: open, high, low, close, volume
+    - Index: DatetimeIndex (Timezone Naive)
+    - No duplicates
+    """
+    if df is None or df.empty: return pd.DataFrame()
+
+    # Ensure the input is a DataFrame before accessing 'columns'
+    if not isinstance(df, pd.DataFrame):
+        logging.error(f"Input to clean_raw_data is not a DataFrame: {type(df)}")
+        return pd.DataFrame()  # Return empty DataFrame to avoid AttributeError
+
+    # 1. Standardize column case (lowercase for pandas_ta)
+    if isinstance(df.columns, pd.MultiIndex):
+        # Flatten each tuple, drop empty parts, then lowercase
+        df.columns = [
+            "_".join([str(part) for part in col if part is not None and part != ""]).lower()
+            for col in df.columns
+        ]
+    else:
+        df.columns = [str(c).lower() for c in df.columns]
+
+    # CLEANUP: Handle "close_ticker" format from YFinance
+    # If we have "close_sbux", rename to "close"
+    cleaned_cols = []
+    known_cols = {'open', 'high', 'low', 'close', 'volume', 'adj close'}
+    for c in df.columns:
+        # Check if the column starts with a known OHLCV type
+        found = False
+        for k in known_cols:
+            if c.startswith(k):
+                cleaned_cols.append(k)
+                found = True
+                break
+        if not found:
+            cleaned_cols.append(c)
+    df.columns = cleaned_cols
+
+    # 2. Drop duplicates (crucial after concatenation/merging data sources)
+    if isinstance(df.index, pd.MultiIndex):
+        df = df.droplevel(0)  # Drop symbol index from multi-index
+
+    df = df[~df.index.duplicated(keep='last')]
+    df.index.name = "Date"
+
+    # 3. Ensure index is timezone-naive datetime
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index)
+    if df.index.tz is not None:
+        df.index = df.index.tz_localize(None)
+
+    # 4. Filter for required columns (must have OHLCV)
+    required = {'open', 'high', 'low', 'close', 'volume'}
+    if not required.issubset(df.columns):
+        # We try to rename if YF/Alpaca capitalization was lost
+        df.rename(columns={'adj close': 'close'}, inplace=True)
+        if not required.issubset(df.columns):
+            logging.warning("Clean raw data failed: Missing OHLCV columns.")
+            return pd.DataFrame()
+
+    # Ensure AI matrix compatibility for providers missing trade_count
+    if 'trade_count' not in df.columns:
+        df['trade_count'] = 1.0
+
+    # Final cleanup (Forward fill then backward fill NaNs, usually from splits)
+    df.ffill(inplace=True)
+    df.bfill(inplace=True)
+
+    return df
+
 
 class IBKRDataApp(EWrapper, EClient):
-    """Thread-safe IBKR wrapper."""
+    """
+    Thread-safe Wrapper for the Interactive Brokers native API.
+    Handles the asynchronous event loop of TWS.
+    """
 
     def __init__(self, client_id):
         EWrapper.__init__(self)
@@ -87,15 +188,18 @@ class IBKRDataApp(EWrapper, EClient):
             self.contract_event.set()
 
     def historicalData(self, reqId, bar):
+        """Callback: Receives one bar of historical data."""
         self.data.append({
             'Date': bar.date, 'Open': bar.open, 'High': bar.high,
             'Low': bar.low, 'Close': bar.close, 'Volume': bar.volume
         })
 
     def historicalDataEnd(self, reqId, start, end):
+        """Callback: Batch download complete."""
         self.data_event.set()
 
     def contractDetails(self, reqId, contractDetails):
+        """Callback: Contract ID resolved."""
         self.resolved_contract = contractDetails.contract
         self.contract_event.set()
 
@@ -103,9 +207,16 @@ class IBKRDataApp(EWrapper, EClient):
         self.contract_event.set()
 
 
-class DataSourceManager(EWrapper, EClient):
-    _client_id_counter = int(time.time() % 1000)
+class DataSourceManager:
+    """
+    Orchestrates Data Retrieval across multiple providers.
+    """
+    _client_id_counter = random.randint(1000, 5000) # Start random to avoid collisions
     _client_id_lock = threading.Lock()
+
+    # Global Circuit Breaker State
+    _massive_lockout_until = None
+    _massive_fail_count = 0  # Tracks consecutive 429 failures for escalating lockout
 
     def __init__(self, use_ibkr=True, allow_fallback=True, host=cfg.IBKR_HOST, port=cfg.IBKR_PORT):
         self.use_ibkr = use_ibkr and IBKR_AVAILABLE
@@ -119,6 +230,9 @@ class DataSourceManager(EWrapper, EClient):
         with DataSourceManager._client_id_lock:
             self.client_id = DataSourceManager._client_id_counter
             DataSourceManager._client_id_counter += 1
+            
+        self.req_id_counter = 0  # Atomic counter for this instance requests
+        self._req_id_lock = threading.Lock()
 
         self._setup_logging()
 
@@ -162,7 +276,9 @@ class DataSourceManager(EWrapper, EClient):
                     self.api_secret = os.getenv("ALPACA_SECRET")
 
                 if self.api_key and self.api_secret:
-                    self.stock_client = StockHistoricalDataClient(self.api_key, self.api_secret)
+                    # self.stock_client = StockHistoricalDataClient(self.api_key, self.api_secret)
+                    self.stock_client = tradeapi.REST(self.api_key, self.api_secret, cfg.ALPACA_BASE_URL, api_version='v2')
+                    self._log("Alpaca API (tradeapi) Initialized.", "INFO")
                 else:
                     self._log("Alpaca API keys missing. Skipping Alpaca.", "WARNING")
             except Exception as e:
@@ -171,15 +287,60 @@ class DataSourceManager(EWrapper, EClient):
         else:
              self._log("Alpaca disabled by configuration (DATA_PROVIDER != ALPACA).", "INFO")
 
+        # --- MASSIVE SETUP ---
+        self.massive_client = None
+        if MASSIVE_AVAILABLE:
+            try:
+                # User specified key is strictly "API_KEY" in secrets.toml
+                # We reuse the logic that loaded 'secrets' dict above if it exists
+                # But that variable 'secrets' was local to the try block. 
+                # Let's duplicate the logic or check env.
+                
+                massive_key = None
+                
+                # 1. Try Config Object
+                massive_key = getattr(cfg, 'MASSIVE_API_KEY', None)
+                
+                # 2. Try Secrets (Manual TOML)
+                if not massive_key:
+                    try:
+                        import toml
+                        secrets_path = os.path.join(os.getcwd(), ".streamlit", "secrets.toml")
+                        if os.path.exists(secrets_path):
+                            secrets = toml.load(secrets_path)
+                            # User explicit instruction: "the API KEY located in ... as API_KEY"
+                            massive_key = secrets.get("API_KEY")
+                    except:
+                        pass
+                
+                # 3. Env
+                if not massive_key:
+                    massive_key = os.getenv("API_KEY") # Check generic name too?
+                
+                if massive_key:
+                    self.massive_client = RESTClient(massive_key)
+                    self._log("Massive API Initialized.", "INFO")
+                else:
+                    self._log("Massive API Key (API_KEY) missing.", "WARNING")
+
+            except Exception as e:
+                self._log(f"Massive Init Error: {e}", "ERROR")
+
         self._log(f"--- DataSourceManager initialized (ID: {self.client_id}) ---")
 
     def _setup_logging(self):
-        self.logger = logging.getLogger(f"DSM_{self.client_id}")
-        if not self.logger.handlers:
-            handler = logging.StreamHandler()
-            handler.setFormatter(logging.Formatter('%(asctime)s | %(levelname)s | %(message)s'))
-            self.logger.addHandler(handler)
-        self.logger.setLevel(logging.INFO)
+        """
+        Gen-12 Fix: Routes Data Manager logs into the central Master Log 
+        instead of generating rogue dsm_xxx.log files.
+        """
+        self.logger = cfg.LoggerSetup.setup_logger(f"DSM_{self.client_id}")
+
+    def get_new_req_id(self):
+        """Thread-safe request ID generator"""
+        with self._req_id_lock:
+            self.req_id_counter += 1
+            # Base the ID on client_id * 10000 to avoid collision with other clients
+            return (self.client_id * 10000) + self.req_id_counter
 
     def _log(self, message, level="INFO"):
         if level == "INFO":
@@ -212,12 +373,12 @@ class DataSourceManager(EWrapper, EClient):
             return False
 
     def disconnect(self):
-        if self.app and self.app.isConnected():
+        if self.app is not None and self.app.isConnected():
             self.app.disconnect()
             self._log("Disconnected from IBKR.")
 
     def isConnected(self):
-        return self.app is not None and self.app.isConnected()
+        return self.app is not None and getattr(self.app, 'isConnected', lambda: False)()
 
     def get_fundamentals(self, ticker):
         """
@@ -245,7 +406,7 @@ class DataSourceManager(EWrapper, EClient):
             logger.error(f"Failed to fetch fundamentals for {ticker}: {e}")
             return None
 
-    def fetch_data_sequential(self, tickers: list):
+    def fetch_data_sequential(self, tickers: list,days_back=1825):
         """
         Sequentially fetches data for a list of tickers.
         Returns a dictionary {ticker: dataframe}.
@@ -253,7 +414,9 @@ class DataSourceManager(EWrapper, EClient):
         data_map = {}
         for ticker in tickers:
             logger.info(f"[>] Fetching {ticker}...")
-            df = self.get_stock_data(ticker, days_back=None) # Rely on system config default
+            # df = self.get_stock_data(ticker, days_back=None) # Rely on system config default
+            df = self.get_stock_data(ticker, days_back=days_back, interval='1d', min_rows=1000)
+
             if not df.empty:
                 data_map[ticker] = df
             else:
@@ -262,277 +425,585 @@ class DataSourceManager(EWrapper, EClient):
         return data_map
 
     # --- MAIN DATA METHOD (WATERFALL LOGIC) ---
-    def get_stock_data(self, symbol, start_date=None, end_date=None, days_back=None, interval='1d'):
+    def get_stock_data(self, symbol, start_date=None, end_date=None, days_back=None, interval='1d', source='AUTO', trade_type=None, min_rows=0):
+
         """
-        Fetches data using the strategy: IBKR -> Alpaca -> YFinance
+        Super-Fetcher.
+        Attempt 1: Massive (Fastest).
+        Attempt 2: Alpaca (Reliable).
+        Attempt 3: IBKR (Real-time).
+        Attempt 4: YFinance (Fallback).
+
+        Super-Fetcher with Data Integrity Validation.
+        
+        :param min_rows: Minimum required data points. If fetched data < min_rows, 
+                         it is treated as a failure (triggers fallback).
+        
+        Returns: pd.DataFrame (Cleaned)
         """
         df = pd.DataFrame()
         clean_symbol = symbol.upper().strip()
 
-        # 1. Attempt IBKR
-        if self.use_ibkr:
-            if not self.isConnected(): self.connect_to_ibkr()
-            if self.isConnected():
-                try:
-                    df = self._download_from_ibkr(clean_symbol, start_date, end_date, days_back, interval)
-                    if not df.empty: return normalize_and_validate_data(df)
-                except Exception as e:
-                    logging.info(f"IBKR Failed for {symbol}: {e}", "WARNING")
-            else:
-                self._log("[!] IBKR not connected. Skipping IBKR download.", "WARNING")
-        else:
-            self._log("[!] IBKR disabled. Skipping IBKR download.", "INFO")
+        # 0. Handle Trade Type Logic (Overrides)
+        if trade_type and hasattr(cfg, 'TRADE_TYPE_CONFIG'):
+            tt_config = cfg.TRADE_TYPE_CONFIG.get(trade_type)
+            if tt_config:
+                interval = tt_config.get('interval', interval)
+                days_back = tt_config.get('days_back', days_back)
 
-            # 2. Attempt Alpaca (Fallback #1)
-        logging.info(f"--- IBKR failed or disabled. Proceeding to Alpaca for {symbol} ---")
-        if self.allow_fallback and self.stock_client:
+        # User Preference Override (from Config) if AUTO
+        # Note: If source is AUTO, we follow the strict waterfall order requested:
+        # Massive -> Alpaca -> IBKR -> YFinance
+        
+        priority_list = ['MASSIVE', 'ALPACA', 'IBKR', 'YFINANCE']
+        # priority_list = ['ALPACA'] # TEST MODE: PHASE 1
+
+        # If specific source requested
+        if source != 'AUTO' and source in priority_list:
+             priority_list.remove(source)
+             priority_list.insert(0, source)
+        # elif source == 'AUTO':
+        #      pass # keep default order
+             
+        for provider in priority_list:
+            self._log(f"Attempting fetch via: {provider}...", "DEBUG")
+
+            # --- GEN-13: CIRCUIT BREAKER PATTERN ---
+            if provider == 'MASSIVE':
+                if DataSourceManager._massive_lockout_until and datetime.now() < DataSourceManager._massive_lockout_until:
+                    remaining = int((DataSourceManager._massive_lockout_until - datetime.now()).total_seconds() / 60)
+                    self._log(f"MASSIVE Circuit Breaker Active. Locked out for {remaining} more min. Cascading to next provider.", "WARNING")
+                    continue
+            
+            # Architectural Fix: Rate Limiting to prevent 429 Errors (Massive API)
+            import time
+            delay = getattr(cfg, 'PROVIDER_DELAY', {}).get(provider, 0.5)
+            if delay > 0:
+                time.sleep(delay)
+            
+            fetched_df = pd.DataFrame()
+
             try:
-                logging.info(f"[!] Attempting Alpaca fallback for {symbol}...")
-                df = self._download_from_alpaca(clean_symbol, start_date, end_date, days_back, interval)
-                self._log(f"Alpaca download attempt completed for {symbol}.")
-                
-                # --- SUFFICIENT HISTORY CHECK ---
-                # Should we use this data? Or is it too short?
-                min_required = 0
-                if days_back:
-                    min_required = int(days_back * 0.7) # Require at least 70% of requested history
-                
-                if not df.empty:
-                    if len(df) >= min_required:
-                        logging.info(f"[OK] Success: Data retrieved from Alpaca ({len(df)} bars).")
-                        return df
+                # 1. MASSIVE
+                if provider == 'MASSIVE' and self.massive_client:
+                    fetched_df = self._download_from_massive(clean_symbol, start_date, end_date, days_back, interval, min_rows=min_rows)
+
+
+                # 2. ALPACA
+                elif provider == 'ALPACA' and self.stock_client:
+                    fetched_df = self._download_from_alpaca(clean_symbol, start_date, end_date, days_back, interval, min_rows=min_rows)
+                elif provider == 'ALPACA':
+                    self._log("ALPACA skipped: client not initialized (check API keys or DATA_PROVIDER config).", "WARNING")
+                    continue
+
+                # 3. IBKR
+                elif provider == 'IBKR' and self.use_ibkr:
+                    if not self.isConnected(): self.connect_to_ibkr()
+                    if self.isConnected():
+                        fetched_df = self._download_from_ibkr(clean_symbol, start_date, end_date, days_back, interval, min_rows=min_rows)
                     else:
-                        self._log(f"*** Alpaca data insufficient ({len(df)} < {min_required} required). Falling back to YFinance for deeper history.***", "WARNING")
-                        df = pd.DataFrame() # Force Fallback
+                        self._log("IBKR skipped: connection failed. Cascading to next provider.", "WARNING")
+                        continue
+                elif provider == 'IBKR':
+                    self._log("IBKR skipped: use_ibkr=False. Cascading to next provider.", "WARNING")
+                    continue
+
+                # 4. YFINANCE
+                elif provider == 'YFINANCE':
+                    fetched_df = self._download_from_yfinance(clean_symbol, days_back, interval, start_date, end_date, min_rows=min_rows)
+
+                # --- VALIDATION GATE ---
+                if not fetched_df.empty:
+                    # Clean it first to ensure valid OHLCV
+                    clean_df = clean_raw_data(fetched_df)
+                    
+                    # Row Count Check
+                    if len(clean_df) >= min_rows:
+                        self._log(f"Success ({provider}): Retrieved {len(clean_df)} rows (Target: {min_rows}+).", "DEBUG")
+                        # Reset Circuit Breaker on success
+                        if provider == 'MASSIVE':
+                            DataSourceManager._massive_lockout_until = None
+                            DataSourceManager._massive_fail_count = 0
+                        
+                        return clean_df
+                    else:
+                        self._log(f"Insufficient Data ({provider}): Got {len(clean_df)} rows, needed {min_rows}. Trying next...", "WARNING")
+                        # We do NOT return here; we continue the loop to try the next broker
                 
             except Exception as e:
-                self._log(f"Alpaca Failed: {e}", "WARNING")
-        else:
-            self._log("*** Alpaca client not initialized or fallback disabled. Skipping Alpaca.***")
+                self._log(f"{provider} Failure: {e}", "WARNING")
+                # --- GEN-13: TRIP THE CIRCUIT BREAKER (Escalating Lockout) ---
+                if provider == 'MASSIVE' and '429' in str(e):
+                    DataSourceManager._massive_fail_count += 1
+                    # Escalate lockout: 1st hit = 1 hour, subsequent hits = 4 hours
+                    lockout_hours = 4 if DataSourceManager._massive_fail_count > 1 else 1
+                    DataSourceManager._massive_lockout_until = datetime.now() + timedelta(hours=lockout_hours)
+                    self._log(
+                        f"MASSIVE 429 Rate Limit — Circuit Breaker TRIPPED for {lockout_hours}h "
+                        f"(consecutive failures: {DataSourceManager._massive_fail_count}). "
+                        f"Cascading to Alpaca/IBKR/YFinance.",
+                        "WARNING"
+                    )
 
-        # 3. Attempt YFinance (Fallback #2 - Last Resort)
-        logging.info(f"--- Alpaca failed or disabled. Proceeding to YFinance for {symbol} ---")
-        if self.allow_fallback:
-            try:
-                self._log(f"[!] Attempting YFinance fallback for {symbol}...")
-                df = self._download_from_yfinance(clean_symbol, days_back, interval, start_date, end_date)
-                self._log(f"YFinance download attempt completed for {symbol}.")
-                # self._log(df[0:5].to_string())
-                if not df.empty:
-                    self._log(f"[OK] Success: Data retrieved from YFinance.")
-                    return normalize_and_validate_data(df)
-            except Exception as e:
-                self._log(f"YFinance Failed: {e}", "ERROR")
+                continue
 
+        # If we exit the loop, all providers failed
+        self._log(f"[FAIL] Data Starvation: All providers failed to return {min_rows} rows for {symbol}.", "ERROR")
         return pd.DataFrame()
 
     # --- INTERNAL DOWNLOADERS ---
-        # --- INTERNAL DOWNLOADERS ---
-    def _download_from_ibkr(self, symbol, start_date, end_date, days_back, interval):
-        contract = Contract()
-        contract.currency = 'USD'
+    def _download_from_ibkr(self, symbol, start_date, end_date, days_back, interval, min_rows=0):
+        """
+        Robust IBKR Fetcher with Full Contract Definition.
+        """
+        try:
+            # 1. Connection Check
+            if not self.ibkr or not self.isConnected():
+                if not self.connect_to_ibkr():
+                    self._log(f"IBKR Not Connected. Skipping {symbol}.", "WARNING")
+                    return pd.DataFrame()
 
-        # --- MAPPING 1: IBKR Contract Logic ---
-        if symbol.startswith('^'):
-            contract.secType = 'IND'
-            contract.symbol = symbol.lstrip('^')
-            if contract.symbol == 'VIX':
+            # 2. Contract Construction
+            contract = Contract()
+            contract.currency = 'USD'
+            clean_symbol = symbol.strip().upper()
+
+            if clean_symbol.startswith('^') or clean_symbol == 'VIX':
+                contract.secType = 'IND'
+                contract.symbol = clean_symbol.lstrip('^')
                 contract.exchange = 'CBOE'
             else:
+                contract.secType = 'STK'
+                contract.symbol = clean_symbol
                 contract.exchange = 'SMART'
-        else:
-            contract.secType = 'STK'
-            contract.symbol = symbol
-            contract.exchange = 'SMART'
+                contract.primaryExchange = 'ISLAND'
 
-        # Resolve Contract
-        self.app.resolved_contract = None
-        self.app.contract_event.clear()
-        self.app.reqContractDetails(self.app.client_id + 1, contract)
-        self.app.contract_event.wait(timeout=5)
-        if self.app.resolved_contract: contract = self.app.resolved_contract
+            # 3. Duration Logic (Looking back from NOW)
+            duration = "1 Y"
+            if days_back:
+                if days_back > 365: duration = "2 Y"
+                elif days_back > 30: duration = f"{int(days_back/30) + 1} M"
+                else: duration = f"{days_back} D"
 
-        # Format Time
-        if start_date and end_date:
-            end_dt_str = end_date.strftime("%Y%m%d 23:59:59") if hasattr(end_date, 'strftime') else end_date
-            if isinstance(start_date, datetime):
-                delta = (end_date.date() - start_date.date()).days
-            else:
-                delta = (pd.to_datetime(end_date) - pd.to_datetime(start_date)).days
-            duration_str = f"{delta + 5} D"
-        elif days_back:
-            end_dt_str = datetime.now().strftime("%Y%m%d 23:59:59")
-            duration_str = f"{days_back} D"
-        else:
-            return pd.DataFrame()
+            # 4. Bar Size Mapping
+            ib_interval_map = {
+                "1m": "1 min", "5m": "5 mins", "15m": "15 mins", "30m": "30 mins",
+                "1h": "1 hour", "1d": "1 day", "1wk": "1 week", "1mo": "1 month"
+            }
+            bar_size = ib_interval_map.get(interval, "1 day")
 
-        # Map Interval
-        ibkr_interval_map = {'1d': '1 day', '15 mins': '15 mins', '5 mins': '5 mins', '30 mins': '30 mins',
-                             '1 hour': '1 hour'}
-        bar_size = ibkr_interval_map.get(interval, interval)
-
-        self.app.data = []
-        self.app.data_event.clear()
-        self.app.error_occurred = False
-
-        self.app.reqHistoricalData(self.client_id + 2, contract, end_dt_str, duration_str, bar_size, "TRADES", 1, 1,
-                                   False, [])
-
-        if self.app.data_event.wait(timeout=20):
-            if self.app.data:
-                df = pd.DataFrame(self.app.data)
-                df['Date'] = pd.to_datetime(df['Date'])
-                df.set_index('Date', inplace=True)
-                return df
-        return pd.DataFrame()
-
-    def _download_from_alpaca(self, symbol, start_date, end_date, days_back, interval='1d'):
-        """
-        Internal method to download data from Alpaca using StockHistoricalDataClient.
-        This is much more reliable for historical data than yfinance.
-        """
-        if not self.stock_client:
-            self._log(f"Alpaca client not initialized. Cannot download {symbol} from Alpaca.", "ERROR")
-            return pd.DataFrame()
-
-        # --- MAPPING 2: Alpaca Symbol Logic ---
-        clean_symbol = symbol.lstrip('^')  # Alpaca uses 'VIX', not '^VIX'
-
-        try:
-            # Fix dates
-            start = start_date if start_date else datetime.now().date() - timedelta(days=days_back or 365)
-            end = end_date if end_date else datetime.now().date()
-            
-            self._log(f"Alpaca Request: {clean_symbol} | Start: {start} | End: {end} | TF: {interval}", "INFO")
-
-            try:
-                # Interval Mapping
-                if interval in ['1d', '1 day']:
-                    tf = TimeFrame.Day
-                elif interval in ['1h', '1 hour']:
-                    tf = TimeFrame.Hour
-                elif interval in ['15m', '15 mins']:
-                    if hasattr(TimeFrame, 'Minute15'):
-                        tf = TimeFrame.Minute15
-                    else:
-                        tf = TimeFrame(15, TimeFrameUnit.Minute)
-                elif interval in ['5m', '5 mins']:
-                    tf = TimeFrame(5, TimeFrameUnit.Minute)
-                else:
-                    tf = TimeFrame.Day
-            except Exception as e:
-                # Fallback to Daily if anything goes wrong with TimeFrame construction
-                self._log(f"Alpaca TimeFrame construction error: {e}. Defaulting to Daily.", "WARNING")
-                tf = TimeFrame.Day
-
-            req = StockBarsRequest(
-                symbol_or_symbols=[clean_symbol],
-                timeframe=tf,
-                start=start,
-                end=end,
-                feed="iex"
+            # 5. Fetch
+            df = self.ibkr.fetch_historical_data(
+                contract=contract,
+                durationStr=duration,
+                barSizeSetting=bar_size,
+                whatToShow="TRADES",
+                useRTH=1
             )
+            
+            # 6. Integrity Check
+            if not df.empty and len(df) < min_rows:
+                 self._log(f"IBKR Insufficient Data: Got {len(df)} rows (Target: {min_rows})", "WARNING")
 
-            # 2. Make the single API call
-            self._log(f"Sending Alpaca Request...", "INFO")
-            bars = self.stock_client.get_stock_bars(req)
-
-            # 3. Convert to DataFrame and clean
-            df_raw = bars.df
-            if df_raw.empty:
-                logging.info(f"Alpaca returned ZERO bars for {clean_symbol}. (Req: {req})")
-                return pd.DataFrame()
-
-            # Alpaca returns a MultiIndex (symbol, timestamp). Flatten to DatetimeIndex.
-            df = df_raw.reset_index(level=0, drop=True)
-            df.index.name = "Date"
-
-            self._log(f"Successfully retrieved {len(df)} bars for {clean_symbol} from Alpaca.", "SUCCESS")
             return df
 
-        except APIError as e:
-            self._log(f"Alpaca API Error for {clean_symbol}: {e}", "ERROR")
-            return pd.DataFrame()
         except Exception as e:
-            self._log(f"Alpaca Unknown Exception for {clean_symbol}: {e}", "ERROR")
-            import traceback
-            logger.error(traceback.format_exc())
+            self._log(f"IBKR Failure: {e} (Target: {min_rows})", "WARNING")
             return pd.DataFrame()
 
-    def _download_from_yfinance(self, symbol, days_back, interval='1d', start_date=None, end_date=None, retries=3,
-                                delay=5):
-        """Internal method to download data from yfinance with robust logic."""
-        self._log(f"Downloading {symbol} from yfinance...")
+    def _download_from_alpaca(self, symbol, start_date, end_date, days_back, interval, min_rows=0):
+        """
+        Robust Alpaca Fetcher (Gen-12 Compliant).
+        """
+        try:
+            # 1. Client Check
+            if not self.stock_client:
+                return pd.DataFrame()
 
-        # --- MAPPING 3: YFinance Interval Logic ---
-        yfinance_interval_map = {
-            '1 day': '1d', '1d': '1d',
-            '15 mins': '15m', '5 mins': '5m',
-            '30 mins': '30m', '1 hour': '1h'
-        }
-        yfinance_interval = yfinance_interval_map.get(interval, interval)
+            # 2. Timeframe Mapping
+            # Alpaca uses TimeFrame objects (1Day, 1Hour, etc.)
+            from alpaca_trade_api.rest import TimeFrame, TimeFrameUnit
+            
+            tf = TimeFrame.Day # Default
+            if interval == "1d": tf = TimeFrame.Day
+            elif interval == "1wk": tf = TimeFrame.Week
+            elif interval == "1h": tf = TimeFrame.Hour
+            elif interval == "15m": tf = TimeFrame(15, TimeFrameUnit.Minute)
+            elif interval == "5m": tf = TimeFrame(5, TimeFrameUnit.Minute)
+            elif interval == "1m": tf = TimeFrame.Minute
 
-        # --- Handle yfinance intraday limit ---
-        is_intraday = 'm' in yfinance_interval or 'h' in yfinance_interval
-        if days_back and is_intraday and days_back > 60:
-            days_back = 60
+            # 3. Date Logic (Alpaca requires ISO format)
+            # Alpaca requires strictly formatted RFC-3339 timestamps for robust fetching
+            utc_now = datetime.utcnow()
+            
+            if not end_date:
+                end_date = utc_now
+            elif isinstance(end_date, str):
+                try:
+                    end_date = datetime.strptime(end_date, '%Y-%m-%d')
+                except ValueError:
+                    end_date = utc_now
 
-        for i in range(retries):
-            try:
-                # --- Force String Dates ---
-                if end_date:
-                    if not start_date:
-                        db = days_back if days_back else 365
-                        start_dt = pd.to_datetime(end_date) - timedelta(days=db)
-                    else:
-                        start_dt = pd.to_datetime(start_date)
+            # Architectural Fix: SIP Free Tier Bypass
+            # Enforce a strict 16-minute delay from UTC now to prevent 403 permission errors during live market hours.
+            safe_end_dt = utc_now - timedelta(minutes=16)
+            
+            if end_date > safe_end_dt:
+                effective_end = safe_end_dt
+            else:
+                effective_end = end_date
 
-                    end_dt = pd.to_datetime(end_date)
+            end_iso = effective_end.strftime('%Y-%m-%dT%H:%M:%SZ')
 
-                    # Convert to strings to avoid TypeError
-                    start_str = start_dt.strftime('%Y-%m-%d')
-                    end_str = (end_dt + timedelta(days=1)).strftime('%Y-%m-%d')
-
-                    self._log(f"yfinance: Requesting {symbol} from {start_str} to {end_str}", "DEBUG")
-
-                    df = yf.download(symbol, start=start_str, end=end_str,
-                                     interval=yfinance_interval, auto_adjust=True, progress=False)
-
-                elif start_date:
-                    start_str = pd.to_datetime(start_date).strftime('%Y-%m-%d')
-                    df = yf.download(symbol, start=start_str, interval=yfinance_interval,
-                                     auto_adjust=True, progress=False)
+            if not start_date and days_back:
+                # CRITICAL CALCULATION: A market year is 252 trading days.
+                buffer_days_back = int(days_back * 1.5)
+                start_dt = effective_end - timedelta(days=buffer_days_back)
+                start_iso = start_dt.strftime('%Y-%m-%dT00:00:00Z')
+            else:
+                if isinstance(start_date, str):
+                    try:
+                        start_iso = datetime.strptime(start_date, '%Y-%m-%d').strftime('%Y-%m-%dT00:00:00Z')
+                    except ValueError:
+                        start_iso = start_date
                 else:
-                    # Period based logic
-                    db = days_back if days_back else 365
-                    self._log(f"yfinance: Requesting {symbol} for last {db} days.", "DEBUG")
+                    start_iso = start_date.strftime('%Y-%m-%dT00:00:00Z')
+            
+            # 4. Fetch Data
+            # Note: adjustment='raw' or 'all'. 'all' adjusts for splits/divs.
+            bars = self.stock_client.get_bars(
+                symbol,
+                tf,
+                start=start_iso,
+                end=end_iso,
+                adjustment='all',
+                feed='iex',
+                limit=10000 
+            ).df
 
-                    period = f"{db}d"
-                    if not is_intraday and db > 300: period = f"{int(db / 365) + 1}y"
+            # 5. formatting
+            if not bars.empty:
+                # Alpaca returns index as timezone-aware timestamp. 
+                # We normalize columns to lowercase (open, high, low, close, volume)
+                bars.columns = [c.lower() for c in bars.columns]
+                
+                # Filter for valid rows
+                if len(bars) < min_rows:
+                    self._log(f"ALPACA Insufficient Data: Got {len(bars)} rows (Target: {min_rows})", "WARNING")
+            
+            return bars
 
-                    if not is_intraday and db > 300:
-                        years = int(db / 365) + 1
-                        period = f"{years}y"
-                        df = yf.download(symbol, period=period, interval=yfinance_interval, auto_adjust=True,
-                                         progress=False)
-                    else:
-                        period = f"{db}d"
-                        df = yf.download(symbol, period=period, interval=yfinance_interval,
-                                         auto_adjust=True, progress=False)
+        except Exception as e:
+            # FIX: 'min_rows' is now in scope, preventing the crash
+            self._log(f"ALPACA Failure: {e} (Target: {min_rows})", "WARNING")
+            return pd.DataFrame()
 
-                if not df.empty:
-                    self._log(f"Successfully retrieved {len(df)} bars for {symbol} from yfinance.", "SUCCESS")
-                    return df
+    def _download_from_massive(self, symbol, start_date, end_date, days_back, interval, min_rows=0):
+        """
+        Download from Massive (formerly Polygon).
+        """
+        if not self.massive_client: return pd.DataFrame()
+        
+        # Interval Mapping
+        multiplier = 1
+        timespan = 'day'
+        
+        if interval in ['1d', '1 day', 'daily']:
+            timespan = 'day'
+        elif interval in ['1h', '60m']:
+            timespan = 'hour'
+            multiplier = 1
+        elif interval in ['15m']:
+            timespan = 'minute'
+            multiplier = 15
+        elif interval in ['5m']:
+            timespan = 'minute'
+            multiplier = 5
+        elif interval in ['1m']:
+            timespan = 'minute'
+            multiplier = 1
+            
+        # Date String YYYY-MM-DD
+        # Note: start_date/end_date might be datetime or str
+        def fmt(d):
+            if isinstance(d, (datetime, pd.Timestamp)): return d.strftime('%Y-%m-%d')
+            return str(d)
 
+        # Handle 'days_back' if start_date is missing
+        start = start_date
+        end = end_date if end_date else datetime.now()
+        
+        if not start and days_back:
+            start = end - timedelta(days=days_back)
+            
+        try:
+            logging.info(f"Massive Request: {symbol} | {fmt(start)} to {fmt(end)} | {multiplier}{timespan}")
+            aggs = self.massive_client.get_aggs(
+                ticker=symbol,
+                multiplier=multiplier,
+                timespan=timespan,
+                from_=fmt(start),
+                to=fmt(end),
+                limit=50000
+            )
+            
+            if not aggs:
+                return pd.DataFrame()
+                
+            # Convert to DataFrame
+            # Agg properties: open, high, low, close, volume, vwap, timestamp
+            data = []
+            for a in aggs:
+                # timestamp is usually ms
+                dt = datetime.fromtimestamp(a.timestamp / 1000.0) if a.timestamp else None
+                data.append({
+                    'timestamp': dt,
+                    'open': a.open,
+                    'high': a.high,
+                    'low': a.low,
+                    'close': a.close,
+                    'volume': a.volume,
+                    'vwap': a.vwap
+                })
+                
+            df = pd.DataFrame(data)
+            if df.empty: return df
+            
+            df.set_index('timestamp', inplace=True)
+            return df
+            
+        except Exception as e:
+            # Re-raise 429 so the outer circuit breaker handler can detect and trip it.
+            # All other errors are swallowed and return empty (handled by waterfall).
+            if '429' in str(e):
+                raise
+            self._log(f"MASSIVE Failure: {e}", "WARNING")
+            return pd.DataFrame()
+        
+    def _download_from_yfinance(self, symbol, days_back, interval, start_date=None, end_date=None, min_rows=0):
+        """
+        Robust YFinance Fetcher: Handles Tuples, MultiIndex headers, and Ticker Translation.
+        """
+        try:
+            # 1. Ticker Translation (Yahoo requires '-' instead of '.' for BRK.B)
+            yf_symbol = symbol.replace('.', '-')
+            
+            # 2. Date Logic
+            if not start_date and days_back:
+                start_dt = datetime.now() - timedelta(days=days_back)
+                start_date = start_dt.strftime('%Y-%m-%d')
+            
+																			  
+            if not start_date:
+                start_dt = datetime.now() - timedelta(days=365)
+                start_date = start_dt.strftime('%Y-%m-%d')
+
+            # 3. Fetch Data
+            # 'group_by' ensures consistent formatting even for single tickers
+            df = yf.download(
+                yf_symbol, 
+                start=start_date, 
+                end=end_date, 
+                interval=interval, 
+                progress=False, 
+                auto_adjust=True,
+                group_by='ticker' 
+            )
+
+            # 4. Critical Fix: Handle Headers SAFELY
+            if not df.empty:
+                # A) Handle MultiIndex (Tuple Headers) FIRST
+															
+																				  
+                if isinstance(df.columns, pd.MultiIndex):
+                    try:
+                        # If structure is (Price, Ticker), drop the Ticker level
+                        if yf_symbol in df.columns.get_level_values(0):
+                             # Access the specific ticker's dataframe directly
+                             df = df[yf_symbol]
+                        else:
+                             # Generic drop level
+                             df.columns = df.columns.droplevel(1)
+                    except Exception:
+                        pass # Fallback if structure is unexpected
+
+                # B) NOW it is safe to lowercase strings
+                df.columns = [str(c).lower().strip() for c in df.columns]
+
+            # 5. Integrity Check
+            if not df.empty and len(df) < min_rows:
+																				 
+                self._log(f"YFINANCE Insufficient Data: Got {len(df)} rows (Target: {min_rows})", "WARNING")
+                # return pd.DataFrame() # Optional strict mode
+
+            return df
+
+        except Exception as e:
+																						  
+            self._log(f"YFINANCE Failure: {e} (Target: {min_rows})", "WARNING")
+            return pd.DataFrame()
+
+    # --- GEN-12 HELPER METHODS ---
+    def fetch_and_process(self, symbol, interval="1d"):
+        """
+        Fetches raw data and immediately runs the Feature Engine.
+        Used by: data_engineer.py
+        """
+        from feature_engine import RobustFeatureCalculator
+        
+        # 1. Fetch Raw Data
+        df = self.get_stock_data(symbol, days_back=365, interval=interval)
+        if df.empty: return pd.DataFrame()
+        
+        # 2. Add Features
+        calc = RobustFeatureCalculator()
+        try:
+            # Add sector context if needed (mock for now or fetch QQQ)
+            df = calc.calculate_features(df)
+            return df
+        except Exception as e:
+            self._log(f"Feature Calc failed for {symbol}: {e}", "ERROR")
+            return pd.DataFrame()
+
+    def fetch_data(self, symbol, limit=100, interval="1d"):
+         """Simple fetch wrapper for StockHunter"""
+         df = self.get_stock_data(symbol, days_back=limit, interval=interval)
+         return df
+
+    # --- GEN-7 STREAMING ARCHITECTURE ---
+    async def stream_data(self, symbol: str, queue: asyncio.Queue):
+        """
+        Async Generator that mimics a WebSocket.
+        Pushes 'BAR' events to the provided asyncio Queue.
+        Real implementation would hook into IBKR's EWrapper.tickPrice.
+        Current implementation involves 'Polling' latest bar to behave like a stream.
+        """
+        self._log(f"Starting Data Stream for {symbol}...", "INFO")
+        
+        # 1. Start Jitter: Prevent all 10 stocks from hitting the API at the exact same millisecond
+        await asyncio.sleep(random.uniform(0, 10))
+
+        try:
+            while True:
+                # 1. Fetch latest snapshot (Polling as temporary shim for WebSocket)
+                # This prevents "Blindness" by ensuring we always have fresh data 
+                latest_bar = await self._fetch_latest_async(symbol)
+                
+                if latest_bar:
+                   timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                   event = {
+                       "type": "BAR",
+                       "symbol": symbol,
+                       "price": latest_bar['close'],
+                       "volume": latest_bar['volume'],
+                       "timestamp": timestamp,
+                       "data": latest_bar # Full struct
+                   }
+                   await queue.put(event)
+                
+                # 3. Optimization: Throttle the Loop
+                # Previous setting was 15s. We increase to 60s + Random to reduce
+                # pressure on the connection pool by 75%.
+                wait_time = 60 + random.uniform(0, 10)
+                await asyncio.sleep(wait_time)
+                
+        except asyncio.CancelledError:
+            self._log(f"Stream cancelled for {symbol}", "INFO")
+        except Exception as e:
+            self._log(f"Stream error for {symbol}: {e}", "ERROR")
+            # Backoff significantly on error to allow pool to recover
+            await asyncio.sleep(60)
+
+    async def _fetch_latest_async(self, symbol):
+        """
+        Non-blocking wrapper around synchronous fetch.
+        Runs I/O in a separate thread to keep Async loop unblocked.
+        """
+        loop = asyncio.get_event_loop()
+        try:
+            # Enforce minimum 20 rows to calculate basic intraday indicators
+            df = await loop.run_in_executor(None, lambda: self.get_stock_data(symbol, days_back=5, interval="15m", min_rows=20))
+
+            if not df.empty:
+                return df.iloc[-1].to_dict()
+            return None
+        except Exception:
+            return None
+
+    def get_realtime_quote(self, symbol):
+        """
+        Fetch Level 2 (Bid/Ask) Data.
+        """
+        quote = {"bid": 0.0, "ask": 0.0, "spread": 0.0}
+        
+        # 1. Try IBKR (Real Level 2)
+        if self.use_ibkr and self.isConnected():
+            # (Simplified IBKR implementation placeholder)
+            pass
+            
+        # 2. Fallback to YFinance (Delayed Quote)
+        try:
+            ticker = yf.Ticker(symbol)
+            info = ticker.info
+            quote["bid"] = info.get("bid", info.get("currentPrice", 0.0))
+            quote["ask"] = info.get("ask", info.get("currentPrice", 0.0))
+            quote["spread"] = quote["ask"] - quote["bid"]
+            return quote
+        except Exception as e:
+            self._log(f"Quote fetch failed: {e}", "WARNING")
+            return None
+
+    def regenerate_all_data(self):
+        """
+        Gen-12 Utility: Forces a refresh of all historical data.
+        Downloads Deep History for every symbol in Watchlist + Common Indices (SPY, QQQ).
+        Calculates Feature Engineering and saves to 'Gold' parquet.
+        """
+        self._log("Starting Global Data Regeneration...", "INFO")
+        from feature_engine import RobustFeatureCalculator
+        
+        calc = RobustFeatureCalculator()
+        import system_config as cfg
+        
+        # Combine Watchlist + any extras
+        targets = list(set(cfg.WATCHLIST + ["NVDA", "SPY", "QQQ", "IWM"]))
+        
+        for symbol in targets:
+            try:
+                self._log(f"Processing {symbol}...")
+                # 1. Fetch deep history (2 years for training)
+                df = self.get_stock_data(symbol, days_back=730, interval="1d")
+                
+                if df.empty: 
+                    self._log(f"Skipping {symbol}: No data returned from any provider.", "WARNING")
+                    continue
+                
+                # 2. Calculate Features (This runs MasterPatternLib)
+                df = calc.calculate_features(df)
+
+                # --- NEW DIAGNOSTIC LOG ---
+                if 'master_score' not in df.columns:
+                    self._log(f"Warning: {symbol} missing 'master_score'. Columns: {list(df.columns[-5:])}", "WARNING")
+                
+                self._log(f"{symbol} Data Shape: {df.shape} (Rows, Cols)", "INFO") 
+                    
+                # 3. Calculate Ground Truth (FIX: Use the logic from feature_engine.py)
+                from feature_engine import calculate_ground_truth
+                df = calculate_ground_truth(df, lookahead=15) # This uses your new RISK_THR = 0.03
+                
+                # 4. Save to Gold
+                save_path = os.path.join(cfg.DB_DIR, "gold", f"{symbol}.parquet")
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                
+                df.to_parquet(save_path)
+                self._log(f"Saved {symbol}.parquet with Master Score.")
+                
             except Exception as e:
-                self._log(f"yfinance attempt {i + 1}/{retries} failed: {e}", "WARNING")
-                time.sleep(delay)
-
-        self._log(f"All yfinance download attempts failed for {symbol}.", "ERROR")
-        return pd.DataFrame()
+                self._log(f"Failed {symbol}: {e}", "ERROR")
 
 
 class SectorMapper:
+    """Helper to map individual stocks to their Sector benchmarks."""
     SECTOR_MAP = {
         'Technology': 'XLK', 'Semiconductors': 'SMH', 'Financial Services': 'XLF',
         'Financials': 'XLF', 'Healthcare': 'XLV', 'Energy': 'XLE',
@@ -556,87 +1027,8 @@ class SectorMapper:
         except:
             return 'SPY'
 
-
-def normalize_and_validate_data(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None or df.empty: return pd.DataFrame()
-
-    # 1. Handle MultiIndex (IBKR/Alpaca/YF common format)
-    if isinstance(df.columns, pd.MultiIndex): 
-        df.columns = df.columns.droplevel(1)
-    
-    # 2. FORCE LOWERCASE IMMEDIATELY
-    # This ensures the validation check below passes regardless of source format
-    df.columns = df.columns.str.lower()
-    
-    # # 3. Ensure datetime index
-    # if not isinstance(df.index, pd.DatetimeIndex): df.index = pd.to_datetime(df.index)
-    # if df.index.tz is not None: df.index = df.index.tz_localize(None)
-
-    # required = {'open', 'high', 'low', 'close', 'volume'}
-    # if not required.issubset(df.columns): return pd.DataFrame()
-    # 3. Validate Columns
-    required = {'open', 'high', 'low', 'close', 'volume'}
-    if not required.issubset(df.columns): 
-        # Optional: Log warning here if needed
-        return pd.DataFrame()
-    
-    # 4. Standardize Index
-    if not isinstance(df.index, pd.DatetimeIndex): 
-        df.index = pd.to_datetime(df.index)
-    
-    # Remove timezone awareness (common source of merge errors)
-    if df.index.tz is not None: 
-        df.index = df.index.tz_localize(None)
-    
-    return df
-
-
-def clean_raw_data(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Ensures data consistency for all downstream technical analysis.
-    This is often needed when switching between YF, Alpaca, and IBKR formats.
-    """
-    if df is None or df.empty: return pd.DataFrame()
-
-    # Ensure the input is a DataFrame before accessing 'columns'
-    if not isinstance(df, pd.DataFrame):
-        logging.error(f"Input to clean_raw_data is not a DataFrame: {type(df)}")
-        return pd.DataFrame()  # Return empty DataFrame to avoid AttributeError
-
-    # 1. Standardize column case (lowercase for pandas_ta)
-    if isinstance(df.columns, pd.MultiIndex):
-        # Flatten each tuple, drop empty parts, then lowercase
-        df.columns = [
-            "_".join([str(part) for part in col if part is not None and part != ""]).lower()
-            for col in df.columns
-        ]
-    else:
-        df.columns = [str(c).lower() for c in df.columns]
-
-    # 2. Drop duplicates (crucial after concatenation/merging data sources)
-    if isinstance(df.index, pd.MultiIndex):
-        df = df.droplevel(0)  # Drop symbol index from multi-index
-
-    df = df[~df.index.duplicated(keep='last')]
-    df.index.name = "Date"
-
-    # 3. Ensure index is timezone-naive datetime
-    if not isinstance(df.index, pd.DatetimeIndex):
-        df.index = pd.to_datetime(df.index)
-    if df.index.tz is not None:
-        df.index = df.index.tz_localize(None)
-
-    # 4. Filter for required columns (must have OHLCV)
-    required = {'open', 'high', 'low', 'close', 'volume'}
-    if not required.issubset(df.columns):
-        # We try to rename if YF/Alpaca capitalization was lost
-        df.rename(columns={'adj close': 'close'}, inplace=True)
-        if not required.issubset(df.columns):
-            logging.warning("Clean raw data failed: Missing OHLCV columns.")
-            return pd.DataFrame()
-
-    # Final cleanup (Forward fill then backward fill NaNs, usually from splits)
-    df.ffill(inplace=True)
-    df.bfill(inplace=True)
-
-    return df
+# --- EXECUTION BLOCK ---
+if __name__ == "__main__":
+    # Allow running this file directly to regenerate data
+    dsm = DataSourceManager()
+    dsm.regenerate_all_data()

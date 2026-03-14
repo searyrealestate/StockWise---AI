@@ -393,9 +393,8 @@ class StockHunter:
                 
             except Exception as e:
                 logger.error(f"Scan failed for {symbol}. Moving to next. Error: {e}")
-            finally:
-                # Throttling
-                time.sleep(12.5)
+            # NOTE: No sleep here — throttling is handled per-provider in DataSourceManager.get_stock_data()
+            # via PROVIDER_DELAY config. Adding sleep here would double the delay.
                 
         # Persist & Update
         self._save_json(self.ledger_file, self.ledger)

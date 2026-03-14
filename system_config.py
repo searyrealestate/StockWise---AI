@@ -127,7 +127,7 @@ EN_YFINANCE = True  # Fallback: Last resort
 # Defines how long the scanner waits between fetching stock data to avoid HTTP 429.
 # Lower is faster, but higher risk of bans.
 PROVIDER_DELAY = {
-    "MASSIVE": 12.5,   # High performance
+    "MASSIVE": 1.0,    # Pre-request courtesy delay; circuit breaker handles 429 lockout
     "IBKR": 0.05,      # 50 req/sec limit (0.02s theoretical, 0.05s safe)
     "ALPACA": 2.5,     # Free tier is rate-limited (~200/min)
     "YFINANCE": 1.0,   # Aggressive scraping protection
