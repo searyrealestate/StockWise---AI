@@ -1,5 +1,41 @@
 # Changelog
 
+## [2026-03-14] Scanner Performance Fix — Data Starvation Resolution
+
+### Problem
+Nightly scanner ran 12+ hours with ZERO data retrieved. All 875 requests failed
+on Massive (Polygon) 429 rate limit. Waterfall fallback to Alpaca/IBKR/YFinance
+was silently broken.
+
+### Root Causes
+1. **Circuit Breaker (dead code):** `_download_from_massive()` caught 429 internally
+   and returned empty `pd.DataFrame()`. The outer `except` block that was supposed
+   to trip the breaker never ran — it was unreachable dead code.
+2. **15-min lockout too short:** After 15 min the system retried Massive, got another
+   429, reset the timer, and looped forever (875 consecutive failures).
+3. **Double throttle:** `stock_hunter.py` `finally: time.sleep(12.5)` + `PROVIDER_DELAY
+   ["MASSIVE"]=12.5s` = 25s per stock × 4000 stocks = **27+ hours**.
+4. **Silent provider skips:** Alpaca/IBKR/YFinance were silently skipped with no log
+   when not initialized, making the waterfall invisible in the Master Log.
+
+### Fixes Applied
+
+| File | Change | Impact |
+|------|--------|--------|
+| `data_source_manager.py` | Re-raise 429 from `_download_from_massive` | Circuit breaker now actually fires |
+| `data_source_manager.py` | Escalating lockout: 1st hit=1h, subsequent=4h | Stops wasting time on dead provider |
+| `data_source_manager.py` | `_massive_fail_count` class var tracks consecutive failures | Resets to 0 on Massive success |
+| `data_source_manager.py` | WARNING log when Alpaca/IBKR skipped | Makes silent failures visible |
+| `stock_hunter.py` | `time.sleep(12.5)` → `time.sleep(0.5)` in finally | ~13 hours eliminated from 4000-stock scan |
+| `stock_hunter.py` | Scan progress log every 50 stocks (%, rate, ETA) | Monitor health during nightly runs |
+| `system_config.py` | `MASSIVE`: 12.5→1.0, `ALPACA`: 2.5→0.5, `YFINANCE`: 1.0→1.5 | 90% delay reduction for non-Massive providers |
+
+### Expected Result
+Full 4000-stock scan: **12+ hours → ~30–60 minutes**
+(depends on active provider: YFinance@1.5s = ~100 min, Alpaca@0.5s = ~35 min)
+
+---
+
 ## Phase 1 — Bug Fixes
 
 ### Bug 1.2 — Column name case mismatch in `apply_checklist_bonus` (strategy_engine.py)

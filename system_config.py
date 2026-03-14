@@ -126,11 +126,16 @@ EN_YFINANCE = True  # Fallback: Last resort
 # --- DATA PACING CONFIGURATION (Seconds between requests) ---
 # Defines how long the scanner waits between fetching stock data to avoid HTTP 429.
 # Lower is faster, but higher risk of bans.
+# --- DATA PACING CONFIGURATION (Seconds between requests per provider) ---
+# [2026-03-14] UPDATED: Reduced delays after adding escalating circuit breaker.
+# Old values: MASSIVE=12.5, ALPACA=2.5, YFINANCE=1.0
+# Reason: Circuit breaker now handles Massive 429s properly (1h/4h lockout),
+# so per-request delays no longer need to compensate for rate-limit risk.
 PROVIDER_DELAY = {
     "MASSIVE": 1.0,    # Pre-request courtesy delay; circuit breaker handles 429 lockout
     "IBKR": 0.05,      # 50 req/sec limit (0.02s theoretical, 0.05s safe)
-    "ALPACA": 2.5,     # Free tier is rate-limited (~200/min)
-    "YFINANCE": 1.0,   # Aggressive scraping protection
+    "ALPACA": 0.5,     # Free tier allows ~200/min; 0.5s = 2/sec, safely within limit
+    "YFINANCE": 1.5,   # Slightly conservative against scraping protection
     "DEFAULT": 0.5     # Safe fallback
 }
 

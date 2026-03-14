@@ -4,9 +4,24 @@
 StockWise Gen-12 Stock Hunter (The Scout)
 =========================================
 The Stateful Discovery Engine.
-Implements a Multi-Level Feedback Queue (MLFQ) to efficiently scan thousands of 
-equities, prioritizing high Signal-to-Noise (DSP) waveforms while ensuring 
+Implements a Multi-Level Feedback Queue (MLFQ) to efficiently scan thousands of
+equities, prioritizing high Signal-to-Noise (DSP) waveforms while ensuring
 no stock is left behind.
+
+CHANGELOG:
+-----------
+[2026-03-14] Fix #1: Removed double throttle
+  - Old: time.sleep(12.5) in finally block DOUBLED the per-provider delay already
+    applied inside DataSourceManager.get_stock_data() via PROVIDER_DELAY config.
+  - Result: 25s per stock × 4000 stocks = 27+ hours for a full scan.
+  - New: time.sleep(0.5) — minimal inter-stock courtesy gap only.
+    Provider-level throttling is handled entirely by PROVIDER_DELAY in DSM.
+  - Impact: ~13 hours eliminated from a 4000-stock scan.
+
+[2026-03-14] Fix #2: Added scan progress logging every 50 stocks
+  - Logs: progress %, stocks scanned, elapsed time, rate (stocks/min), ETA.
+  - Enables real-time monitoring of scan health during nightly runs.
+  - A silent 12-hour scan is now impossible — health is visible every ~50 stocks.
 """
 
 import random
@@ -311,14 +326,16 @@ class StockHunter:
 
     def run_nightly_scan(self):
         """
-        The Main Execution Loop. 
+        The Main Execution Loop.
         Iterates through the queue, runs FULL STRATEGY ANALYSIS, and saves state.
         """
         logger.info("Initiating Nightly Deep-Scan (Tech + AI + DSP)...")
-        
+
         scan_queue = self._get_tonights_scan_queue()
-        
-        for symbol in scan_queue:
+        total = len(scan_queue)
+        scan_start = time.time()
+
+        for idx, symbol in enumerate(scan_queue, 1):
             try:
                 logger.info(f"🔍 Scanning [{symbol}]...")
                 
@@ -393,9 +410,25 @@ class StockHunter:
                 
             except Exception as e:
                 logger.error(f"Scan failed for {symbol}. Moving to next. Error: {e}")
-            # NOTE: No sleep here — throttling is handled per-provider in DataSourceManager.get_stock_data()
-            # via PROVIDER_DELAY config. Adding sleep here would double the delay.
-                
+            finally:
+                # Minimal inter-stock gap (courtesy only).
+                # Provider-level throttling is handled by PROVIDER_DELAY inside get_stock_data().
+                time.sleep(0.5)
+
+            # --- SCAN PROGRESS: log every 50 stocks ---
+            if idx % 50 == 0 or idx == total:
+                elapsed = time.time() - scan_start
+                rate = idx / (elapsed / 60) if elapsed > 0 else 0  # stocks per minute
+                remaining = total - idx
+                eta_min = remaining / rate if rate > 0 else 0
+                pct = (idx / total) * 100
+                logger.info(
+                    f"[SCAN PROGRESS] {idx}/{total} ({pct:.0f}%) | "
+                    f"Elapsed: {elapsed/60:.1f}m | "
+                    f"Rate: {rate:.1f} stocks/min | "
+                    f"ETA: {eta_min:.0f}m"
+                )
+
         # Persist & Update
         self._save_json(self.ledger_file, self.ledger)
         self._update_daily_review_list()

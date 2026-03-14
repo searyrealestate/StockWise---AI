@@ -15,6 +15,27 @@ Handles:
 - data normalization (cleaning columns, timestamps)
 - fallback logic errors
 - real-time streaming simulation
+
+CHANGELOG:
+-----------
+[2026-03-14] Fix #1: Escalating Circuit Breaker for Massive (429 lockout)
+  - Old: 15-min fixed lockout, re-tried and failed in infinite loop
+  - Root cause: _download_from_massive() caught 429 internally → outer handler
+    (circuit breaker) never fired. Dead code.
+  - New: 429 re-raised from _download_from_massive so outer handler trips breaker.
+  - Escalating lockout: 1st hit = 1h, subsequent consecutive hits = 4h.
+  - _massive_fail_count class var tracks consecutive failures; resets on success.
+
+[2026-03-14] Fix #2: Waterfall provider diagnostics + silent skip fix
+  - Old: When Massive locked out, Alpaca/IBKR/YFinance silently skipped (no log).
+  - New: Each provider logs a WARNING when skipped due to missing client/connection.
+  - IBKR now logs "connection failed" and continues to next provider explicitly.
+  - Data Starvation error already logs full provider failure context.
+
+[2026-03-14] Fix #3: Provider delay optimization
+  - MASSIVE: 12.5s → 1.0s (circuit breaker handles 429s; no need for per-request delay)
+  - ALPACA: 2.5s → 0.5s (free tier allows ~200/min; 0.5s = 2/sec, safely within limit)
+  - YFINANCE: 1.0s → 1.5s (slightly more conservative against scraping protection)
 """
 
 import urllib3
