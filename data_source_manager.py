@@ -18,6 +18,15 @@ Handles:
 
 CHANGELOG:
 -----------
+[2026-03-14] Fix #4: Critical waterfall fix — IBKR AttributeError + MASSIVE silent skip
+  - Bug: _download_from_ibkr() referenced self.ibkr which does not exist (should be self.app).
+    This caused AttributeError on every IBKR attempt, silently caught → IBKR always skipped.
+  - Bug: When massive_client is None, no elif handler existed → silent fallthrough with no log.
+  - Fix: self.ibkr → self.app in _download_from_ibkr (all references).
+  - Fix: Added elif provider == 'MASSIVE' handler with WARNING log + continue.
+  - Added: Provider status summary log at __init__ completion.
+  - Changed: Provider attempt log upgraded from DEBUG to INFO for visibility.
+
 [2026-03-14] Fix #1: Escalating Circuit Breaker for Massive (429 lockout)
   - Old: 15-min fixed lockout, re-tried and failed in infinite loop
   - Root cause: _download_from_massive() caught 429 internally → outer handler
@@ -348,6 +357,14 @@ class DataSourceManager:
                 self._log(f"Massive Init Error: {e}", "ERROR")
 
         self._log(f"--- DataSourceManager initialized (ID: {self.client_id}) ---")
+        self._log(
+            f"Provider Status: "
+            f"MASSIVE={'Ready' if self.massive_client else 'DISABLED'} | "
+            f"ALPACA={'Ready' if self.stock_client else 'DISABLED'} | "
+            f"IBKR={'Enabled' if self.use_ibkr else 'DISABLED'} | "
+            f"YFINANCE=Always Ready",
+            "INFO"
+        )
 
     def _setup_logging(self):
         """
@@ -487,7 +504,7 @@ class DataSourceManager:
         #      pass # keep default order
              
         for provider in priority_list:
-            self._log(f"Attempting fetch via: {provider}...", "DEBUG")
+            self._log(f"[{clean_symbol}] Trying provider: {provider}...", "INFO")
 
             # --- GEN-13: CIRCUIT BREAKER PATTERN ---
             if provider == 'MASSIVE':
@@ -508,7 +525,9 @@ class DataSourceManager:
                 # 1. MASSIVE
                 if provider == 'MASSIVE' and self.massive_client:
                     fetched_df = self._download_from_massive(clean_symbol, start_date, end_date, days_back, interval, min_rows=min_rows)
-
+                elif provider == 'MASSIVE':
+                    self._log("MASSIVE skipped: client not initialized (check API_KEY in secrets.toml).", "WARNING")
+                    continue
 
                 # 2. ALPACA
                 elif provider == 'ALPACA' and self.stock_client:
@@ -579,7 +598,7 @@ class DataSourceManager:
         """
         try:
             # 1. Connection Check
-            if not self.ibkr or not self.isConnected():
+            if not self.app or not self.isConnected():
                 if not self.connect_to_ibkr():
                     self._log(f"IBKR Not Connected. Skipping {symbol}.", "WARNING")
                     return pd.DataFrame()
@@ -614,7 +633,7 @@ class DataSourceManager:
             bar_size = ib_interval_map.get(interval, "1 day")
 
             # 5. Fetch
-            df = self.ibkr.fetch_historical_data(
+            df = self.app.fetch_historical_data(
                 contract=contract,
                 durationStr=duration,
                 barSizeSetting=bar_size,

@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased] - 2026-03-14
+### Fixed
+- **CRITICAL**: `_download_from_ibkr()` referenced `self.ibkr` (does not exist) instead of `self.app` — caused silent AttributeError on every IBKR attempt, making IBKR provider permanently broken
+- MASSIVE provider without client now logs WARNING instead of silent fallthrough
+- Provider attempt log upgraded from DEBUG to INFO for diagnostic visibility
+### Added
+- Provider status summary logged at DataSourceManager init (MASSIVE/ALPACA/IBKR/YFINANCE ready/disabled)
+
+---
+
 ## [2026-03-14] Scanner Performance Fix — Data Starvation Resolution
 
 ### Problem
