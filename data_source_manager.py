@@ -248,6 +248,16 @@ class DataSourceManager:
     _massive_lockout_until = None
     _massive_fail_count = 0  # Tracks consecutive 429 failures for escalating lockout
 
+    # ═══ MASSIVE SESSION KILL FLAG (2026-03-18) ═══════════════════════════
+    # DO NOT DELETE: After the first 429 from MASSIVE in a scan session,
+    # this flag skips MASSIVE instantly for ALL remaining symbols.
+    # Without this flag, each symbol wastes 10s on the timeout before
+    # the Circuit Breaker lockout kicks in. With this flag, only the
+    # FIRST symbol pays the timeout cost; the rest skip in 0ms.
+    # See CHANGELOG entry "2026-03-18 MASSIVE timeout fix" for full context.
+    # ═════════════════════════════════════════════════════════════════════
+    _massive_session_dead = False
+
     def __init__(self, use_ibkr=True, allow_fallback=True, host=cfg.IBKR_HOST, port=cfg.IBKR_PORT):
         self.use_ibkr = use_ibkr and IBKR_AVAILABLE
         self.allow_fallback = allow_fallback
@@ -508,6 +518,12 @@ class DataSourceManager:
 
             # --- GEN-13: CIRCUIT BREAKER PATTERN ---
             if provider == 'MASSIVE':
+                # ═══ SESSION KILL: instant skip after first 429 (2026-03-18) ═══
+                # DO NOT DELETE: Without this, every symbol retries MASSIVE and
+                # waits for the 10s timeout before cascading. This saves ~10s × N symbols.
+                if DataSourceManager._massive_session_dead:
+                    continue  # Silent skip — already logged on first failure
+                # ═══ CIRCUIT BREAKER: escalating lockout (2026-03-14) ═══
                 if DataSourceManager._massive_lockout_until and datetime.now() < DataSourceManager._massive_lockout_until:
                     remaining = int((DataSourceManager._massive_lockout_until - datetime.now()).total_seconds() / 60)
                     self._log(f"MASSIVE Circuit Breaker Active. Locked out for {remaining} more min. Cascading to next provider.", "WARNING")
@@ -573,7 +589,11 @@ class DataSourceManager:
             except Exception as e:
                 self._log(f"{provider} Failure: {e}", "WARNING")
                 # --- GEN-13: TRIP THE CIRCUIT BREAKER (Escalating Lockout) ---
-                if provider == 'MASSIVE' and '429' in str(e):
+                if provider == 'MASSIVE' and ('429' in str(e) or 'timeout' in str(e).lower()):
+                    # ═══ SESSION KILL + CIRCUIT BREAKER (2026-03-18) ═══
+                    # DO NOT DELETE: _massive_session_dead prevents retrying MASSIVE
+                    # for the rest of this scan. Without it, every symbol pays 10s timeout.
+                    DataSourceManager._massive_session_dead = True
                     DataSourceManager._massive_fail_count += 1
                     # Escalate lockout: 1st hit = 1 hour, subsequent hits = 4 hours
                     lockout_hours = 4 if DataSourceManager._massive_fail_count > 1 else 1
@@ -738,6 +758,30 @@ class DataSourceManager:
             self._log(f"ALPACA Failure: {e} (Target: {min_rows})", "WARNING")
             return pd.DataFrame()
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # CRITICAL PERFORMANCE NOTE — DO NOT DELETE (2026-03-18)
+    # ═══════════════════════════════════════════════════════════════════════
+    # This function wraps self.massive_client.get_aggs() with a hard timeout.
+    #
+    # WHY: The Polygon SDK (massive_client) has NO built-in request timeout.
+    # When the API returns 429 (rate limit), the SDK retries internally
+    # for 30-60 seconds before surfacing the exception. During a 4000-symbol
+    # scan, this caused the first symbol to waste 30-60 seconds, and if the
+    # session kill flag was missing, EVERY symbol would waste 10+ seconds.
+    #
+    # WHAT WE DO:
+    # 1. ThreadPoolExecutor with future.result(timeout=10s)
+    # 2. If timeout fires → raise → outer handler sets _massive_session_dead
+    # 3. All subsequent symbols skip MASSIVE instantly (0ms)
+    #
+    # HISTORY:
+    # - Before 2026-03-14: No circuit breaker at all → 12+ hour scans
+    # - 2026-03-14: Circuit breaker added, double throttle removed → 30-60 min
+    # - 2026-03-18: Timeout wrapper + session kill → first symbol 10s max
+    #
+    # DO NOT remove the timeout wrapper or session flag without understanding
+    # the full history above. The Polygon SDK WILL hang without them.
+    # ═══════════════════════════════════════════════════════════════════════
     def _download_from_massive(self, symbol, start_date, end_date, days_back, interval, min_rows=0):
         """
         Download from Massive (formerly Polygon).
@@ -778,14 +822,31 @@ class DataSourceManager:
             
         try:
             logging.info(f"Massive Request: {symbol} | {fmt(start)} to {fmt(end)} | {multiplier}{timespan}")
-            aggs = self.massive_client.get_aggs(
-                ticker=symbol,
-                multiplier=multiplier,
-                timespan=timespan,
-                from_=fmt(start),
-                to=fmt(end),
-                limit=50000
-            )
+
+            # ═══ TIMEOUT WRAPPER (2026-03-18) ═══════════════════════════════
+            # DO NOT DELETE: The Polygon SDK has NO built-in timeout.
+            # Without this wrapper, a 429 response causes 30-60 seconds of
+            # hidden SDK retries before the exception surfaces. This caps
+            # the wait at 10 seconds and lets the waterfall cascade immediately.
+            # See CHANGELOG "2026-03-18 MASSIVE timeout fix" for full analysis.
+            # ═══════════════════════════════════════════════════════════════════
+            import concurrent.futures
+            _massive_timeout = getattr(cfg, 'PROVIDER_DELAY', {}).get('MASSIVE_TIMEOUT', 10)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(
+                    self.massive_client.get_aggs,
+                    ticker=symbol,
+                    multiplier=multiplier,
+                    timespan=timespan,
+                    from_=fmt(start),
+                    to=fmt(end),
+                    limit=50000
+                )
+                try:
+                    aggs = future.result(timeout=_massive_timeout)
+                except concurrent.futures.TimeoutError:
+                    self._log(f"MASSIVE timeout ({_massive_timeout}s) for {symbol}. Cascading to next provider.", "WARNING")
+                    raise Exception(f"MASSIVE timeout exceeded {_massive_timeout}s — likely 429 rate limit")
             
             if not aggs:
                 return pd.DataFrame()
@@ -813,9 +874,9 @@ class DataSourceManager:
             return df
             
         except Exception as e:
-            # Re-raise 429 so the outer circuit breaker handler can detect and trip it.
-            # All other errors are swallowed and return empty (handled by waterfall).
-            if '429' in str(e):
+            # Re-raise 429 and timeout errors so the outer handler can trip the
+            # circuit breaker and session kill flag. All other errors are swallowed.
+            if '429' in str(e) or 'timeout' in str(e).lower():
                 raise
             self._log(f"MASSIVE Failure: {e}", "WARNING")
             return pd.DataFrame()

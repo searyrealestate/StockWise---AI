@@ -136,7 +136,15 @@ PROVIDER_DELAY = {
     "IBKR": 0.05,      # 50 req/sec limit (0.02s theoretical, 0.05s safe)
     "ALPACA": 0.5,     # Free tier allows ~200/min; 0.5s = 2/sec, safely within limit
     "YFINANCE": 1.5,   # Slightly conservative against scraping protection
-    "DEFAULT": 0.5     # Safe fallback
+    "DEFAULT": 0.5,    # Safe fallback
+    # ═══ MASSIVE_TIMEOUT (2026-03-18) ═══════════════════════════════════
+    # DO NOT DELETE: Hard timeout in seconds for MASSIVE (Polygon) API calls.
+    # The Polygon SDK has no built-in timeout — without this, a 429 rate
+    # limit response causes 30-60 seconds of hidden internal retries.
+    # This value is read by _download_from_massive() in data_source_manager.py.
+    # Reduce to 5 if MASSIVE is consistently failing; increase to 15 for slow networks.
+    # ═══════════════════════════════════════════════════════════════════════
+    "MASSIVE_TIMEOUT": 10
 }
 
 # Validation (Optional sanity check)

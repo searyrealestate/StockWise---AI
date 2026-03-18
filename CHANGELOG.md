@@ -1,5 +1,39 @@
 # Changelog
 
+## [2026-03-18] MASSIVE Timeout Fix — Session-Level Kill Flag
+
+### Problem
+MASSIVE (Polygon) SDK's `get_aggs()` has no built-in HTTP timeout.
+On 429 rate limit, the SDK retries internally for 30-60 seconds before
+raising the exception. The Circuit Breaker (added 2026-03-14) handles
+subsequent symbols, but the first symbol per session always pays the
+30-60 second penalty. With 3 parallel DSM instances, this triples.
+
+### Root Cause
+The Polygon Python SDK uses `requests` library internally with no
+`timeout` parameter. On 429, it retries with exponential backoff up to
+~60 seconds before surfacing the error.
+
+### Fixes Applied
+
+| Change | Impact |
+|--------|--------|
+| `concurrent.futures` timeout wrapper (10s) on `get_aggs()` | First symbol: max 10s instead of 30-60s |
+| `_massive_session_dead` class flag | All symbols after first 429: 0ms (instant skip) |
+| `MASSIVE_TIMEOUT: 10` in `PROVIDER_DELAY` config | Configurable timeout per deployment |
+| Timeout string also triggers session kill (`'timeout' in str(e)`) | Catches both 429 and timeout failures |
+
+### Expected Result
+First symbol: 10s max (was 30-60s). All others: 0ms (was 10s each).
+Full 4000-stock scan with MASSIVE down: **~35 min** (Alpaca @ 0.5s/symbol).
+
+### Files Changed
+- `data_source_manager.py` — timeout wrapper + session kill flag + permanent docs
+- `system_config.py` — `MASSIVE_TIMEOUT: 10` added to `PROVIDER_DELAY`
+- `CHANGELOG.md` — this entry
+
+---
+
 ## [Unreleased] - 2026-03-18
 ### Added
 - **strategy_engine.py**: Detailed per-symbol DEBUG logging in `TacticalSniper.analyze()` for Simulator decision timeline analysis
