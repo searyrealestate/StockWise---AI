@@ -1,5 +1,21 @@
 # Changelog
 
+## [Unreleased] - 2026-03-18
+### Added
+- **strategy_engine.py**: Detailed per-symbol DEBUG logging in `TacticalSniper.analyze()` for Simulator decision timeline analysis
+  - `[SYMBOL] INDICATORS` — RSI, MACD, ATR, ER_slow, ER_fast, BB_width, RVOL, Volume snapshot at entry
+  - `[SYMBOL] SETUP_FOUND` — individual log per detected setup (DSP_SUPER_TREND, VOLATILITY_SQUEEZE_PREP, SQUEEZE_FIRING_LONG, VSA_INSTITUTIONAL_BUYING, CANDLE_*, MOMENTUM_BREAKOUT, OVERSOLD_BOUNCE) with weights and key values
+  - `[SYMBOL] TECH_SCORE` — final capped technical score, raw weight, setups count
+  - `[SYMBOL] AI_SCORE` — AI probability, regime, model used
+  - `[SYMBOL] MASTER_SCORE` — blended score with formula label (70T/30A / 50T/50A / 40T/60A)
+  - `[SYMBOL] RISK_CALC` — price, stop, target, risk, reward, R:R ratio
+  - `[SYMBOL] FRICTION_FAIL` — price/stop/target snapshot when friction veto fires
+  - `[SYMBOL] DECISION` — final BUY/WAIT verdict with master score and threshold
+- **strategy_engine.py**: `RegimeRouter.classify_regime()` now logs regime decision with ER values before each return (TREND / CHOP / NEUTRAL)
+- All new lines are DEBUG level — console output unchanged; Simulator can filter by `[SYMBOL]` tag
+
+---
+
 ## [Unreleased] - 2026-03-14
 ### Fixed
 - **CRITICAL**: `_download_from_ibkr()` referenced `self.ibkr` (does not exist) instead of `self.app` — caused silent AttributeError on every IBKR attempt, making IBKR provider permanently broken
