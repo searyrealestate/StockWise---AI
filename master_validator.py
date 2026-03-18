@@ -1575,6 +1575,107 @@ class TestGen12Acceptance(unittest.TestCase):
         print(f"{COLOR_PASS}   OK: Regime Router logic valid (Tested on real conditions!).{COLOR_RESET}")
 
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # DATA PROVIDER HEALTH TESTS (2026-03-18)
+    # DO NOT DELETE: These tests prevent regression of the MASSIVE timeout
+    # bug that caused 30-60 second hangs per symbol during scans.
+    # See CHANGELOG "2026-03-18 MASSIVE Timeout Fix" for full context.
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def test_massive_session_kill_flag(self):
+        """Verify _massive_session_dead class variable exists on DataSourceManager."""
+        from data_source_manager import DataSourceManager
+        self.assertTrue(
+            hasattr(DataSourceManager, '_massive_session_dead'),
+            "CRITICAL: _massive_session_dead flag missing from DataSourceManager. "
+            "Without it, every symbol retries MASSIVE and wastes 10s on timeout. "
+            "See CHANGELOG 2026-03-18."
+        )
+        self.assertFalse(
+            DataSourceManager._massive_session_dead,
+            "_massive_session_dead should initialize to False"
+        )
+
+    def test_massive_circuit_breaker_vars(self):
+        """Verify circuit breaker class variables exist."""
+        from data_source_manager import DataSourceManager
+        self.assertTrue(
+            hasattr(DataSourceManager, '_massive_lockout_until'),
+            "_massive_lockout_until missing — circuit breaker won't work"
+        )
+        self.assertTrue(
+            hasattr(DataSourceManager, '_massive_fail_count'),
+            "_massive_fail_count missing — escalating lockout won't work"
+        )
+
+    def test_massive_timeout_config(self):
+        """Verify MASSIVE_TIMEOUT is configured in PROVIDER_DELAY."""
+        import system_config as cfg
+        provider_delay = getattr(cfg, 'PROVIDER_DELAY', {})
+        self.assertIn(
+            'MASSIVE_TIMEOUT', provider_delay,
+            "CRITICAL: MASSIVE_TIMEOUT missing from PROVIDER_DELAY in system_config.py. "
+            "Without it, Polygon SDK hangs for 30-60s on 429. "
+            "Add 'MASSIVE_TIMEOUT': 10 to PROVIDER_DELAY. See CHANGELOG 2026-03-18."
+        )
+        timeout_val = provider_delay['MASSIVE_TIMEOUT']
+        self.assertIsInstance(
+            timeout_val, (int, float),
+            f"MASSIVE_TIMEOUT must be a number, got {type(timeout_val)}"
+        )
+        self.assertTrue(
+            3 <= timeout_val <= 30,
+            f"MASSIVE_TIMEOUT={timeout_val} out of safe range (3-30 seconds)"
+        )
+
+    def test_massive_timeout_wrapper_exists(self):
+        """Verify _download_from_massive uses ThreadPoolExecutor timeout wrapper."""
+        import inspect
+        from data_source_manager import DataSourceManager
+        source = inspect.getsource(DataSourceManager._download_from_massive)
+        self.assertIn(
+            'ThreadPoolExecutor', source,
+            "CRITICAL: ThreadPoolExecutor timeout wrapper missing from _download_from_massive. "
+            "Without it, get_aggs() hangs 30-60s on 429. See CHANGELOG 2026-03-18."
+        )
+        self.assertIn(
+            'future.result', source,
+            "future.result(timeout=...) call missing from _download_from_massive"
+        )
+
+    def test_waterfall_provider_order(self):
+        """Verify waterfall priority order hasn't been accidentally changed."""
+        import inspect
+        from data_source_manager import DataSourceManager
+        source = inspect.getsource(DataSourceManager.get_stock_data)
+        self.assertIn(
+            "['MASSIVE', 'ALPACA', 'IBKR', 'YFINANCE']", source,
+            "Waterfall priority order changed! Expected: MASSIVE → ALPACA → IBKR → YFINANCE. "
+            "Do not change this order without understanding the full waterfall architecture."
+        )
+
+    def test_session_kill_before_circuit_breaker(self):
+        """Verify session kill check happens BEFORE circuit breaker check in waterfall."""
+        import inspect
+        from data_source_manager import DataSourceManager
+        source = inspect.getsource(DataSourceManager.get_stock_data)
+        session_pos = source.find('_massive_session_dead')
+        breaker_pos = source.find('_massive_lockout_until')
+        self.assertGreater(
+            session_pos, 0,
+            "_massive_session_dead check missing from get_stock_data waterfall loop"
+        )
+        self.assertGreater(
+            breaker_pos, 0,
+            "_massive_lockout_until check missing from get_stock_data waterfall loop"
+        )
+        self.assertLess(
+            session_pos, breaker_pos,
+            "CRITICAL: Session kill check must come BEFORE circuit breaker check. "
+            "If reversed, symbols still wait for lockout timer instead of instant skip."
+        )
+
+
 def run_audit():
     """
     Executes the full StockWise Master Validation Suite programmatically.

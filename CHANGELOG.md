@@ -30,6 +30,7 @@ Full 4000-stock scan with MASSIVE down: **~35 min** (Alpaca @ 0.5s/symbol).
 ### Files Changed
 - `data_source_manager.py` — timeout wrapper + session kill flag + permanent docs
 - `system_config.py` — `MASSIVE_TIMEOUT: 10` added to `PROVIDER_DELAY`
+- `master_validator.py` — Added 6 validator checks for MASSIVE timeout/session-kill/waterfall integrity
 - `CHANGELOG.md` — this entry
 
 ---
