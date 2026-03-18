@@ -26,6 +26,7 @@ CHANGELOG:
 
 import random
 import os
+import sys
 import json
 import logging
 import pandas as pd
@@ -514,7 +515,10 @@ class StockHunter:
         
         leaderboard_str = "\n".join(board)
         logger.info(f"Daily Leaderboard Generated:{leaderboard_str}")
-        print(leaderboard_str) # הדפסה למסך למקרה שהלוגר מושתק
+        try:
+            print(leaderboard_str)
+        except UnicodeEncodeError:
+            print(leaderboard_str.encode(sys.stdout.encoding or 'utf-8', errors='replace').decode(sys.stdout.encoding or 'utf-8'))
         logger.info(f"VIP List Successfully Saved to Disk: {vip_symbols}")
     
     def get_active_vip_watchlist(self):
