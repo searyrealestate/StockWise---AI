@@ -1,5 +1,27 @@
 # Changelog
 
+## [2026-03-19] Atomic JSON I/O — Production Race Condition Fix
+
+### Problem
+`stock_hunter.py` (scanner) and `live_trading_engine.py` (live engine) run as
+separate processes accessing `scan_ledger.json` and `daily_review_list.json`
+concurrently. A direct `open(..., 'w')` write is NOT atomic — the live engine
+can read a half-written file mid-write → `json.JSONDecodeError` → crash.
+
+### Solution: `safe_json_io.py` — new production safety module
+
+| Function | Mechanism | Guarantees |
+|---|---|---|
+| `safe_json_write()` | Write to `.safe_*.tmp` → `os.replace()` | Atomic on Windows (NTFS) + Linux |
+| `safe_json_read()` | 3 retries with 0.2s exponential backoff | Survives transient parse failures |
+
+### Files Changed
+- `safe_json_io.py` — **NEW** atomic read/write module (no external deps)
+- `stock_hunter.py` — `_save_json` + `_load_json` use `safe_json_io`
+- `live_trading_engine.py` — `_save_json`, `_load_json`, `_write_cooldown`, and `__main__` scan ledger load use `safe_json_io`
+
+---
+
 ## [2026-03-19] Cumulative VIP List + TTL Ledger Cleanup
 
 ### Problem

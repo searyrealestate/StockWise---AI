@@ -11,6 +11,7 @@ ratchets kinetic stops, and executes the Zombie Trade Protocol.
 import os
 import json
 import logging
+from safe_json_io import safe_json_read, safe_json_write
 import requests
 import asyncio
 import pytz
@@ -413,20 +414,15 @@ class LiveTradingEngine:
 
     
     def _load_json(self, path):
-        if os.path.exists(path):
-            try:
-                with open(path, "r") as f:
-                    return json.load(f)
-            except Exception as e:
-                logger.error(f"Failed to load positions JSON: {e}")
-        return {}
+        """Safely loads a JSON file with retry on parse failure."""
+        return safe_json_read(path, default={})
 
     def _save_json(self, data, path):
+        """Safely serializes data to JSON using atomic write."""
         try:
-            with open(path, "w") as f:
-                json.dump(data, f, indent=4)
+            safe_json_write(path, data)
         except Exception as e:
-            logger.error(f"Failed to save positions JSON: {e}")
+            logger.error(f"Failed to save JSON to {path}: {e}")
 
     def _write_cooldown(self, symbol, reason="STOP_LOSS_HIT"):
         """
@@ -436,10 +432,7 @@ class LiveTradingEngine:
         cooldown_path = getattr(cfg, 'COOLDOWN_FILE_PATH', 'data/cooldown_list.json')
         cooldown_hours = getattr(cfg, 'COOLDOWN_PERIOD_HOURS', 24)
         try:
-            cooldown_data = {}
-            if os.path.exists(cooldown_path):
-                with open(cooldown_path, 'r', encoding='utf-8') as f:
-                    cooldown_data = json.load(f)
+            cooldown_data = safe_json_read(cooldown_path, default={})
 
             cooldown_data[symbol] = {
                 "timestamp": time.time(),
@@ -448,8 +441,7 @@ class LiveTradingEngine:
             }
 
             os.makedirs(os.path.dirname(cooldown_path) or '.', exist_ok=True)
-            with open(cooldown_path, 'w', encoding='utf-8') as f:
-                json.dump(cooldown_data, f, indent=4)
+            safe_json_write(cooldown_path, cooldown_data)
             logger.info(f"[{symbol}] Added to cooldown blacklist for {cooldown_hours}h. Reason: {reason}")
         except Exception as e:
             logger.error(f"[{symbol}] Failed to write cooldown: {e}")
@@ -863,9 +855,7 @@ if __name__ == "__main__":
             full_ledger = {}
             try:
                 ledger_path = os.path.join(cfg.DB_DIR, "scan_ledger.json")
-                if os.path.exists(ledger_path):
-                    with open(ledger_path, 'r') as f:
-                        full_ledger = json.load(f)
+                full_ledger = safe_json_read(ledger_path, default={})
             except Exception as e:
                 logger.debug(f"Could not load scan ledger: {e}")
 

@@ -30,6 +30,7 @@ import sys
 import json
 import logging
 import pandas as pd
+from safe_json_io import safe_json_write, safe_json_read
 from datetime import datetime, timedelta
 import system_config as cfg
 from feature_engine import FeatureEngine
@@ -96,37 +97,16 @@ class StockHunter:
         self.watchlist = self._load_json(self.watchlist_file, default_type={"tickers": [], "last_updated": ""})
 
     def _load_json(self, filepath, default_type):
-        if not os.path.exists(filepath):
-            return default_type
-        try:
-            with open(filepath, 'r') as f:
-                return json.load(f)
-        except:
-            return default_type
+        """Safely loads a JSON file with retry on parse failure."""
+        return safe_json_read(filepath, default=default_type)
 
     def _save_json(self, file_path, data):
-        """
-        Safely serializes dictionary data to a JSON file using NumpyEncoder.
-        Separates INFO logging for operation success and DEBUG logging for forensic payload details.
-        """
+        """Safely serializes dictionary data to a JSON file using atomic write."""
         try:
-            # Ensure the target directory exists before saving
-            directory = os.path.dirname(file_path)
-            if directory:
-                os.makedirs(directory, exist_ok=True)
-                
-            # Dump the data with the custom numpy encoder
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, cls=NumpyEncoder, indent=4)
-                
-            # INFO: Basic operational confirmation
+            safe_json_write(file_path, data, cls=NumpyEncoder)
             logger.info(f"Successfully saved scan results to {file_path}")
-            
-            # DEBUG: Granular details of the saved payload for forensic analysis
-            logger.debug(f"JSON Payload saved containing {len(data)} tickers. Target Path: {file_path}")
-            
+            logger.debug(f"JSON Payload saved containing {len(data)} entries. Target Path: {file_path}")
         except Exception as e:
-            # INFO/ERROR: Critical failure notification
             logger.error(f"Failed to serialize JSON to {file_path}: {str(e)}")
             # DEBUG: Exact dataset state during crash
             logger.debug(f"JSON Serialization Crash Dump Data: {data}")
