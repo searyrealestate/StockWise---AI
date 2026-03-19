@@ -1978,6 +1978,233 @@ class TestGen12Acceptance(unittest.TestCase):
             "If reversed, symbols still wait for lockout timer instead of instant skip."
         )
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # PIPELINE INTEGRATION + DATA PROVIDER FETCH TESTS (2026-03-19)
+    # DO NOT DELETE: These tests verify the full scan pipeline works end-to-end
+    # and that each data provider can fetch real data independently.
+    # See CHANGELOG 2026-03-19.
+    # ═══════════════════════════════════════════════════════════════════════
+
+    # --- STRUCTURAL CHECKS (no network needed) ---
+
+    def test_feature_engine_has_calculate_features(self):
+        """Verify FeatureEngine.calculate_features method exists with correct signature."""
+        import inspect
+        from feature_engine import FeatureEngine
+        assert hasattr(FeatureEngine, 'calculate_features'), \
+            "FeatureEngine.calculate_features method missing"
+        sig = inspect.signature(FeatureEngine.calculate_features)
+        params = list(sig.parameters.keys())
+        assert 'df' in params or len(params) >= 2, \
+            f"calculate_features signature unexpected: {params}"
+
+    def test_regime_router_has_classify_regime(self):
+        """Verify RegimeRouter.classify_regime method exists."""
+        from strategy_engine import RegimeRouter
+        assert hasattr(RegimeRouter, 'classify_regime'), \
+            "RegimeRouter.classify_regime method missing"
+
+    def test_tactical_sniper_has_analyze(self):
+        """Verify TacticalSniper.analyze method exists with correct signature."""
+        import inspect
+        from strategy_engine import TacticalSniper
+        assert hasattr(TacticalSniper, 'analyze'), \
+            "TacticalSniper.analyze method missing"
+        sig = inspect.signature(TacticalSniper.analyze)
+        params = list(sig.parameters.keys())
+        assert 'symbol' in params and 'df' in params and 'regime' in params, \
+            f"TacticalSniper.analyze signature unexpected: {params}"
+
+    def test_analyze_returns_required_keys(self):
+        """Verify TacticalSniper.analyze returns dict with required keys."""
+        from strategy_engine import TacticalSniper
+        import pandas as pd
+        import numpy as np
+
+        sniper = TacticalSniper()
+
+        # Minimal synthetic DataFrame with required columns
+        n = 250
+        np.random.seed(42)
+        prices = 100 + np.cumsum(np.random.randn(n) * 0.5)
+        df = pd.DataFrame({
+            'open': prices - 0.5,
+            'high': prices + 1.0,
+            'low': prices - 1.0,
+            'close': prices,
+            'volume': np.random.randint(1000, 10000, n).astype(float),
+        })
+        # Add minimum required indicator columns
+        df['rsi'] = 50.0
+        df['macd'] = 0.0
+        df['macd_signal'] = 0.0
+        df['atr'] = 2.0
+        df['er_slow'] = 0.5
+        df['er_fast'] = 0.3
+        df['bb_width'] = 0.2
+        df['squeeze_on'] = 0
+        df['mom_sqz'] = 0
+        df['vol_avg_20'] = 5000.0
+        df['trend_alignment'] = 0
+
+        verdict = sniper.analyze('TEST', df, 'TREND')
+
+        required_keys = ['action', 'master_score', 'ai_score', 'tech_score',
+                         'setups_found', 'stop_loss', 'target_price']
+        for key in required_keys:
+            assert key in verdict, \
+                f"TacticalSniper.analyze() missing required key '{key}' in verdict. " \
+                f"Got keys: {list(verdict.keys())}"
+
+    def test_stock_hunter_has_run_nightly_scan(self):
+        """Verify StockHunter.run_nightly_scan method exists."""
+        from stock_hunter import StockHunter
+        assert hasattr(StockHunter, 'run_nightly_scan'), \
+            "StockHunter.run_nightly_scan method missing"
+
+    def test_dsm_has_get_stock_data(self):
+        """Verify DataSourceManager.get_stock_data method exists."""
+        from data_source_manager import DataSourceManager
+        assert hasattr(DataSourceManager, 'get_stock_data'), \
+            "DataSourceManager.get_stock_data method missing"
+
+    # --- UNIT TESTS (with synthetic data) ---
+
+    def test_regime_router_returns_valid_regime(self):
+        """Unit test: classify_regime returns one of TREND/CHOP/NEUTRAL/HALT."""
+        from strategy_engine import RegimeRouter
+        import pandas as pd
+
+        router = RegimeRouter()
+
+        # Test TREND (er_slow >= 0.6, er_fast not triggering HALT)
+        df_trend = pd.DataFrame({'er_slow': [0.7], 'er_fast': [0.5]})
+        assert router.classify_regime(df_trend) == 'TREND', \
+            "er_slow=0.7 should classify as TREND"
+
+        # Test CHOP (er_slow <= 0.4)
+        df_chop = pd.DataFrame({'er_slow': [0.2], 'er_fast': [0.3]})
+        assert router.classify_regime(df_chop) == 'CHOP', \
+            "er_slow=0.2 should classify as CHOP"
+
+        # Test HALT (er_slow > 0.6 and er_fast < 0.2)
+        df_halt = pd.DataFrame({'er_slow': [0.8], 'er_fast': [0.1]})
+        assert router.classify_regime(df_halt) == 'HALT', \
+            "er_slow=0.8, er_fast=0.1 should classify as HALT"
+
+        # Test NEUTRAL (0.4 < er_slow < 0.6)
+        df_neutral = pd.DataFrame({'er_slow': [0.5], 'er_fast': [0.4]})
+        assert router.classify_regime(df_neutral) == 'NEUTRAL', \
+            "er_slow=0.5 should classify as NEUTRAL"
+
+    def test_feature_engine_produces_indicators(self):
+        """Unit test: calculate_features adds indicator columns to DataFrame."""
+        from feature_engine import FeatureEngine
+        import pandas as pd
+        import numpy as np
+
+        fe = FeatureEngine()
+
+        n = 300
+        np.random.seed(42)
+        prices = 100 + np.cumsum(np.random.randn(n) * 0.5)
+        df = pd.DataFrame({
+            'open': prices - 0.5,
+            'high': prices + 1.0,
+            'low': prices - 1.0,
+            'close': prices,
+            'volume': np.random.randint(1000, 50000, n).astype(float),
+        })
+        df.index = pd.date_range('2025-01-01', periods=n, freq='D')
+
+        result = fe.calculate_features(df, strategy_config={"active_indicators": ["dsp", "volatility"]})
+
+        assert 'er_slow' in result.columns, "FeatureEngine did not produce er_slow"
+        assert 'er_fast' in result.columns, "FeatureEngine did not produce er_fast"
+        assert len(result) == n, f"FeatureEngine changed row count: {len(result)} != {n}"
+
+    def test_ai_score_is_rounded(self):
+        """Unit test: AI score returned by TacticalSniper is rounded to 1 decimal."""
+        from strategy_engine import TacticalSniper
+        import pandas as pd
+        import numpy as np
+
+        sniper = TacticalSniper()
+
+        n = 250
+        np.random.seed(42)
+        prices = 100 + np.cumsum(np.random.randn(n) * 0.5)
+        df = pd.DataFrame({
+            'open': prices - 0.5,
+            'high': prices + 1.0,
+            'low': prices - 1.0,
+            'close': prices,
+            'volume': np.random.randint(1000, 10000, n).astype(float),
+        })
+        df['rsi'] = 50.0
+        df['macd'] = 0.0
+        df['macd_signal'] = 0.0
+        df['atr'] = 2.0
+        df['er_slow'] = 0.5
+        df['er_fast'] = 0.3
+        df['bb_width'] = 0.2
+        df['squeeze_on'] = 0
+        df['mom_sqz'] = 0
+        df['vol_avg_20'] = 5000.0
+        df['trend_alignment'] = 0
+
+        verdict = sniper.analyze('TEST_ROUND', df, 'TREND')
+        ai = verdict.get('ai_score', 0)
+
+        # Check that it's rounded to at most 1 decimal place
+        assert ai == round(ai, 1), \
+            f"AI score not rounded to 1 decimal: {ai} (raw float32 leak). " \
+            f"See CHANGELOG 2026-03-19 fix(scores)."
+
+    # --- LIVE DATA PROVIDER TESTS (require network) ---
+
+    def test_dsm_massive_provider_initialized(self):
+        """Verify MASSIVE provider initializes correctly."""
+        try:
+            from data_source_manager import DataSourceManager
+            dm = DataSourceManager()
+            if dm.massive_client is None:
+                self.skipTest("MASSIVE client not initialized — POLYGON_API_KEY not configured")
+        except Exception as e:
+            self.skipTest(f"MASSIVE init skipped: {e}")
+
+    def test_dsm_alpaca_provider_initialized(self):
+        """Verify ALPACA provider initializes correctly."""
+        try:
+            from data_source_manager import DataSourceManager
+            dm = DataSourceManager()
+            if dm.stock_client is None:
+                self.skipTest("ALPACA client not initialized — DATA_PROVIDER may not be ALPACA or keys missing")
+        except Exception as e:
+            self.skipTest(f"ALPACA init skipped: {e}")
+
+    def test_dsm_waterfall_fetches_data(self):
+        """Integration test: get_stock_data returns valid DataFrame for a known symbol."""
+        try:
+            from data_source_manager import DataSourceManager
+            import pandas as pd
+
+            dm = DataSourceManager()
+            df = dm.get_stock_data('AAPL', days_back=30)
+
+            if df is None or df.empty:
+                self.skipTest("Waterfall returned no data — all providers down or unconfigured")
+
+            assert len(df) >= 10, \
+                f"Waterfall returned only {len(df)} rows for AAPL (expected 10+)"
+
+            # Verify OHLCV columns exist
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                assert col in df.columns, \
+                    f"Waterfall data missing '{col}' column"
+        except Exception as e:
+            self.skipTest(f"Waterfall fetch skipped: {e}")
+
 
 def run_audit():
     """

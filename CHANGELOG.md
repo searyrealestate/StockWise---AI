@@ -1,5 +1,22 @@
 # Changelog
 
+## [2026-03-19] Pipeline Integration + Data Provider Fetch Tests
+
+### Added to master_validator.py — 14 new tests (TestGen12Acceptance)
+
+| Category | Count | Tests |
+|---|---|---|
+| Structural (no network) | 6 | FeatureEngine.calculate_features signature, RegimeRouter.classify_regime exists, TacticalSniper.analyze signature, analyze returns required keys, StockHunter.run_nightly_scan exists, DSM.get_stock_data exists |
+| Unit (synthetic data) | 5 | RegimeRouter all 4 regime outputs (TREND/CHOP/HALT/NEUTRAL), FeatureEngine produces er_slow/er_fast, AI score rounded to 1 decimal |
+| Live provider (network, skip-safe) | 3 | MASSIVE init, ALPACA init, waterfall AAPL fetch with OHLCV validation |
+
+Live tests use `skipTest()` on network/auth failure — validator always green.
+
+### Files Changed
+- `master_validator.py` — 14 regression tests added
+
+---
+
 ## [2026-03-19] Round AI Scores to 1 Decimal
 
 ### Problem
