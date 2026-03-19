@@ -1,5 +1,21 @@
 # Changelog
 
+## [2026-03-19] Round AI Scores to 1 Decimal
+
+### Problem
+`sklearn` models return `float32` numpy values (e.g. `70.19999694824219`).
+These propagated unrounded through logs, leaderboard, and verdict dicts.
+
+### Fix
+- `strategy_engine.py` — `TacticalSniper.get_ai_probability()`: wrap both return paths with `round(..., 1)`
+- `stock_hunter.py` — leaderboard `board.append()` line: format specifiers changed from `{:<6}` to `{:<6.1f}` for `tech`, `ai`, `master`
+
+### Files Changed
+- `strategy_engine.py` — 2 return lines in `get_ai_probability()`
+- `stock_hunter.py` — 1 format string in `_update_daily_review_list()`
+
+---
+
 ## [2026-03-19] Atomic JSON I/O — Production Race Condition Fix
 
 ### Problem

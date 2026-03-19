@@ -563,7 +563,7 @@ class StockHunter:
             trend_dir = data.get('state', {}).get('trend', 'N/A')
             tier = data.get('tier', 3)
             tier_label = f"T{tier}"
-            board.append(f"#{i:<4} | {symbol:<6} | {regime:<6} | {trend_dir:<8} | {tech:<6} | {ai:<6} | {master:<7} | {tier_label:<4} {fire}")
+            board.append(f"#{i:<4} | {symbol:<6} | {regime:<6} | {trend_dir:<8} | {tech:<6.1f} | {ai:<6.1f} | {master:<7.1f} | {tier_label:<4} {fire}")
             
         board.append("="*85)
         
