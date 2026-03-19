@@ -1,5 +1,22 @@
 # Changelog
 
+## [2026-03-19] SPY Benchmark + RS + VIP Fallback — Regression Tests
+
+### Added to master_validator.py — 11 new tests (TestGen12Acceptance)
+
+| Category | Count | Tests |
+|---|---|---|
+| Structural | 7 | `BENCHMARK_TICKER == 'SPY'`, SPY in seed watchlist source, `RELATIVE_STRENGTH_CONFIG` keys, `_calculate_relative_strength` exists, benchmark pinned in `_update_daily_review_list`, `DEFAULT_TRAINING_SYMBOLS` fallback in live engine, SPY in `DEFAULT_TRAINING_SYMBOLS` |
+| Unit | 3 | RS outperform (stock +50% vs bench +10% → RS ~1.11 > 1.05), RS underperform (stock flat vs bench +20% → RS ~0.93 < 0.95), RS empty benchmark returns `{}` |
+
+Note: Synthetic data uses deliberately extreme divergence (±50%/flat vs ±20%) to
+reliably clear the 1.05/0.95 thresholds regardless of RS config changes.
+
+### Files Changed
+- `master_validator.py` — 11 regression tests added
+
+---
+
 ## [2026-03-19] SPY Benchmark + Relative Strength + VIP Fallback
 
 ### Problem

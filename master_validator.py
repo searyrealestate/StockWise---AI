@@ -2205,6 +2205,149 @@ class TestGen12Acceptance(unittest.TestCase):
         except Exception as e:
             self.skipTest(f"Waterfall fetch skipped: {e}")
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # SPY BENCHMARK + RELATIVE STRENGTH TESTS (2026-03-19)
+    # DO NOT DELETE: Ensures SPY is always the benchmark, RS is calculated,
+    # and VIP fallback works. See CHANGELOG 2026-03-19.
+    # ═══════════════════════════════════════════════════════════════════════
+
+    # --- STRUCTURAL ---
+
+    def test_benchmark_ticker_is_spy(self):
+        """Verify BENCHMARK_TICKER is SPY (S&P500), not QQQ or anything else."""
+        import system_config as cfg
+        benchmark = getattr(cfg, 'BENCHMARK_TICKER', None)
+        assert benchmark == 'SPY', \
+            f"CRITICAL: BENCHMARK_TICKER is '{benchmark}', must be 'SPY'. " \
+            "Relative Strength requires S&P500 benchmark. See CHANGELOG 2026-03-19."
+
+    def test_spy_in_seed_watchlist(self):
+        """Verify SPY is in the seed WATCHLIST fallback."""
+        import system_config as cfg
+        watchlist = cfg.WATCHLIST
+        # Also check the fallback seed directly
+        from system_config import load_dynamic_watchlist
+        import inspect
+        source = inspect.getsource(load_dynamic_watchlist)
+        assert 'SPY' in source, \
+            "CRITICAL: SPY missing from seed watchlist fallback in load_dynamic_watchlist. " \
+            "See CHANGELOG 2026-03-19."
+
+    def test_relative_strength_config_exists(self):
+        """Verify RELATIVE_STRENGTH_CONFIG exists with required keys."""
+        import system_config as cfg
+        rs_cfg = getattr(cfg, 'RELATIVE_STRENGTH_CONFIG', None)
+        assert rs_cfg is not None, \
+            "CRITICAL: RELATIVE_STRENGTH_CONFIG missing from system_config. " \
+            "See CHANGELOG 2026-03-19."
+        assert 'lookback_days' in rs_cfg, "lookback_days missing from RS config"
+        assert 'outperform_threshold' in rs_cfg, "outperform_threshold missing from RS config"
+        assert 'underperform_threshold' in rs_cfg, "underperform_threshold missing from RS config"
+
+    def test_stock_hunter_has_rs_method(self):
+        """Verify _calculate_relative_strength method exists."""
+        from stock_hunter import StockHunter
+        assert hasattr(StockHunter, '_calculate_relative_strength'), \
+            "CRITICAL: _calculate_relative_strength() missing from StockHunter. " \
+            "See CHANGELOG 2026-03-19."
+
+    def test_spy_pinned_in_vip_update(self):
+        """Verify _update_daily_review_list pins benchmark to VIP."""
+        import inspect
+        from stock_hunter import StockHunter
+        source = inspect.getsource(StockHunter._update_daily_review_list)
+        assert 'BENCHMARK_TICKER' in source or 'benchmark' in source.lower(), \
+            "CRITICAL: Benchmark not pinned in _update_daily_review_list. " \
+            "SPY can be evicted from VIP. See CHANGELOG 2026-03-19."
+
+    def test_live_engine_vip_fallback(self):
+        """Verify live_trading_engine falls back to DEFAULT_TRAINING_SYMBOLS."""
+        import inspect
+        from live_trading_engine import LiveTradingEngine
+        # Check __main__ source — it's not a method, check the module
+        import live_trading_engine
+        source = inspect.getsource(live_trading_engine)
+        assert 'DEFAULT_TRAINING_SYMBOLS' in source, \
+            "CRITICAL: DEFAULT_TRAINING_SYMBOLS fallback missing from live_trading_engine. " \
+            "Empty VIP will trigger blocking 90-min auto-scan. See CHANGELOG 2026-03-19."
+
+    def test_default_training_symbols_includes_spy(self):
+        """Verify DEFAULT_TRAINING_SYMBOLS includes SPY."""
+        import system_config as cfg
+        symbols = getattr(cfg, 'DEFAULT_TRAINING_SYMBOLS', [])
+        assert 'SPY' in symbols, \
+            f"CRITICAL: SPY missing from DEFAULT_TRAINING_SYMBOLS: {symbols}. " \
+            "See CHANGELOG 2026-03-19."
+
+    # --- UNIT TESTS ---
+
+    def test_rs_calculation_outperform(self):
+        """Unit test: RS > 1 when stock outperforms benchmark."""
+        from stock_hunter import StockHunter
+        from unittest.mock import MagicMock
+        import pandas as pd
+        import numpy as np
+
+        hunter = StockHunter.__new__(StockHunter)
+        hunter.dm = MagicMock()
+
+        n = 150
+        # Stock goes up 50%, benchmark goes up 10% — RS ~1.11, clears 1.05 threshold
+        stock_prices = [100 + (i * 50/n) for i in range(n)]
+        bench_prices = [100 + (i * 10/n) for i in range(n)]
+
+        stock_df = pd.DataFrame({'close': stock_prices})
+        bench_df = pd.DataFrame({'close': bench_prices})
+
+        rs = hunter._calculate_relative_strength(stock_df, bench_df)
+
+        assert 'rs_60' in rs, f"rs_60 missing from result: {rs}"
+        assert rs['rs_60'] > 1.0, \
+            f"Stock outperforms but RS={rs['rs_60']} (should be > 1.0)"
+        assert rs.get('rs_label') == 'OUTPERFORM', \
+            f"Label should be OUTPERFORM, got {rs.get('rs_label')}"
+
+    def test_rs_calculation_underperform(self):
+        """Unit test: RS < 1 when stock underperforms benchmark."""
+        from stock_hunter import StockHunter
+        from unittest.mock import MagicMock
+        import pandas as pd
+
+        hunter = StockHunter.__new__(StockHunter)
+        hunter.dm = MagicMock()
+
+        n = 150
+        # Stock flat (0%), benchmark goes up 20% — RS ~0.93, clears 0.95 threshold
+        stock_prices = [100.0] * n
+        bench_prices = [100 + (i * 20/n) for i in range(n)]
+
+        stock_df = pd.DataFrame({'close': stock_prices})
+        bench_df = pd.DataFrame({'close': bench_prices})
+
+        rs = hunter._calculate_relative_strength(stock_df, bench_df)
+
+        assert 'rs_60' in rs, f"rs_60 missing from result: {rs}"
+        assert rs['rs_60'] < 1.0, \
+            f"Stock underperforms but RS={rs['rs_60']} (should be < 1.0)"
+        assert rs.get('rs_label') == 'UNDERPERFORM', \
+            f"Label should be UNDERPERFORM, got {rs.get('rs_label')}"
+
+    def test_rs_handles_empty_benchmark(self):
+        """Unit test: RS returns empty dict when benchmark is None/empty."""
+        from stock_hunter import StockHunter
+        from unittest.mock import MagicMock
+        import pandas as pd
+
+        hunter = StockHunter.__new__(StockHunter)
+        hunter.dm = MagicMock()
+
+        stock_df = pd.DataFrame({'close': [100, 101, 102]})
+
+        assert hunter._calculate_relative_strength(stock_df, None) == {}, \
+            "RS should return {} for None benchmark"
+        assert hunter._calculate_relative_strength(stock_df, pd.DataFrame()) == {}, \
+            "RS should return {} for empty benchmark"
+
 
 def run_audit():
     """
