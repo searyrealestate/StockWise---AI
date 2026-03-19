@@ -1,5 +1,24 @@
 # Changelog
 
+## [2026-03-20] run_all.bat — Single Launcher for Scanner + Live Engines
+
+### Problem
+Scanner and live engines had to be started manually in separate terminals
+in the correct order. Running live engine before scanner = stale VIP list.
+
+### Solution
+`run_all.bat` — single double-click launcher:
+1. Runs `stock_hunter.py` (scanner) synchronously — blocks until complete
+2. Opens 3 `live_trading_engine.py` instances in separate windows (1h / 1d / 1wk)
+
+`cd /d "%~dp0"` ensures correct working directory regardless of where the
+script is launched from (desktop shortcut, file explorer, etc.).
+
+### Files Changed
+- `run_all.bat` — NEW
+
+---
+
 ## [2026-03-19] SPY Benchmark + RS + VIP Fallback — Regression Tests
 
 ### Added to master_validator.py — 11 new tests (TestGen12Acceptance)
