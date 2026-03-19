@@ -1,5 +1,34 @@
 # Changelog
 
+## [2026-03-19] Cumulative VIP List + TTL Ledger Cleanup
+
+### Problem
+- `_update_daily_review_list()` overwrote the VIP list every scan — good stocks from
+  previous scans were lost when they temporarily dropped in rank
+- `max_days_untraded_on_watchlist` (210 days) was configured but never enforced —
+  stale symbols accumulated in the ledger indefinitely
+
+### Fixes Applied
+
+| Change | File | Impact |
+|--------|------|--------|
+| VIP merge instead of overwrite | `stock_hunter.py` | New top-10 + qualifying existing symbols → merged list |
+| `max_vip_list_size: 50` cap | `system_config.py` + `stock_hunter.py` | Prevents live engine overload |
+| `_cleanup_stale_ledger()` method | `stock_hunter.py` | Enforces 210-day TTL on ledger entries |
+| TTL cleanup called at scan start | `stock_hunter.py` | Runs before new symbols added each night |
+
+### Behaviour Change
+- **Before:** VIP = top 10 from current scan only; previous VIP discarded
+- **After:** VIP = top 10 new + existing symbols still in ledger above threshold, capped at 50
+- Symbols not scanned in 7+ months are removed from ledger automatically
+- VIP grows incrementally as good stocks are discovered across multiple scan nights
+
+### Files Changed
+- `stock_hunter.py` — cumulative merge logic + `_cleanup_stale_ledger()` + TTL call
+- `system_config.py` — `max_vip_list_size: 50` added to `SCAN_ROUTING_CONFIG`
+
+---
+
 ## [2026-03-18] MASSIVE Timeout Fix — Session-Level Kill Flag
 
 ### Problem

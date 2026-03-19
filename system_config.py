@@ -459,6 +459,7 @@ SCAN_ROUTING_CONFIG = {
     "max_daily_review_stocks": 10,        # The absolute top 5 stocks are promoted to the active intraday watchlist.
     "min_vip_score_threshold": 75.0,      # A target must hit this baseline score to even be considered for VIP.
     "max_days_untraded_on_watchlist": 210, # If a stock sits on the VIP list for 7 months doing nothing, we throw it in the garbage.
+    "max_vip_list_size": 50,             # Maximum symbols in the cumulative VIP list (prevents live engine overload)
     "weight_score_mult": 0.7,            # 70% of tomorrow's scan priority is based on the DSP Score.
     "weight_volatility_mult": 0.3        # 30% of tomorrow's scan priority is based on raw volatility.
 }

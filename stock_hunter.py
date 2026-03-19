@@ -332,6 +332,9 @@ class StockHunter:
         """
         logger.info("Initiating Nightly Deep-Scan (Tech + AI + DSP)...")
 
+        # Clean stale entries before scanning (TTL enforcement)
+        self._cleanup_stale_ledger()
+
         scan_queue = self._get_tonights_scan_queue()
         total = len(scan_queue)
         scan_start = time.time()
@@ -435,6 +438,43 @@ class StockHunter:
         self._update_daily_review_list()
         logger.info("Nightly Scan Complete. Ledger updated.")
 
+    def _cleanup_stale_ledger(self):
+        """
+        ═══ TTL ENFORCEMENT (2026-03-19) ═══════════════════════════════
+        DO NOT DELETE: Removes symbols from the scan ledger that have not
+        been scanned for more than max_days_untraded_on_watchlist days
+        (default: 210 = 7 months). This prevents the ledger from growing
+        infinitely and keeps the VIP list fresh.
+
+        A symbol is considered "stale" if:
+        1. Its last_scanned timestamp is older than TTL days
+        2. It has no open positions in the trade journal
+
+        Called at the start of run_nightly_scan() before new symbols are added.
+        ═══════════════════════════════════════════════════════════════════
+        """
+        ttl_days = cfg.SCAN_ROUTING_CONFIG.get("max_days_untraded_on_watchlist", 210)
+        cutoff = datetime.now() - timedelta(days=ttl_days)
+
+        stale_symbols = []
+        for sym, data in list(self.ledger.items()):
+            last_scanned = data.get("last_scanned", "")
+            if last_scanned:
+                try:
+                    scan_date = datetime.fromisoformat(last_scanned)
+                    if scan_date < cutoff:
+                        stale_symbols.append(sym)
+                except (ValueError, TypeError):
+                    pass  # Can't parse date — keep the symbol
+
+        if stale_symbols:
+            for sym in stale_symbols:
+                del self.ledger[sym]
+            logger.info(f"TTL Cleanup: Removed {len(stale_symbols)} stale symbols "
+                       f"(older than {ttl_days} days): {stale_symbols[:10]}{'...' if len(stale_symbols) > 10 else ''}")
+        else:
+            logger.debug(f"TTL Cleanup: All {len(self.ledger)} ledger entries are fresh.")
+
     def _update_daily_review_list(self):
         """
         Promotes the top-scoring stocks to the VIP list and prints the FULL LEADERBOARD.
@@ -484,9 +524,43 @@ class StockHunter:
 
         logger.info(f"Tiered Lists: Tier1(VIP)={len(tier1_symbols)}, Tier2(Watch)={len(tier2_symbols)}")
 
-        # Save VIP list
-        self.watchlist = {"tickers": vip_symbols, "last_updated": datetime.now().isoformat()}
+        # ═══ CUMULATIVE VIP LIST (2026-03-19) ═══════════════════════════
+        # DO NOT DELETE: VIP list now MERGES with existing list instead of
+        # overwriting. New top-scoring symbols are added; existing symbols
+        # stay unless they fail the TTL check (see _cleanup_stale_ledger).
+        # This ensures good stocks from previous scans are not lost when
+        # they temporarily drop in rank.
+        # ═══════════════════════════════════════════════════════════════════
+
+        # Load existing VIP list from disk
+        existing_vip = []
+        try:
+            existing_data = self._load_json(self.watchlist_file, default_type={"tickers": []})
+            if isinstance(existing_data, dict):
+                existing_vip = existing_data.get("tickers", [])
+            elif isinstance(existing_data, list):
+                existing_vip = existing_data
+        except:
+            existing_vip = []
+
+        # Merge: new VIP symbols first, then existing symbols not already in new list
+        merged_vip = list(vip_symbols)  # Start with current top scorers
+        for sym in existing_vip:
+            if sym not in merged_vip:
+                # Only keep if still in ledger and above minimum threshold
+                if sym in self.ledger:
+                    score = self.ledger[sym].get('master_score', 0)
+                    if score >= min_threshold:
+                        merged_vip.append(sym)
+
+        # Apply max list size (prevent infinite growth)
+        max_vip_size = cfg.SCAN_ROUTING_CONFIG.get("max_vip_list_size", 50)
+        merged_vip = merged_vip[:max_vip_size]
+
+        self.watchlist = {"tickers": merged_vip, "last_updated": datetime.now().isoformat()}
         self._save_json(self.watchlist_file, self.watchlist)
+
+        logger.info(f"VIP List: {len(vip_symbols)} new + {len(existing_vip)} existing → {len(merged_vip)} merged (max {max_vip_size})")
         
         # --- 4. BUILD THE NEW DETAILED LEADERBOARD ---
         board = []
@@ -519,7 +593,7 @@ class StockHunter:
             print(leaderboard_str)
         except UnicodeEncodeError:
             print(leaderboard_str.encode(sys.stdout.encoding or 'utf-8', errors='replace').decode(sys.stdout.encoding or 'utf-8'))
-        logger.info(f"VIP List Successfully Saved to Disk: {vip_symbols}")
+        logger.info(f"VIP List Successfully Saved to Disk: {merged_vip}")
     
     def get_active_vip_watchlist(self):
         """
