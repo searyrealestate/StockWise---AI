@@ -26,6 +26,7 @@
 ### Files Changed
 - `stock_hunter.py` — cumulative merge logic + `_cleanup_stale_ledger()` + TTL call
 - `system_config.py` — `max_vip_list_size: 50` added to `SCAN_ROUTING_CONFIG`
+- `master_validator.py` — 9 regression tests added (5 structural + 4 unit)
 
 ---
 

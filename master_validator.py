@@ -1654,6 +1654,180 @@ class TestGen12Acceptance(unittest.TestCase):
             "Do not change this order without understanding the full waterfall architecture."
         )
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # VIP ACCUMULATION + TTL TESTS (2026-03-19)
+    # DO NOT DELETE: These tests prevent regression of the VIP overwrite bug
+    # and ensure TTL cleanup is enforced. See CHANGELOG 2026-03-19.
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def test_vip_max_list_size_config(self):
+        """Verify max_vip_list_size exists in SCAN_ROUTING_CONFIG."""
+        import system_config as cfg
+        scan_cfg = getattr(cfg, 'SCAN_ROUTING_CONFIG', {})
+        self.assertIn(
+            'max_vip_list_size', scan_cfg,
+            "CRITICAL: max_vip_list_size missing from SCAN_ROUTING_CONFIG. "
+            "Without it, VIP list grows without limit. See CHANGELOG 2026-03-19."
+        )
+        val = scan_cfg['max_vip_list_size']
+        self.assertIsInstance(val, int)
+        self.assertTrue(10 <= val <= 200, f"max_vip_list_size={val} out of safe range (10-200)")
+
+    def test_ttl_config_exists(self):
+        """Verify max_days_untraded_on_watchlist exists in SCAN_ROUTING_CONFIG."""
+        import system_config as cfg
+        scan_cfg = getattr(cfg, 'SCAN_ROUTING_CONFIG', {})
+        self.assertIn(
+            'max_days_untraded_on_watchlist', scan_cfg,
+            "CRITICAL: max_days_untraded_on_watchlist missing from SCAN_ROUTING_CONFIG. "
+            "Without it, stale symbols stay in ledger forever. See CHANGELOG 2026-03-19."
+        )
+        val = scan_cfg['max_days_untraded_on_watchlist']
+        self.assertIsInstance(val, (int, float))
+        self.assertTrue(30 <= val <= 365, f"max_days_untraded_on_watchlist={val} out of safe range (30-365 days)")
+
+    def test_cleanup_stale_ledger_method_exists(self):
+        """Verify _cleanup_stale_ledger method exists on StockHunter."""
+        from stock_hunter import StockHunter
+        self.assertTrue(
+            hasattr(StockHunter, '_cleanup_stale_ledger'),
+            "CRITICAL: _cleanup_stale_ledger() missing from StockHunter. "
+            "Without it, TTL is not enforced. See CHANGELOG 2026-03-19."
+        )
+
+    def test_cleanup_called_in_nightly_scan(self):
+        """Verify _cleanup_stale_ledger is called inside run_nightly_scan."""
+        import inspect
+        from stock_hunter import StockHunter
+        source = inspect.getsource(StockHunter.run_nightly_scan)
+        self.assertIn(
+            '_cleanup_stale_ledger', source,
+            "CRITICAL: _cleanup_stale_ledger() not called in run_nightly_scan(). "
+            "TTL enforcement is dead code. See CHANGELOG 2026-03-19."
+        )
+
+    def test_vip_merge_logic_in_update(self):
+        """Verify _update_daily_review_list merges instead of overwrites."""
+        import inspect
+        from stock_hunter import StockHunter
+        source = inspect.getsource(StockHunter._update_daily_review_list)
+        self.assertTrue(
+            'existing_vip' in source or 'existing_data' in source,
+            "CRITICAL: _update_daily_review_list does not load existing VIP list. "
+            "VIP is being OVERWRITTEN instead of merged. See CHANGELOG 2026-03-19."
+        )
+        self.assertIn(
+            'merged_vip', source,
+            "CRITICAL: No merge logic in _update_daily_review_list. "
+            "VIP is being OVERWRITTEN instead of merged. See CHANGELOG 2026-03-19."
+        )
+        self.assertIn(
+            'max_vip_list_size', source,
+            "CRITICAL: max_vip_list_size cap missing from _update_daily_review_list. "
+            "VIP list can grow without limit. See CHANGELOG 2026-03-19."
+        )
+
+    def test_ttl_cleanup_removes_old_entries(self):
+        """Unit test: _cleanup_stale_ledger removes entries older than TTL."""
+        from stock_hunter import StockHunter
+        from unittest.mock import MagicMock
+        from datetime import datetime, timedelta
+
+        mock_dm = MagicMock()
+        hunter = StockHunter.__new__(StockHunter)
+        hunter.dm = mock_dm
+        hunter.ledger_file = ""
+        hunter.vip_list_file = ""
+        hunter.watchlist_file = ""
+        hunter.watchlist = {"tickers": []}
+
+        now = datetime.now()
+        hunter.ledger = {
+            "FRESH": {"master_score": 80.0, "last_scanned": now.isoformat()},
+            "STALE": {"master_score": 90.0, "last_scanned": (now - timedelta(days=300)).isoformat()},
+            "ALSO_STALE": {"master_score": 70.0, "last_scanned": (now - timedelta(days=220)).isoformat()},
+        }
+
+        hunter._cleanup_stale_ledger()
+
+        self.assertIn("FRESH", hunter.ledger, "Fresh symbol should NOT be removed")
+        self.assertNotIn("STALE", hunter.ledger, "Stale symbol (300 days) should be removed")
+        self.assertNotIn("ALSO_STALE", hunter.ledger, "Stale symbol (220 days) should be removed")
+
+    def test_ttl_cleanup_keeps_entries_within_ttl(self):
+        """Unit test: _cleanup_stale_ledger keeps entries within TTL."""
+        from stock_hunter import StockHunter
+        from unittest.mock import MagicMock
+        from datetime import datetime, timedelta
+
+        mock_dm = MagicMock()
+        hunter = StockHunter.__new__(StockHunter)
+        hunter.dm = mock_dm
+        hunter.ledger_file = ""
+        hunter.vip_list_file = ""
+        hunter.watchlist_file = ""
+        hunter.watchlist = {"tickers": []}
+
+        now = datetime.now()
+        hunter.ledger = {
+            "A": {"master_score": 80.0, "last_scanned": (now - timedelta(days=209)).isoformat()},
+            "B": {"master_score": 70.0, "last_scanned": (now - timedelta(days=1)).isoformat()},
+            "C": {"master_score": 60.0, "last_scanned": now.isoformat()},
+        }
+
+        hunter._cleanup_stale_ledger()
+
+        self.assertEqual(len(hunter.ledger), 3,
+            f"All entries within TTL should be kept, got {len(hunter.ledger)}")
+
+    def test_vip_merge_preserves_existing(self):
+        """Unit test: VIP merge keeps existing symbols that still qualify."""
+        from stock_hunter import StockHunter
+        from unittest.mock import MagicMock
+        import system_config as cfg
+        import json
+        import tempfile
+        import os
+
+        mock_dm = MagicMock()
+        hunter = StockHunter.__new__(StockHunter)
+        hunter.dm = mock_dm
+
+        # Create temp file with existing VIP
+        tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump({"tickers": ["OLD_GOOD", "OLD_BAD"], "last_updated": ""}, tmp)
+        tmp.close()
+
+        hunter.watchlist_file = tmp.name
+        hunter.vip_list_file = tmp.name
+        hunter.ledger_file = tmp.name
+
+        min_threshold = cfg.SCAN_ROUTING_CONFIG.get("min_vip_score_threshold", 50.0)
+        hunter.ledger = {
+            "NEW_TOP": {"master_score": 90.0, "tier": 1, "regime": "TREND",
+                         "state": {}, "er_score": 0.7, "tech_score": 80,
+                         "ai_score": 90, "last_scanned": "2026-03-19T00:00:00"},
+            "OLD_GOOD": {"master_score": 75.0, "tier": 2, "regime": "TREND",
+                          "state": {}, "er_score": 0.5, "tech_score": 60,
+                          "ai_score": 70, "last_scanned": "2026-03-18T00:00:00"},
+            "OLD_BAD": {"master_score": 10.0, "tier": 3, "regime": "CHOP",
+                         "state": {}, "er_score": 0.1, "tech_score": 5,
+                         "ai_score": 10, "last_scanned": "2026-03-17T00:00:00"},
+        }
+        hunter.watchlist = {"tickers": [], "last_updated": ""}
+
+        hunter._update_daily_review_list()
+
+        with open(tmp.name, 'r') as f:
+            saved = json.load(f)
+
+        saved_tickers = saved.get("tickers", [])
+        os.unlink(tmp.name)
+
+        self.assertIn("NEW_TOP", saved_tickers, "New top scorer should be in VIP")
+        self.assertIn("OLD_GOOD", saved_tickers, "Old symbol above threshold should be KEPT")
+        self.assertNotIn("OLD_BAD", saved_tickers, "Old symbol below threshold should be REMOVED")
+
     def test_session_kill_before_circuit_breaker(self):
         """Verify session kill check happens BEFORE circuit breaker check in waterfall."""
         import inspect
