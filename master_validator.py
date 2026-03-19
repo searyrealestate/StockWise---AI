@@ -1828,6 +1828,135 @@ class TestGen12Acceptance(unittest.TestCase):
         self.assertIn("OLD_GOOD", saved_tickers, "Old symbol above threshold should be KEPT")
         self.assertNotIn("OLD_BAD", saved_tickers, "Old symbol below threshold should be REMOVED")
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # SAFE JSON I/O TESTS (2026-03-19)
+    # DO NOT DELETE: These tests prevent regression of the production race
+    # condition fix. Scanner + Live engine must use atomic JSON operations.
+    # See CHANGELOG 2026-03-19 "Atomic JSON read/write".
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def test_safe_json_io_module_exists(self):
+        """Verify safe_json_io.py exists and is importable."""
+        try:
+            from safe_json_io import safe_json_read, safe_json_write
+        except ImportError as e:
+            self.fail(f"CRITICAL: safe_json_io module missing or broken: {e}. "
+                      "Without it, scanner and live engine have race conditions. "
+                      "See CHANGELOG 2026-03-19.")
+
+    def test_stock_hunter_uses_safe_io(self):
+        """Verify stock_hunter imports and uses safe_json_io."""
+        import inspect
+        from stock_hunter import StockHunter
+        save_source = inspect.getsource(StockHunter._save_json)
+        load_source = inspect.getsource(StockHunter._load_json)
+        self.assertIn(
+            'safe_json_write', save_source,
+            "CRITICAL: stock_hunter._save_json does not use safe_json_write. "
+            "Production race condition possible. See CHANGELOG 2026-03-19."
+        )
+        self.assertIn(
+            'safe_json_read', load_source,
+            "CRITICAL: stock_hunter._load_json does not use safe_json_read. "
+            "Production race condition possible. See CHANGELOG 2026-03-19."
+        )
+
+    def test_live_engine_uses_safe_io(self):
+        """Verify live_trading_engine imports and uses safe_json_io."""
+        import inspect
+        from live_trading_engine import LiveTradingEngine
+        save_source = inspect.getsource(LiveTradingEngine._save_json)
+        load_source = inspect.getsource(LiveTradingEngine._load_json)
+        self.assertIn(
+            'safe_json_write', save_source,
+            "CRITICAL: live_trading_engine._save_json does not use safe_json_write. "
+            "Production race condition possible. See CHANGELOG 2026-03-19."
+        )
+        self.assertIn(
+            'safe_json_read', load_source,
+            "CRITICAL: live_trading_engine._load_json does not use safe_json_read. "
+            "Production race condition possible. See CHANGELOG 2026-03-19."
+        )
+
+    def test_safe_write_is_atomic(self):
+        """Verify safe_json_write uses os.replace for atomic operation."""
+        import inspect
+        from safe_json_io import safe_json_write
+        source = inspect.getsource(safe_json_write)
+        self.assertIn(
+            'os.replace', source,
+            "CRITICAL: safe_json_write does not use os.replace(). "
+            "Writes are not atomic — file corruption possible. See CHANGELOG 2026-03-19."
+        )
+        self.assertTrue(
+            'mkstemp' in source or 'tempfile' in source,
+            "CRITICAL: safe_json_write does not use temp file. "
+            "Writes are not atomic. See CHANGELOG 2026-03-19."
+        )
+
+    def test_safe_read_has_retry(self):
+        """Verify safe_json_read retries on parse failure."""
+        import inspect
+        from safe_json_io import safe_json_read
+        source = inspect.getsource(safe_json_read)
+        self.assertTrue(
+            'retries' in source or 'retry' in source,
+            "CRITICAL: safe_json_read has no retry logic. "
+            "Half-written files will crash the reader. See CHANGELOG 2026-03-19."
+        )
+
+    def test_safe_write_read_roundtrip(self):
+        """Unit test: write then read returns identical data."""
+        from safe_json_io import safe_json_read, safe_json_write
+        import tempfile
+        import os
+
+        test_data = {"symbols": ["AAPL", "NVDA"], "score": 85.5, "nested": {"a": 1}}
+        tmp = tempfile.NamedTemporaryFile(suffix='.json', delete=False)
+        tmp.close()
+
+        try:
+            safe_json_write(tmp.name, test_data)
+            result = safe_json_read(tmp.name)
+            self.assertEqual(result, test_data,
+                f"Roundtrip failed: wrote {test_data}, read {result}")
+        finally:
+            os.unlink(tmp.name)
+
+    def test_safe_read_missing_file_returns_default(self):
+        """Unit test: reading non-existent file returns default."""
+        from safe_json_io import safe_json_read
+
+        result = safe_json_read("/nonexistent/path/fake.json", default={"tickers": []})
+        self.assertEqual(result, {"tickers": []},
+            f"Expected default, got {result}")
+
+    def test_safe_write_does_not_corrupt_on_bad_data(self):
+        """Unit test: original file survives if write data is unserializable."""
+        from safe_json_io import safe_json_read, safe_json_write
+        import tempfile
+        import os
+
+        tmp = tempfile.NamedTemporaryFile(suffix='.json', delete=False)
+        tmp.close()
+
+        # Write good data first
+        good_data = {"status": "ok"}
+        safe_json_write(tmp.name, good_data)
+
+        # Try to write bad data (unserializable)
+        try:
+            safe_json_write(tmp.name, {"bad": object()})
+        except (TypeError, Exception):
+            pass  # Expected to fail
+
+        # Original data should still be intact
+        result = safe_json_read(tmp.name)
+        os.unlink(tmp.name)
+
+        self.assertEqual(result, good_data,
+            f"Original file corrupted after failed write: got {result}, expected {good_data}")
+
     def test_session_kill_before_circuit_breaker(self):
         """Verify session kill check happens BEFORE circuit breaker check in waterfall."""
         import inspect

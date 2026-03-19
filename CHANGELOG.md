@@ -19,6 +19,7 @@ can read a half-written file mid-write → `json.JSONDecodeError` → crash.
 - `safe_json_io.py` — **NEW** atomic read/write module (no external deps)
 - `stock_hunter.py` — `_save_json` + `_load_json` use `safe_json_io`
 - `live_trading_engine.py` — `_save_json`, `_load_json`, `_write_cooldown`, and `__main__` scan ledger load use `safe_json_io`
+- `master_validator.py` — 8 regression tests added (5 structural + 3 unit): module import, source inspection of hunter/engine, atomic write (`os.replace` + `mkstemp`), retry logic, roundtrip, missing-file default, corruption guard
 
 ---
 
