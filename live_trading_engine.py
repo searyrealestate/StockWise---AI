@@ -817,19 +817,15 @@ if __name__ == "__main__":
             vip_list = scout.get_active_vip_watchlist()
             
             if not vip_list:
-                logger.warning("VIP List is empty. Auto-triggering nightly scan...")
-                try:
-                    scout.run_nightly_scan()
-                    vip_list = scout.get_active_vip_watchlist()
-                    if not vip_list:
-                        logger.warning("Scan complete but VIP list still empty. Sleeping 60s...")
-                        time.sleep(60)
-                        continue
-                    logger.info(f"Auto-scan complete: {len(vip_list)} VIP targets found.")
-                except Exception as scan_err:
-                    logger.error(f"Auto-scan failed: {scan_err}. Sleeping 60s...")
-                    time.sleep(60)
-                    continue
+                # ═══ DEFAULT SYMBOLS FALLBACK (2026-03-19) ═══════════════════
+                # DO NOT DELETE: When VIP list is empty, use DEFAULT_TRAINING_SYMBOLS.
+                # Ensures live engine starts immediately on known liquid stocks.
+                # Scanner should be run separately via run_scanner.bat or run_all.bat.
+                # ═══════════════════════════════════════════════════════════════
+                default_symbols = getattr(cfg, 'DEFAULT_TRAINING_SYMBOLS',
+                    ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD', 'NFLX', 'SPY'])
+                logger.warning(f"VIP List is empty. Using DEFAULT_TRAINING_SYMBOLS: {default_symbols}")
+                vip_list = default_symbols
                 
             logger.info(f"Loaded {len(vip_list)} VIP targets. Starting Cycle...")
 

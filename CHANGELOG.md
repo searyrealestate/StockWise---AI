@@ -1,5 +1,36 @@
 # Changelog
 
+## [2026-03-19] SPY Benchmark + Relative Strength + VIP Fallback
+
+### Problem
+- `BENCHMARK_TICKER` was `QQQ` (Nasdaq-100), not SPY (S&P500)
+- SPY absent from seed watchlist — could be excluded from scans entirely
+- No Relative Strength calculation — no way to know if a stock beats the market
+- VIP list empty → live engine triggered a full nightly scan (slow start)
+
+### Changes
+
+| File | Change |
+|---|---|
+| `system_config.py` | `BENCHMARK_TICKER = "SPY"` + DO NOT DELETE block |
+| `system_config.py` | SPY added to `load_dynamic_watchlist()` seed list |
+| `system_config.py` | `RELATIVE_STRENGTH_CONFIG` added (lookbacks: 20/60/120 days) |
+| `stock_hunter.py` | SPY fetched ONCE at scan start (not once per symbol) |
+| `stock_hunter.py` | `_calculate_relative_strength()` new method: RS = stock_return / spy_return |
+| `stock_hunter.py` | RS data merged into ledger entry per symbol after scan |
+| `stock_hunter.py` | SPY always inserted into VIP list (position 0 if absent) |
+| `stock_hunter.py` | Leaderboard adds `RS60` column |
+| `stock_hunter.py` | `get_active_vip_watchlist()` falls back to `DEFAULT_TRAINING_SYMBOLS` |
+| `live_trading_engine.py` | Empty VIP → use `DEFAULT_TRAINING_SYMBOLS` immediately (no auto-scan) |
+
+### Behaviour Change
+- **Before:** Empty VIP → auto-trigger full nightly scan → wait potentially hours
+- **After:** Empty VIP → use `DEFAULT_TRAINING_SYMBOLS` (10 liquid stocks) immediately
+- RS label: `OUTPERFORM` (RS60 ≥ 1.05), `INLINE` (0.95–1.05), `UNDERPERFORM` (≤ 0.95)
+- SPY is permanently pinned to position 0 in VIP list
+
+---
+
 ## [2026-03-19] Pipeline Integration + Data Provider Fetch Tests
 
 ### Added to master_validator.py — 14 new tests (TestGen12Acceptance)

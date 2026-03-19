@@ -219,11 +219,17 @@ def load_dynamic_watchlist():
             # If read fails, fail silently and proceed to fallback
             pass
     # Fallback Seed List (Top 10 S&P 500 by weight) - Used if no dynamic list found
-    return ["NVDA", "MSFT", "AAPL", "AMZN", "META", "GOOGL", "TSLA", "BRK-B", "LLY", "AVGO"]
+    return ["SPY", "NVDA", "MSFT", "AAPL", "AMZN", "META", "GOOGL", "TSLA", "BRK-B", "LLY", "AVGO"]
 
 # Global Variable WATCHLIST now calls the function to load the latest list
 WATCHLIST = load_dynamic_watchlist()
-BENCHMARK_TICKER = "QQQ" # Ticker used as the market benchmark (Nasdaq-100 ETF)
+# ═══ BENCHMARK (2026-03-19) ═══════════════════════════════════════════
+# DO NOT DELETE: SPY is the S&P500 benchmark used for Relative Strength
+# calculation. All stocks are measured against SPY to determine if they
+# outperform or underperform the market. Do not change without updating
+# stock_hunter.py RS calculation.
+# ═══════════════════════════════════════════════════════════════════════
+BENCHMARK_TICKER = "SPY"
 
 # --- 3.5 TRADE TYPE CONFIGURATION (NEW) ---
 # Defines intervals and lookback periods for data fetching based on trade duration
@@ -567,6 +573,13 @@ PARAM_RANGES = {
 # Default symbols for AI training when scanner results are not available
 DEFAULT_TRAINING_SYMBOLS = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN',
                              'META', 'TSLA', 'AMD', 'NFLX', 'SPY']
+
+# Relative Strength Configuration
+RELATIVE_STRENGTH_CONFIG = {
+    "lookback_days": [20, 60, 120],  # Calculate RS over these periods
+    "outperform_threshold": 1.05,     # RS > 1.05 = outperforming
+    "underperform_threshold": 0.95,   # RS < 0.95 = underperforming
+}
 
 # AI Label Generation Config: defines what counts as a "profitable" trade for training
 AI_LABEL_CONFIG = {

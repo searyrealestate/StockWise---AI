@@ -319,6 +319,22 @@ class StockHunter:
         total = len(scan_queue)
         scan_start = time.time()
 
+        # ═══ BENCHMARK DATA: Fetch SPY once for Relative Strength (2026-03-19) ═══
+        # DO NOT DELETE: SPY data is fetched ONCE at scan start and used to
+        # calculate Relative Strength for every symbol. This avoids fetching
+        # SPY 4000 times (once per symbol).
+        # ═══════════════════════════════════════════════════════════════════════
+        benchmark_ticker = getattr(cfg, 'BENCHMARK_TICKER', 'SPY')
+        benchmark_df = None
+        try:
+            benchmark_df = self.dm.get_stock_data(benchmark_ticker, days_back=730)
+            if benchmark_df is not None and not benchmark_df.empty:
+                logger.info(f"Benchmark {benchmark_ticker} loaded: {len(benchmark_df)} rows")
+            else:
+                logger.warning(f"Failed to load benchmark {benchmark_ticker} — RS will be skipped")
+        except Exception as e:
+            logger.warning(f"Benchmark fetch failed: {e} — RS will be skipped")
+
         for idx, symbol in enumerate(scan_queue, 1):
             try:
                 logger.info(f"🔍 Scanning [{symbol}]...")
@@ -390,8 +406,14 @@ class StockHunter:
                     "last_scanned": datetime.now().isoformat()
                 }
 
+                # Calculate Relative Strength vs benchmark
+                if benchmark_df is not None:
+                    rs_data = self._calculate_relative_strength(df, benchmark_df)
+                    if rs_data:
+                        self.ledger[symbol].update(rs_data)
+
                 logger.debug(f"[{symbol}] State: {stock_state} | Tier: {tier}")
-                
+
             except Exception as e:
                 logger.error(f"Scan failed for {symbol}. Moving to next. Error: {e}")
             finally:
@@ -417,6 +439,65 @@ class StockHunter:
         self._save_json(self.ledger_file, self.ledger)
         self._update_daily_review_list()
         logger.info("Nightly Scan Complete. Ledger updated.")
+
+    def _calculate_relative_strength(self, symbol_df, benchmark_df):
+        """
+        ═══ RELATIVE STRENGTH vs BENCHMARK (2026-03-19) ═══════════════════
+        DO NOT DELETE: Calculates how a stock performs relative to SPY.
+
+        RS = (stock_close / stock_close_N_days_ago) / (spy_close / spy_close_N_days_ago)
+        RS > 1.0 = outperforming the market
+        RS < 1.0 = underperforming the market
+
+        Returns dict: {"rs_20": 1.05, "rs_60": 0.98, "rs_120": 1.12, "rs_label": "OUTPERFORM"}
+        ═══════════════════════════════════════════════════════════════════════
+        """
+        if benchmark_df is None or benchmark_df.empty:
+            return {}
+        if symbol_df is None or symbol_df.empty:
+            return {}
+
+        rs_config = getattr(cfg, 'RELATIVE_STRENGTH_CONFIG', {})
+        lookbacks = rs_config.get('lookback_days', [20, 60, 120])
+        outperform_thr = rs_config.get('outperform_threshold', 1.05)
+        underperform_thr = rs_config.get('underperform_threshold', 0.95)
+
+        result = {}
+
+        try:
+            sym_close = symbol_df['close']
+            bench_close = benchmark_df['close']
+
+            current_sym = float(sym_close.iloc[-1])
+            current_bench = float(bench_close.iloc[-1])
+
+            if current_sym <= 0 or current_bench <= 0:
+                return {}
+
+            for lb in lookbacks:
+                if len(sym_close) > lb and len(bench_close) > lb:
+                    past_sym = float(sym_close.iloc[-lb - 1])
+                    past_bench = float(bench_close.iloc[-lb - 1])
+
+                    if past_sym > 0 and past_bench > 0:
+                        sym_return = current_sym / past_sym
+                        bench_return = current_bench / past_bench
+                        rs = round(sym_return / bench_return, 3)
+                        result[f"rs_{lb}"] = rs
+
+            # Label based on 60-day RS (or shortest available)
+            rs_60 = result.get('rs_60', result.get(f'rs_{lookbacks[0]}', 1.0))
+            if rs_60 >= outperform_thr:
+                result['rs_label'] = 'OUTPERFORM'
+            elif rs_60 <= underperform_thr:
+                result['rs_label'] = 'UNDERPERFORM'
+            else:
+                result['rs_label'] = 'INLINE'
+
+        except Exception as e:
+            logger.debug(f"RS calculation failed: {e}")
+
+        return result
 
     def _cleanup_stale_ledger(self):
         """
@@ -537,6 +618,14 @@ class StockHunter:
         max_vip_size = cfg.SCAN_ROUTING_CONFIG.get("max_vip_list_size", 50)
         merged_vip = merged_vip[:max_vip_size]
 
+        # ═══ BENCHMARK ALWAYS IN VIP (2026-03-19) ═══════════════════════
+        # DO NOT DELETE: SPY must always be in VIP for relative strength
+        # comparison in the live engine. Never remove it.
+        # ═══════════════════════════════════════════════════════════════════
+        benchmark = getattr(cfg, 'BENCHMARK_TICKER', 'SPY')
+        if benchmark not in merged_vip:
+            merged_vip.insert(0, benchmark)
+
         self.watchlist = {"tickers": merged_vip, "last_updated": datetime.now().isoformat()}
         self._save_json(self.watchlist_file, self.watchlist)
 
@@ -548,7 +637,7 @@ class StockHunter:
         board.append("🏆 TOP VIP TARGETS - FULL ANALYSIS 🏆")
         board.append("="*85)
         # כותרות חדשות ומפורטות
-        board.append(f"{'RANK':<5} | {'SYMBOL':<6} | {'REGIME':<6} | {'TREND':<8} | {'TECH':<6} | {'AI':<6} | {'MASTER':<7} | {'TIER':<4}")
+        board.append(f"{'RANK':<5} | {'SYMBOL':<6} | {'REGIME':<6} | {'TREND':<8} | {'TECH':<6} | {'AI':<6} | {'MASTER':<7} | {'RS60':<6} | {'TIER':<4}")
         board.append("-" * 85)
         
         for i, (symbol, data) in enumerate(top_candidates, 1):
@@ -563,7 +652,9 @@ class StockHunter:
             trend_dir = data.get('state', {}).get('trend', 'N/A')
             tier = data.get('tier', 3)
             tier_label = f"T{tier}"
-            board.append(f"#{i:<4} | {symbol:<6} | {regime:<6} | {trend_dir:<8} | {tech:<6.1f} | {ai:<6.1f} | {master:<7.1f} | {tier_label:<4} {fire}")
+            rs_60 = data.get('rs_60', 'N/A')
+            rs_str = f"{rs_60:.2f}" if isinstance(rs_60, (int, float)) else 'N/A'
+            board.append(f"#{i:<4} | {symbol:<6} | {regime:<6} | {trend_dir:<8} | {tech:<6.1f} | {ai:<6.1f} | {master:<7.1f} | {rs_str:<6} | {tier_label:<4} {fire}")
             
         board.append("="*85)
         
@@ -576,42 +667,28 @@ class StockHunter:
         logger.info(f"VIP List Successfully Saved to Disk: {merged_vip}")
     
     def get_active_vip_watchlist(self):
-        """
-        Public method for the Live Engine to fetch the active intraday targets.
-        Updated to handle List structures and prevent crashes.
-        """
-        # שימוש במשתנה הנתיב המעודכן (תואם לתיקון שעשינו ב-__init__)
-        # אם לא שינית ב-__init__, תשאיר self.watchlist_file
+        """Returns the current VIP list, with DEFAULT_TRAINING_SYMBOLS fallback."""
         target_path = getattr(self, 'vip_list_file', getattr(self, 'watchlist_file', None))
-
-        if not target_path or not os.path.exists(target_path):
-            logger.warning(f"VIP Watchlist not found at: {target_path}")
-            return []
-
-        try:
-            # טעינה ישירה ובטוחה
-            with open(target_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-
-            # === תמיכה בכל סוגי המבנים ===
-            
-            # אפשרות 1: הקובץ הוא רשימה פשוטה ["TSLA", "NVDA"] (מה שקורה אצלך כרגע)
-            if isinstance(data, list):
-                return data
-
-            # אפשרות 2: הקובץ הוא מילון {"tickers": ["TSLA", ...]} (Best Practice)
+        if target_path:
+            data = self._load_json(target_path, default_type={"tickers": []})
             if isinstance(data, dict):
-                if "tickers" in data:
-                    return data["tickers"]
-                else:
-                    # תמיכה לאחור: פורמט ישן {"TSLA": {...}}
-                    return list(data.keys())
+                tickers = data.get("tickers", [])
+            elif isinstance(data, list):
+                tickers = data
+            else:
+                tickers = []
 
-            return []
+            if tickers:
+                return tickers
 
-        except Exception as e:
-            logger.error(f"Critical error loading VIP list: {e}")
-            return []
+        # ═══ FALLBACK TO DEFAULT SYMBOLS (2026-03-19) ═══════════════════
+        # DO NOT DELETE: If VIP list is empty or file missing, return
+        # DEFAULT_TRAINING_SYMBOLS so the live engine has something to work with.
+        # ═════════════════════════════════════════════════════════════════
+        default = getattr(cfg, 'DEFAULT_TRAINING_SYMBOLS',
+            ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD', 'NFLX', 'SPY'])
+        logger.info(f"VIP list empty — falling back to DEFAULT_TRAINING_SYMBOLS ({len(default)} symbols)")
+        return default
 
 if __name__ == "__main__":
     import logging
