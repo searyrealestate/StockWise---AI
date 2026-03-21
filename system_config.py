@@ -147,6 +147,14 @@ PROVIDER_DELAY = {
     "MASSIVE_TIMEOUT": 10
 }
 
+# ═══ DATA PROVIDER SETTING (2026-03-20) ═══════════════════════════════
+# DO NOT DELETE: Explicitly sets the primary data provider.
+# Without this, DSM relies on getattr default which can be overridden
+# accidentally, causing Alpaca to be disabled in live engine.
+# Valid values: "ALPACA", "MASSIVE", "IBKR", "YFINANCE"
+# ═════════════════════════════════════════════════════════════════════
+DATA_PROVIDER = "ALPACA"
+
 # Validation (Optional sanity check)
 if not any([EN_MASSIVE, EN_ALPACA, EN_IBKR, EN_YFINANCE]):
     logging.error("WARNING: All data providers are DISABLED. System will starve.")

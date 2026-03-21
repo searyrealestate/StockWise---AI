@@ -1,5 +1,22 @@
 # Changelog
 
+## [2026-03-21] Add Explicit DATA_PROVIDER=ALPACA + Regression Test
+
+### Problem
+`DataSourceManager` used `getattr(cfg, 'DATA_PROVIDER', ...)` with a fallback default.
+Without an explicit config value, any accidental override (e.g. env var, module reload) could
+silently disable Alpaca in the live engine — the log would show `ALPACA=DISABLED` with no clear cause.
+
+### Fix — `system_config.py`
+- `DATA_PROVIDER = "ALPACA"` added near `PROVIDER_DELAY` with a DO NOT DELETE block
+
+### Test — `master_validator.py`
+- `test_data_provider_explicitly_set`: verifies `DATA_PROVIDER` is set and is a valid provider
+  string; catches the silent-Alpaca-disable regression
+
+### Tests
+- 172/172 pass
+
 ## [2026-03-21] Unified Symbol List + SPY-Only Pin — Regression Tests
 
 ### Added — `master_validator.py`

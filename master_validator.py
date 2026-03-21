@@ -2615,6 +2615,21 @@ class TestGen12Acceptance(unittest.TestCase):
         # NUGT (high score) should be in VIP
         assert 'NUGT' in vip, f"NUGT (score=84.9) should be in VIP. VIP={vip}"
 
+    def test_data_provider_explicitly_set(self):
+        """
+        מטרה: לוודא ש-DATA_PROVIDER מוגדר במפורש ב-system_config.
+        בלי הגדרה מפורשת, DSM מסתמך על default שיכול להידרס בטעות.
+        זה גרם ל-Alpaca להיות DISABLED ב-live engine.
+        """
+        import system_config as cfg
+        provider = getattr(cfg, 'DATA_PROVIDER', None)
+        assert provider is not None, \
+            "CRITICAL: DATA_PROVIDER not set in system_config.py. " \
+            "Alpaca may be disabled in live engine. See CHANGELOG 2026-03-20."
+        assert provider in ('ALPACA', 'MASSIVE', 'IBKR', 'YFINANCE'), \
+            f"DATA_PROVIDER='{provider}' is not a valid provider. " \
+            "Must be ALPACA, MASSIVE, IBKR, or YFINANCE."
+
 
 def run_audit():
     """
