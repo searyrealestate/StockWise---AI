@@ -1,5 +1,19 @@
 # Changelog
 
+## [2026-03-21] Fix L6: Telegram command parsing — parts vs parts[0]
+
+### Problem
+`process_incoming_command()` line 101: `command = parts` assigned the entire list
+instead of `parts[0]`. The comparison `command in ['/CONFIRM', '/UNFILLED']` compared
+a list to strings — always False. `/confirm` and `/unfilled` Telegram commands
+never executed.
+
+### Fix — `notification_manager.py`
+- Changed `command = parts` to `command = parts[0]`
+
+### Tests
+- 180/180 pass
+
 ## [2026-03-21] Fix M5+M6: Migrate strategy_engine.py to safe_json_io
 
 ### Problem

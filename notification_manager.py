@@ -98,7 +98,7 @@ class NotificationManager:
             return
             
         parts = text.strip().upper().split()
-        command = parts
+        command = parts[0]
         
         if command in ['/CONFIRM', '/UNFILLED'] and len(parts) > 1:
             ticker = parts[1]
