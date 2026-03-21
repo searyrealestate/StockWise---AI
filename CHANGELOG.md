@@ -1,5 +1,25 @@
 # Changelog
 
+## [2026-03-21] Unified Symbol List + SPY-Only Pin — Regression Tests
+
+### Added — `master_validator.py`
+4 new regression tests (total now 171/171):
+- `test_single_source_of_truth_symbols` — verifies `DEFAULT_TRAINING_SYMBOLS` exists with ≥10
+  symbols AND `load_dynamic_watchlist` references it (not a separate hardcoded list)
+- `test_spy_first_in_defaults` — verifies `DEFAULT_TRAINING_SYMBOLS[0] == 'SPY'`
+- `test_only_spy_pinned_in_vip` — verifies `always_in_vip` block is absent from
+  `_update_daily_review_list` and benchmark pinning is present
+- `test_non_spy_defaults_follow_ttl` — unit test: AAPL/NVDA with score=0 are NOT in VIP;
+  only SPY (benchmark) and high-scoring NUGT survive
+
+### Regression guarantees
+| Regression | Caught by |
+|---|---|
+| Someone adds `always_in_vip` back | `test_only_spy_pinned_in_vip` |
+| Someone creates a second hardcoded symbol list | `test_single_source_of_truth_symbols` |
+| SPY moved off index 0 of DEFAULT_TRAINING_SYMBOLS | `test_spy_first_in_defaults` |
+| DEFAULT symbols re-protected from TTL eviction | `test_non_spy_defaults_follow_ttl` |
+
 ## [2026-03-21] Unify Symbol Lists + SPY-Only VIP Pin + Fix Comments
 
 ### Problem

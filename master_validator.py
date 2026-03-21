@@ -2491,6 +2491,130 @@ class TestGen12Acceptance(unittest.TestCase):
         assert 'KGC' in vip, \
             f"KGC (master=75.0) should be in VIP but missing. VIP={vip}"
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # UNIFIED SYMBOL LIST + SPY-ONLY PIN TESTS (2026-03-20)
+    # DO NOT DELETE: Ensures single source of truth for symbol lists
+    # and that only SPY is permanently pinned in VIP.
+    # See CHANGELOG 2026-03-20.
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def test_single_source_of_truth_symbols(self):
+        """
+        מטרה: לוודא שיש רשימת מניות אחת בלבד (DEFAULT_TRAINING_SYMBOLS)
+        ושה-WATCHLIST seed fallback משתמש בה — לא רשימה נפרדת.
+        אם מישהו ייצור רשימה שנייה, הבדיקה תיכשל.
+        """
+        import inspect
+        import system_config as cfg
+
+        # DEFAULT_TRAINING_SYMBOLS must exist
+        defaults = getattr(cfg, 'DEFAULT_TRAINING_SYMBOLS', None)
+        assert defaults is not None, \
+            "DEFAULT_TRAINING_SYMBOLS missing from system_config"
+        assert len(defaults) >= 10, \
+            f"DEFAULT_TRAINING_SYMBOLS too short: {len(defaults)} (need 10+)"
+
+        # WATCHLIST seed must reference DEFAULT_TRAINING_SYMBOLS, not a separate list
+        source = inspect.getsource(cfg.load_dynamic_watchlist)
+        assert 'DEFAULT_TRAINING_SYMBOLS' in source, \
+            "load_dynamic_watchlist does not use DEFAULT_TRAINING_SYMBOLS. " \
+            "Two separate lists exist — must unify. See CHANGELOG 2026-03-20."
+
+    def test_spy_first_in_defaults(self):
+        """
+        מטרה: לוודא ש-SPY תמיד ראשון ב-DEFAULT_TRAINING_SYMBOLS.
+        SPY הוא ה-benchmark — חייב להיסרק ראשון.
+        """
+        import system_config as cfg
+        defaults = getattr(cfg, 'DEFAULT_TRAINING_SYMBOLS', [])
+        assert defaults[0] == 'SPY', \
+            f"SPY must be first in DEFAULT_TRAINING_SYMBOLS, got '{defaults[0]}'. " \
+            "See CHANGELOG 2026-03-20."
+
+    def test_only_spy_pinned_in_vip(self):
+        """
+        מטרה: לוודא שרק SPY מוגן קבוע ב-VIP.
+        שאר המניות (כולל AAPL, NVDA) נכנסות ויוצאות לפי הסורק + TTL.
+        אם מישהו יוסיף always_in_vip עם כל ה-DEFAULT, הבדיקה תיכשל.
+        """
+        import inspect
+        from stock_hunter import StockHunter
+        source = inspect.getsource(StockHunter._update_daily_review_list)
+
+        # Must NOT have always_in_vip with full DEFAULT list
+        assert 'always_in_vip' not in source, \
+            "always_in_vip block found — only SPY should be pinned, " \
+            "not all DEFAULT_TRAINING_SYMBOLS. See CHANGELOG 2026-03-20."
+
+        # Must have benchmark pinning
+        assert 'BENCHMARK_TICKER' in source or 'benchmark' in source.lower(), \
+            "Benchmark (SPY) pinning missing from _update_daily_review_list. " \
+            "See CHANGELOG 2026-03-20."
+
+    def test_non_spy_defaults_follow_ttl(self):
+        """
+        מטרה: לוודא שמניות DEFAULT (חוץ מ-SPY) לא מוגנות —
+        הן יוצאות מ-VIP אם master_score נמוך מהסף.
+        מדמה מצב שבו AAPL ו-NVDA קיבלו ציון 0 — הן לא צריכות להיות ב-VIP.
+        """
+        from stock_hunter import StockHunter
+        from unittest.mock import MagicMock
+        from datetime import datetime
+        import json
+        import tempfile
+        import os
+
+        hunter = StockHunter.__new__(StockHunter)
+        hunter.dm = MagicMock()
+        hunter.fe = MagicMock()
+        hunter.orchestra = MagicMock()
+
+        tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump({"tickers": [], "last_updated": ""}, tmp)
+        tmp.close()
+
+        hunter.watchlist_file = tmp.name
+        hunter.vip_list_file = tmp.name
+        hunter.ledger_file = tmp.name
+        hunter.watchlist = {"tickers": []}
+
+        # AAPL and NVDA with score 0, NUGT with high score
+        hunter.ledger = {
+            "AAPL": {"master_score": 0.0, "tier": 3, "regime": "CHOP",
+                      "state": {}, "er_score": 0.1, "tech_score": 0,
+                      "ai_score": 50, "last_scanned": datetime.now().isoformat()},
+            "NVDA": {"master_score": 0.0, "tier": 3, "regime": "CHOP",
+                      "state": {}, "er_score": 0.05, "tech_score": 0,
+                      "ai_score": 50, "last_scanned": datetime.now().isoformat()},
+            "SPY":  {"master_score": 0.0, "tier": 3, "regime": "CHOP",
+                      "state": {}, "er_score": 0.2, "tech_score": 0,
+                      "ai_score": 50, "last_scanned": datetime.now().isoformat()},
+            "NUGT": {"master_score": 84.9, "tier": 1, "regime": "CHOP",
+                      "state": {}, "er_score": 0.5, "tech_score": 80,
+                      "ai_score": 96, "last_scanned": datetime.now().isoformat()},
+        }
+
+        hunter._update_daily_review_list()
+
+        with open(tmp.name, 'r') as f:
+            saved = json.load(f)
+        vip = saved.get("tickers", [])
+        os.unlink(tmp.name)
+
+        # SPY must be in VIP (benchmark, always pinned)
+        assert 'SPY' in vip, f"SPY must always be in VIP. VIP={vip}"
+
+        # AAPL and NVDA with score 0 should NOT be in VIP
+        assert 'AAPL' not in vip, \
+            f"AAPL (score=0) should not be in VIP — not protected. VIP={vip}. " \
+            "See CHANGELOG 2026-03-20."
+        assert 'NVDA' not in vip, \
+            f"NVDA (score=0) should not be in VIP — not protected. VIP={vip}. " \
+            "See CHANGELOG 2026-03-20."
+
+        # NUGT (high score) should be in VIP
+        assert 'NUGT' in vip, f"NUGT (score=84.9) should be in VIP. VIP={vip}"
+
 
 def run_audit():
     """
