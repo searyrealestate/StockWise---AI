@@ -1,5 +1,23 @@
 # Changelog
 
+## [2026-03-21] Fix M1: Dynamic position sizing via RiskActuary
+
+### Problem
+Every trade used hardcoded `qty=10` regardless of price, stop-loss, or volume.
+`RiskActuary.calculate_size()` existed in strategy_engine.py but was never called.
+A $800 stock (NVDA) = $8,000 per position. A $3 stock = $30. No risk normalization.
+
+### Fix — `live_trading_engine.py`
+- Imported `RiskActuary` from strategy_engine
+- Instantiated `risk_actuary = RiskActuary()` in main block
+- Replaced `"qty": 10` with `risk_actuary.calculate_size(price, stop_loss, volume_avg)`
+- Uses 20-day average volume for volumetric cap
+- Minimum 1 share floor (prevents qty=0)
+- RiskActuary uses `RISK_CONFIG["starting_capital"]` (5000) and `max_daily_loss_pct` (1.5%/2 per trade)
+
+### Tests
+- 176/176 pass
+
 ## [2026-03-21] Fix M7: Run FeatureEngine in manage_open_positions
 
 ### Problem

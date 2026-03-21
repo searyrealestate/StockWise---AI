@@ -763,7 +763,7 @@ class LiveTradingEngine:
 
 if __name__ == "__main__":
     from data_source_manager import DataSourceManager
-    from strategy_engine import StrategyEngine
+    from strategy_engine import StrategyEngine, RiskActuary
     from stock_hunter import StockHunter
     from template_matcher import TemplateMatcher
     
@@ -800,6 +800,7 @@ if __name__ == "__main__":
 
     # Initialize Template Pipeline (Phase 3.8)
     matcher = TemplateMatcher()
+    risk_actuary = RiskActuary()
     logger.info(f"Template Pipeline loaded: {len(matcher.tm.templates)} templates, "
                 f"mode={getattr(cfg, 'SIGNAL_PIPELINE_MODE', 'legacy')}")
 
@@ -911,7 +912,11 @@ if __name__ == "__main__":
                                     "limit_price": best['entry_price'],
                                     "stop_loss": best['stop_loss'],
                                     "take_profit": best['take_profit'],
-                                    "qty": 10,  # Default, will be overridden by RiskActuary
+                                    "qty": risk_actuary.calculate_size(
+                                        price=best['entry_price'],
+                                        stop_loss=best['stop_loss'],
+                                        volume_avg=df['volume'].tail(20).mean() if 'volume' in df.columns else 0
+                                    ) or 1,  # Minimum 1 share if calculate_size returns 0
                                     "template_id": best['template_id'],
                                     "template_name": best['template_name'],
                                     "confidence_score": best['confidence_score'],
