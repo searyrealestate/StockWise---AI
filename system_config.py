@@ -164,6 +164,10 @@ else:
 
 # Initialize Alpaca credentials to None
 # Try loading from .streamlit/secrets.toml first (User requirement)
+ALPACA_KEY = None
+ALPACA_SECRET = None
+MASSIVE_API_KEY = None
+
 try:
     import toml
     # Path to the secrets file used by Streamlit

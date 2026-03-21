@@ -1,5 +1,19 @@
 # Changelog
 
+## [2026-03-21] Fix C2: Initialize API credential variables before try block
+
+### Problem
+`ALPACA_KEY`, `ALPACA_SECRET`, `MASSIVE_API_KEY` were only defined inside a `try` block
+that loads secrets.toml. If the file is missing or toml import fails, these variables
+were never created — causing `NameError` on the fallback lines (184-186).
+
+### Fix — `system_config.py`
+- Added `ALPACA_KEY = None`, `ALPACA_SECRET = None`, `MASSIVE_API_KEY = None` before the try block
+- Zero logic change — just a safety net initialization
+
+### Tests
+- 173/173 pass
+
 ## [2026-03-21] notification_manager.py — Migrate to safe_json_io
 
 ### Problem
