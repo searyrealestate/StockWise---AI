@@ -642,12 +642,11 @@ ML_FEATURES = [
     # 1. Base Price Action
     'close', 'volume_change', 'daily_return',
     # 2. Momentum & Trend (Must match feature_engine.py output)
-    'rsi_14', 'adx_14', 'wt1', 'wt2', 'ema_spread', 'supertrend_direction',
+    'rsi_14', 'adx_14', 'ema_spread', 'supertrend_direction',
     # 3. VSA & Patterns
     'vsa_squat_bar',
-    'master_score', 'is_consolidating', 'smart_hammer', 'smart_shooting_star',
+    'is_consolidating', 'smart_hammer', 'smart_shooting_star',
     # 4. Context (Gen-13 Additions)
-    'rel_strength_qqq',
     'volatility_20d'
 ]
 

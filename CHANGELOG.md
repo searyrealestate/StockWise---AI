@@ -1,5 +1,28 @@
 # Changelog
 
+## [2026-03-21] Fix M2 Part 2: Add derived indicators + clean ML_FEATURES
+
+### Problem
+10 ML_FEATURES columns were completely missing from FeatureEngine output.
+AI model received zeros for these → always returned neutral 50.0 score.
+
+### Fix — `feature_engine.py`
+Added 6 derived indicators in calculate_features():
+- `daily_return`: close.pct_change()
+- `ema_spread`: (ema_12 - ema_26) / close
+- `is_consolidating`: er_slow < 0.3
+- `volatility_20d`: daily_return.rolling(20).std()
+- `smart_hammer`, `smart_shooting_star`: default 0.0 if not set by pattern block
+
+### Fix — `system_config.py`
+Removed 4 uncalculable entries from ML_FEATURES:
+- `wt1`, `wt2`: WaveTrend not available in pandas_ta
+- `master_score`: scanner composite score, not a per-row indicator
+- `rel_strength_qqq`: legacy — system now uses SPY benchmark (stock_hunter.py)
+
+### Tests
+- 178/178 pass
+
 ## [2026-03-21] Fix M2: Automatic ML_FEATURES alias resolution in FeatureEngine
 
 ### Problem
@@ -16,7 +39,7 @@ This naming mismatch recurred with multiple indicators across different parts of
 - Wrapped in try/except for safety
 
 ### Tests
-- 177/177 pass
+- 178/178 pass
 
 ## [2026-03-21] Fix M1: Dynamic position sizing via RiskActuary
 

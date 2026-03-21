@@ -102,6 +102,34 @@ class FeatureEngine:
         except Exception as e:
             logger.error(f"Critical Feature Calculation Error: {e}")
             
+        # === ML_FEATURES: DERIVED INDICATORS (M2 Part 2) ===
+        # These indicators are required by ML_FEATURES but were never calculated.
+        # Each is a simple derivation from columns already in the DataFrame.
+        try:
+            # daily_return: percentage change day over day
+            if 'daily_return' not in df.columns:
+                df['daily_return'] = df['close'].pct_change()
+
+            # ema_spread: normalized gap between fast and slow EMA
+            if 'ema_spread' not in df.columns and 'ema_12' in df.columns and 'ema_26' in df.columns:
+                df['ema_spread'] = (df['ema_12'] - df['ema_26']) / df['close'].replace(0, 1)
+
+            # is_consolidating: low efficiency ratio = sideways market
+            if 'is_consolidating' not in df.columns and 'er_slow' in df.columns:
+                df['is_consolidating'] = (df['er_slow'] < 0.3).astype(float)
+
+            # volatility_20d: 20-day rolling standard deviation of returns
+            if 'volatility_20d' not in df.columns and 'daily_return' in df.columns:
+                df['volatility_20d'] = df['daily_return'].rolling(20).std()
+
+            # smart_hammer / smart_shooting_star: ensure they exist (may be set by pattern block)
+            if 'smart_hammer' not in df.columns:
+                df['smart_hammer'] = 0.0
+            if 'smart_shooting_star' not in df.columns:
+                df['smart_shooting_star'] = 0.0
+        except Exception as e:
+            logger.debug(f"ML derived indicators error: {e}")
+
         # === ML_FEATURES ALIAS RESOLUTION (M2 Fix) ===
         # Ensures every column name in ML_FEATURES exists in the DataFrame.
         # If ML expects 'rsi_14' but FeatureEngine created 'rsi', auto-alias.
