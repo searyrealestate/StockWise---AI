@@ -102,9 +102,26 @@ class FeatureEngine:
         except Exception as e:
             logger.error(f"Critical Feature Calculation Error: {e}")
             
+        # === ML_FEATURES ALIAS RESOLUTION (M2 Fix) ===
+        # Ensures every column name in ML_FEATURES exists in the DataFrame.
+        # If ML expects 'rsi_14' but FeatureEngine created 'rsi', auto-alias.
+        # This is the SINGLE place that bridges indicator names to ML names.
+        # To add a new indicator: just add it to ML_FEATURES in system_config.
+        try:
+            ml_features = getattr(cfg, 'ML_FEATURES', [])
+            for ml_name in ml_features:
+                if ml_name not in df.columns:
+                    # Try base name: 'rsi_14' → 'rsi', 'adx_14' → 'adx'
+                    base = ml_name.rsplit('_', 1)[0]
+                    if base in df.columns:
+                        df[ml_name] = df[base]
+                        logger.debug(f"ML alias created: {base} → {ml_name}")
+        except Exception as e:
+            logger.debug(f"ML alias resolution error: {e}")
+
         # Ensure Dynamic Stop-Loss vectors are generated before returning
         df = self._calculate_dynamic_stop_loss(df)
-        
+
         return df
 
 

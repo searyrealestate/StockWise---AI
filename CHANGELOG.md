@@ -1,5 +1,23 @@
 # Changelog
 
+## [2026-03-21] Fix M2: Automatic ML_FEATURES alias resolution in FeatureEngine
+
+### Problem
+FeatureEngine creates columns like `rsi`, `adx`. ML_FEATURES expects `rsi_14`, `adx_14`.
+The AI model couldn't find expected columns → always returned 50.0 (neutral fallback).
+This naming mismatch recurred with multiple indicators across different parts of the system.
+
+### Fix — `feature_engine.py`
+- Added alias resolution loop at end of `calculate_features()`
+- For each name in ML_FEATURES not found in DataFrame, tries base name (e.g. `rsi_14` → `rsi`)
+- If base exists, creates alias column automatically
+- Single permanent fix — any future ML_FEATURES additions are auto-resolved
+- Does not rename existing columns — only adds aliases
+- Wrapped in try/except for safety
+
+### Tests
+- 177/177 pass
+
 ## [2026-03-21] Fix M1: Dynamic position sizing via RiskActuary
 
 ### Problem
