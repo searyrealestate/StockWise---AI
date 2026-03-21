@@ -476,13 +476,6 @@ PORTFOLIO_RISK_CONFIG = {
     "event_horizon_buffer_days": 2,      # Force-sell 2 days before earnings/FDA events
 }
 
-PORTFOLIO_DEFENSE = {
-    # Structural risk management to prevent massive account blowups.
-    "max_covariance_corr": 0.85,         # If the new stock moves exactly like our current portfolio (>85% correlation), we veto it.
-    "zombie_trade_ttl_hours": 72,        # If a trade's regime changes, we give the "Zombie Agent" 72 hours to exit before we force-liquidate.
-    "event_horizon_buffer_days": 2       # We will force-sell all active trades 2 days before any scheduled Earnings/FDA event.
-}
-
 SCAN_ROUTING_CONFIG = {
     "daily_scan_limit": 4000,             # Maximum symbols to scan per nightly run
     "priority_scan_limit": 100,           # Top N symbols from ledger scanned first (by score)
@@ -879,7 +872,6 @@ def snapshot_configuration(logger_instance=None):
 
             # Portfolio Level
             "portfolio_risk_config": PORTFOLIO_RISK_CONFIG,
-            "portfolio_defense": PORTFOLIO_DEFENSE,
 
             # DSP & Regime
             "dsp_config": DSP_CONFIG,

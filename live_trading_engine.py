@@ -231,7 +231,7 @@ class LifecycleManager:
     """
     def __init__(self):
         self.stop_cfg = cfg.KINETIC_STOP_CONFIG
-        self.defense_cfg = getattr(cfg, 'PORTFOLIO_RISK_CONFIG', cfg.PORTFOLIO_DEFENSE)
+        self.defense_cfg = cfg.PORTFOLIO_RISK_CONFIG
         
     def manage_kinetic_stop(self, symbol, position, current_price, current_atr):
         """

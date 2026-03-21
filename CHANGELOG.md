@@ -1,5 +1,22 @@
 # Changelog
 
+## [2026-03-22] Fix M3: Remove duplicate PORTFOLIO_DEFENSE config
+
+### Problem
+`PORTFOLIO_DEFENSE` duplicated `zombie_trade_ttl_hours` and `event_horizon_buffer_days`
+from `PORTFOLIO_RISK_CONFIG`. Also contained `max_covariance_corr: 0.85` which no code
+ever reads (portfolio_risk.py uses `max_correlation: 0.80`).
+`LifecycleManager` always read `PORTFOLIO_RISK_CONFIG` — PORTFOLIO_DEFENSE was dead code.
+
+### Fix
+- `system_config.py`: Deleted `PORTFOLIO_DEFENSE` dict entirely
+- `system_config.py`: Removed `portfolio_defense` from `snapshot_configuration()`
+- `live_trading_engine.py`: `LifecycleManager.defense_cfg` reads `PORTFOLIO_RISK_CONFIG` directly (no fallback)
+- `event_horizon_buffer_days` remains in PORTFOLIO_RISK_CONFIG as placeholder for future earnings calendar feature
+
+### Tests
+- 181/181 pass
+
 ## [2026-03-21] Fix L6: Telegram command parsing — parts vs parts[0]
 
 ### Problem
