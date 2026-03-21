@@ -618,13 +618,23 @@ class StockHunter:
         max_vip_size = cfg.SCAN_ROUTING_CONFIG.get("max_vip_list_size", 50)
         merged_vip = merged_vip[:max_vip_size]
 
-        # ═══ BENCHMARK ALWAYS IN VIP (2026-03-19) ═══════════════════════
-        # DO NOT DELETE: SPY must always be in VIP for relative strength
-        # comparison in the live engine. Never remove it.
-        # ═══════════════════════════════════════════════════════════════════
+        # ═══ ALWAYS-IN-VIP: Benchmark + DEFAULT_TRAINING_SYMBOLS (2026-03-20) ═══
+        # DO NOT DELETE: These core symbols must ALWAYS be in VIP regardless
+        # of their ER score or master_score. They are the baseline stocks
+        # that the live engine monitors at all times. Without this, stocks
+        # like NVDA/AAPL get dropped when market is sideways (ER < 0.3).
+        # ═════════════════════════════════════════════════════════════════════
+        always_in_vip = getattr(cfg, 'DEFAULT_TRAINING_SYMBOLS',
+            ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD', 'NFLX', 'SPY'])
         benchmark = getattr(cfg, 'BENCHMARK_TICKER', 'SPY')
-        if benchmark not in merged_vip:
-            merged_vip.insert(0, benchmark)
+        if benchmark not in always_in_vip:
+            always_in_vip = [benchmark] + always_in_vip
+
+        # Add at the beginning of VIP, preserving order
+        for sym in reversed(always_in_vip):
+            if sym in merged_vip:
+                merged_vip.remove(sym)
+            merged_vip.insert(0, sym)
 
         self.watchlist = {"tickers": merged_vip, "last_updated": datetime.now().isoformat()}
         self._save_json(self.watchlist_file, self.watchlist)

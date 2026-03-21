@@ -1,5 +1,30 @@
 # Changelog
 
+## [2026-03-21] DEFAULT_TRAINING_SYMBOLS Always Pinned in VIP
+
+### Problem
+DEFAULT_TRAINING_SYMBOLS (AAPL, MSFT, NVDA, GOOGL, AMZN, META, TSLA, AMD,
+NFLX, SPY) were being dropped from VIP when their ER score was < 0.3 (Quick
+Reject filter). Only SPY was previously pinned. During sideways markets all
+liquid majors could vanish from the VIP list.
+
+### Fix — `stock_hunter.py: _update_daily_review_list()`
+- Replaced single-benchmark pin with `always_in_vip` list from `DEFAULT_TRAINING_SYMBOLS`
+- Benchmark (SPY) prepended to `always_in_vip` if not already present
+- All `always_in_vip` symbols re-inserted at position 0 (reversed, so SPY ends up first)
+- Existing duplicates removed before re-insertion to prevent repeats
+- Always-in symbols are inserted **after** the `max_vip_list_size` cap, so they never
+  count toward the limit and never evict each other
+
+### Result
+```
+BEFORE: ['SPY', 'NUGT', 'SGDM', 'DNTH', 'KGC']
+AFTER:  ['SPY', 'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD', 'NFLX', 'NUGT', 'SGDM', 'DNTH', 'KGC']
+```
+
+### Tests
+- All 164/164 master_validator tests pass
+
 ## [2026-03-20] run_all.bat — Single Launcher for Scanner + Live Engines
 
 ### Problem
