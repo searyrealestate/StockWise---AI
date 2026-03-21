@@ -12,7 +12,7 @@ were never created — causing `NameError` on the fallback lines (184-186).
 - Zero logic change — just a safety net initialization
 
 ### Tests
-- 173/173 pass
+- 174/174 pass
 
 ## [2026-03-21] notification_manager.py — Migrate to safe_json_io
 

@@ -2615,6 +2615,21 @@ class TestGen12Acceptance(unittest.TestCase):
         # NUGT (high score) should be in VIP
         assert 'NUGT' in vip, f"NUGT (score=84.9) should be in VIP. VIP={vip}"
 
+    def test_api_credentials_initialized_before_try(self):
+        """C2 Regression: ALPACA_KEY, ALPACA_SECRET, MASSIVE_API_KEY must exist on module
+        even if secrets.toml is missing. They should be None or str, never undefined."""
+        import system_config as cfg
+        for var_name in ['ALPACA_KEY', 'ALPACA_SECRET', 'MASSIVE_API_KEY']:
+            self.assertTrue(
+                hasattr(cfg, var_name),
+                f"{var_name} not defined in system_config — NameError risk on fallback lines"
+            )
+            val = getattr(cfg, var_name)
+            self.assertIsInstance(
+                val, (type(None), str),
+                f"{var_name} should be None or str, got {type(val)}"
+            )
+
     def test_notification_manager_uses_safe_io(self):
         """
         מטרה: לוודא ש-notification_manager לא משתמש ב-json.load/json.dump ישירות.
