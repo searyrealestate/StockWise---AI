@@ -2643,6 +2643,32 @@ class TestGen12Acceptance(unittest.TestCase):
             "CRITICAL: notification_manager does not use safe_json_io. " \
             "Raw json.load/dump can corrupt files. See CHANGELOG 2026-03-20."
 
+    def test_manage_positions_uses_feature_engine(self):
+        """M7 Regression: manage_open_positions must accept feature_engine param,
+        and main loop must pass fe to it — ensures ATR/er_slow/rsi are real, not fallback."""
+        import inspect
+        from live_trading_engine import LiveTradingEngine
+
+        # Check signature includes feature_engine
+        sig = inspect.signature(LiveTradingEngine.manage_open_positions)
+        param_names = list(sig.parameters.keys())
+        self.assertIn(
+            'feature_engine', param_names,
+            "manage_open_positions must accept feature_engine parameter"
+        )
+
+        # Check main loop passes fe in the call
+        source_path = os.path.join(os.path.dirname(__file__), 'live_trading_engine.py')
+        with open(source_path, 'r', encoding='utf-8') as f:
+            source = f.read()
+
+        # Find the call site — should include fe as third argument
+        self.assertRegex(
+            source,
+            r'manage_open_positions\(.*,.*,.*fe',
+            "Main loop must pass fe (FeatureEngine) to manage_open_positions"
+        )
+
     def test_portfolio_value_initialized_from_starting_capital(self):
         """C5 Regression: portfolio_value must be set on LiveTradingEngine from RISK_CONFIG,
         and starting_capital must be 5000 (not the old 25000 default)."""

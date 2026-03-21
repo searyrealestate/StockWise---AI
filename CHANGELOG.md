@@ -15,7 +15,7 @@ and regime classification were all based on wrong values.
 - Default `None` preserves backward compatibility for tests
 
 ### Tests
-- 175/175 pass
+- 176/176 pass
 
 ## [2026-03-21] Fix C5: Initialize portfolio_value + set starting_capital to 5000
 
