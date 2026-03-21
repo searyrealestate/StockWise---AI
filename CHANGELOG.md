@@ -1,5 +1,22 @@
 # Changelog
 
+## [2026-03-21] Fix M7: Run FeatureEngine in manage_open_positions
+
+### Problem
+`manage_open_positions()` loaded raw OHLCV data without running FeatureEngine.
+ATR, er_slow, and rsi were never calculated — all fell back to fictional defaults
+(ATR=1% of price, er_slow=0.5, rsi=50). Kinetic Stop phases, PHASE_PAUSE detection,
+and regime classification were all based on wrong values.
+
+### Fix — `live_trading_engine.py`
+- Added `feature_engine=None` parameter to `manage_open_positions()` signature
+- After `get_stock_data()`, runs `feature_engine.calculate_features()` with DSP+volatility+momentum
+- Updated call site in main loop to pass `fe` instance
+- Default `None` preserves backward compatibility for tests
+
+### Tests
+- 175/175 pass
+
 ## [2026-03-21] Fix C5: Initialize portfolio_value + set starting_capital to 5000
 
 ### Problem

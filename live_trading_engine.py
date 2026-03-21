@@ -649,7 +649,7 @@ class LiveTradingEngine:
             self.notifier.send_message(msg)
         logger.info(f"Daily position summary sent: {len(self.positions)} positions")
 
-    def manage_open_positions(self, market_data, agent1_router):
+    def manage_open_positions(self, market_data, agent1_router, feature_engine=None):
         if not self.positions:
             logger.debug("No open positions to manage.")
             return
@@ -660,7 +660,11 @@ class LiveTradingEngine:
             try:
                 df = market_data.get_stock_data(symbol, days_back=20)
                 if df is None or df.empty: continue
-                    
+
+                # M7 Fix: Calculate indicators so ATR, er_slow, rsi are real values
+                if feature_engine is not None:
+                    df = feature_engine.calculate_features(df, strategy_config={"active_indicators": ["dsp", "volatility", "momentum"]})
+
                 last = df.iloc[-1]
                 current_price = last['close']
                 current_atr = last.get('atr', current_price * 0.01)
@@ -844,7 +848,7 @@ if __name__ == "__main__":
 
                 if open_positions_count > 0:
                     logger.info(f"Managing {open_positions_count} open positions...")
-                    live_engine.manage_open_positions(market_data, orchestra.router)
+                    live_engine.manage_open_positions(market_data, orchestra.router, fe)
             except Exception as e:
                 logger.error(f"Error checking positions: {e}")
 
