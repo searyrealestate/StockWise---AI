@@ -624,11 +624,13 @@ class StockHunter:
         # that the live engine monitors at all times. Without this, stocks
         # like NVDA/AAPL get dropped when market is sideways (ER < 0.3).
         # ═════════════════════════════════════════════════════════════════════
-        always_in_vip = getattr(cfg, 'DEFAULT_TRAINING_SYMBOLS',
-            ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD', 'NFLX', 'SPY'])
+        always_in_vip = list(getattr(cfg, 'DEFAULT_TRAINING_SYMBOLS',
+            ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD', 'NFLX', 'SPY']))
         benchmark = getattr(cfg, 'BENCHMARK_TICKER', 'SPY')
-        if benchmark not in always_in_vip:
-            always_in_vip = [benchmark] + always_in_vip
+        # Ensure benchmark is FIRST so the reversed-insert loop places it at index 0
+        if benchmark in always_in_vip:
+            always_in_vip.remove(benchmark)
+        always_in_vip.insert(0, benchmark)
 
         # Add at the beginning of VIP, preserving order
         for sym in reversed(always_in_vip):

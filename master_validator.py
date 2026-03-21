@@ -2348,6 +2348,151 @@ class TestGen12Acceptance(unittest.TestCase):
         assert hunter._calculate_relative_strength(stock_df, pd.DataFrame()) == {}, \
             "RS should return {} for empty benchmark"
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # DEFAULT SYMBOLS VIP PINNING TESTS (2026-03-20)
+    # DO NOT DELETE: Ensures DEFAULT_TRAINING_SYMBOLS always stay in VIP
+    # even when ER score is low. See CHANGELOG 2026-03-20.
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def test_default_symbols_pinned_in_vip_update(self):
+        """Verify _update_daily_review_list pins all DEFAULT_TRAINING_SYMBOLS."""
+        import inspect
+        from stock_hunter import StockHunter
+        source = inspect.getsource(StockHunter._update_daily_review_list)
+        assert 'DEFAULT_TRAINING_SYMBOLS' in source, \
+            "CRITICAL: DEFAULT_TRAINING_SYMBOLS not referenced in _update_daily_review_list. " \
+            "Core symbols will be dropped when ER < 0.3. See CHANGELOG 2026-03-20."
+        assert 'always_in_vip' in source, \
+            "CRITICAL: always_in_vip block missing from _update_daily_review_list. " \
+            "See CHANGELOG 2026-03-20."
+
+    def test_default_symbols_survive_low_er(self):
+        """Unit test: DEFAULT symbols stay in VIP even with master_score=0."""
+        from stock_hunter import StockHunter
+        from unittest.mock import MagicMock
+        from datetime import datetime
+        import system_config as cfg
+        import json
+        import tempfile
+        import os
+
+        hunter = StockHunter.__new__(StockHunter)
+        hunter.dm = MagicMock()
+        hunter.fe = MagicMock()
+        hunter.orchestra = MagicMock()
+
+        # Temp file for VIP
+        tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump({"tickers": [], "last_updated": ""}, tmp)
+        tmp.close()
+
+        hunter.watchlist_file = tmp.name
+        hunter.vip_list_file = tmp.name
+        hunter.ledger_file = tmp.name
+        hunter.watchlist = {"tickers": []}
+
+        # Ledger: DEFAULT symbols all have low scores (ER rejected)
+        # Plus one high-scoring symbol
+        hunter.ledger = {
+            "AAPL": {"master_score": 0.0, "tier": 3, "regime": "CHOP",
+                      "state": {}, "er_score": 0.1, "tech_score": 0,
+                      "ai_score": 50, "last_scanned": datetime.now().isoformat()},
+            "NVDA": {"master_score": 0.0, "tier": 3, "regime": "CHOP",
+                      "state": {}, "er_score": 0.05, "tech_score": 0,
+                      "ai_score": 50, "last_scanned": datetime.now().isoformat()},
+            "SPY":  {"master_score": 0.0, "tier": 3, "regime": "CHOP",
+                      "state": {}, "er_score": 0.2, "tech_score": 0,
+                      "ai_score": 50, "last_scanned": datetime.now().isoformat()},
+            "NUGT": {"master_score": 84.9, "tier": 1, "regime": "CHOP",
+                      "state": {}, "er_score": 0.5, "tech_score": 80,
+                      "ai_score": 96, "last_scanned": datetime.now().isoformat()},
+        }
+
+        hunter._update_daily_review_list()
+
+        # Read saved VIP
+        with open(tmp.name, 'r') as f:
+            saved = json.load(f)
+        vip = saved.get("tickers", [])
+        os.unlink(tmp.name)
+
+        # All DEFAULT symbols must be present
+        defaults = getattr(cfg, 'DEFAULT_TRAINING_SYMBOLS',
+            ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD', 'NFLX', 'SPY'])
+
+        for sym in ['SPY', 'AAPL', 'NVDA']:
+            assert sym in vip, \
+                f"{sym} missing from VIP despite being in DEFAULT_TRAINING_SYMBOLS. " \
+                f"VIP={vip}. See CHANGELOG 2026-03-20."
+
+        # SPY must be first
+        assert vip[0] == 'SPY', \
+            f"SPY must be first in VIP, got {vip[0]}. See CHANGELOG 2026-03-20."
+
+        # High-scoring symbol (NUGT) must also be present
+        assert 'NUGT' in vip, \
+            f"NUGT (master=84.9) should be in VIP but missing. VIP={vip}"
+
+    def test_vip_order_defaults_before_discovered(self):
+        """Unit test: DEFAULT symbols appear before discovered symbols in VIP."""
+        from stock_hunter import StockHunter
+        from unittest.mock import MagicMock
+        from datetime import datetime
+        import system_config as cfg
+        import json
+        import tempfile
+        import os
+
+        hunter = StockHunter.__new__(StockHunter)
+        hunter.dm = MagicMock()
+        hunter.fe = MagicMock()
+        hunter.orchestra = MagicMock()
+
+        tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump({"tickers": [], "last_updated": ""}, tmp)
+        tmp.close()
+
+        hunter.watchlist_file = tmp.name
+        hunter.vip_list_file = tmp.name
+        hunter.ledger_file = tmp.name
+        hunter.watchlist = {"tickers": []}
+
+        hunter.ledger = {
+            "AAPL": {"master_score": 10.0, "tier": 3, "regime": "CHOP",
+                      "state": {}, "er_score": 0.1, "tech_score": 0,
+                      "ai_score": 50, "last_scanned": datetime.now().isoformat()},
+            "SPY":  {"master_score": 5.0, "tier": 3, "regime": "CHOP",
+                      "state": {}, "er_score": 0.1, "tech_score": 0,
+                      "ai_score": 50, "last_scanned": datetime.now().isoformat()},
+            "NUGT": {"master_score": 84.9, "tier": 1, "regime": "CHOP",
+                      "state": {}, "er_score": 0.5, "tech_score": 80,
+                      "ai_score": 96, "last_scanned": datetime.now().isoformat()},
+            "KGC":  {"master_score": 75.0, "tier": 2, "regime": "CHOP",
+                      "state": {}, "er_score": 0.4, "tech_score": 70,
+                      "ai_score": 89, "last_scanned": datetime.now().isoformat()},
+        }
+
+        hunter._update_daily_review_list()
+
+        with open(tmp.name, 'r') as f:
+            saved = json.load(f)
+        vip = saved.get("tickers", [])
+        os.unlink(tmp.name)
+
+        # All defaults that are in VIP should come before discovered symbols
+        defaults = getattr(cfg, 'DEFAULT_TRAINING_SYMBOLS',
+            ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD', 'NFLX', 'SPY'])
+
+        default_positions = [vip.index(s) for s in defaults if s in vip]
+        discovered = [s for s in vip if s not in defaults]
+        if discovered and default_positions:
+            max_default_pos = max(default_positions)
+            first_discovered_pos = vip.index(discovered[0])
+            assert max_default_pos < first_discovered_pos, \
+                f"Default symbols should come before discovered. " \
+                f"Last default at {max_default_pos}, first discovered at {first_discovered_pos}. " \
+                f"VIP={vip}. See CHANGELOG 2026-03-20."
+
 
 def run_audit():
     """

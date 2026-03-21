@@ -1,5 +1,24 @@
 # Changelog
 
+## [2026-03-21] DEFAULT_TRAINING_SYMBOLS VIP Pinning — Regression Tests
+
+### Added — `master_validator.py`
+3 new regression tests (total now 167/167):
+- `test_default_symbols_pinned_in_vip_update` — structural: verifies `DEFAULT_TRAINING_SYMBOLS`
+  and `always_in_vip` are referenced in `_update_daily_review_list` source
+- `test_default_symbols_survive_low_er` — unit test: all DEFAULT symbols appear in VIP
+  even when every ER score is below 0.3 (simulates sideways market ER rejection); also
+  verifies SPY is first and high-scoring NUGT is not lost
+- `test_vip_order_defaults_before_discovered` — unit test: DEFAULT symbols all precede
+  any discovered (non-default) symbols in the final VIP list
+
+### Also fixed — `stock_hunter.py: _update_daily_review_list()`
+Root cause of `test_default_symbols_survive_low_er` failure: benchmark was only *appended*
+if absent from `always_in_vip`, but `DEFAULT_TRAINING_SYMBOLS` has SPY at the end. The
+reversed-insert loop puts index-0 of `always_in_vip` at VIP position 0, so AAPL (index 0)
+was winning. Fix: always remove-then-prepend benchmark so it occupies index 0 and lands
+first after the loop.
+
 ## [2026-03-21] DEFAULT_TRAINING_SYMBOLS Always Pinned in VIP
 
 ### Problem
