@@ -2643,6 +2643,32 @@ class TestGen12Acceptance(unittest.TestCase):
             "CRITICAL: notification_manager does not use safe_json_io. " \
             "Raw json.load/dump can corrupt files. See CHANGELOG 2026-03-20."
 
+    def test_qty_uses_risk_actuary_not_hardcoded(self):
+        """M1 Regression: qty must be calculated by RiskActuary, not hardcoded as 10."""
+        source_path = os.path.join(os.path.dirname(__file__), 'live_trading_engine.py')
+        with open(source_path, 'r', encoding='utf-8') as f:
+            source = f.read()
+
+        # Must not have hardcoded qty: 10 in template pipeline
+        # (legacy pipeline may still have qty default — only check template section)
+        template_section = source.split('if pipeline_mode in')[1].split('if pipeline_mode in')[0] if 'if pipeline_mode in' in source else source
+        self.assertNotIn(
+            '"qty": 10', template_section,
+            "Template pipeline must not have hardcoded qty=10"
+        )
+
+        # Must use calculate_size
+        self.assertIn(
+            'calculate_size', source,
+            "Must call RiskActuary.calculate_size() for position sizing"
+        )
+
+        # Must import RiskActuary
+        self.assertIn(
+            'RiskActuary', source,
+            "Must import RiskActuary from strategy_engine"
+        )
+
     def test_manage_positions_uses_feature_engine(self):
         """M7 Regression: manage_open_positions must accept feature_engine param,
         and main loop must pass fe to it — ensures ATR/er_slow/rsi are real, not fallback."""

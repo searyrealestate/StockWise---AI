@@ -16,7 +16,7 @@ A $800 stock (NVDA) = $8,000 per position. A $3 stock = $30. No risk normalizati
 - RiskActuary uses `RISK_CONFIG["starting_capital"]` (5000) and `max_daily_loss_pct` (1.5%/2 per trade)
 
 ### Tests
-- 176/176 pass
+- 177/177 pass
 
 ## [2026-03-21] Fix M7: Run FeatureEngine in manage_open_positions
 
