@@ -18,7 +18,7 @@ is 5000.
 - Single source of truth: one value in RISK_CONFIG, read by both RiskActuary and portfolio risk gate
 
 ### Tests
-- 174/174 pass
+- 175/175 pass
 
 ## [2026-03-21] Fix C2: Initialize API credential variables before try block
 

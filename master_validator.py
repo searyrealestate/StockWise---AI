@@ -2643,6 +2643,31 @@ class TestGen12Acceptance(unittest.TestCase):
             "CRITICAL: notification_manager does not use safe_json_io. " \
             "Raw json.load/dump can corrupt files. See CHANGELOG 2026-03-20."
 
+    def test_portfolio_value_initialized_from_starting_capital(self):
+        """C5 Regression: portfolio_value must be set on LiveTradingEngine from RISK_CONFIG,
+        and starting_capital must be 5000 (not the old 25000 default)."""
+        import system_config as cfg
+
+        # Check starting_capital is 5000
+        self.assertEqual(
+            cfg.RISK_CONFIG["starting_capital"], 5000.0,
+            "starting_capital should be 5000.0, not 25000.0"
+        )
+
+        # Check LiveTradingEngine sets portfolio_value
+        import ast
+        source_path = os.path.join(os.path.dirname(__file__), 'live_trading_engine.py')
+        with open(source_path, 'r', encoding='utf-8') as f:
+            source = f.read()
+        self.assertIn(
+            'self.portfolio_value', source,
+            "LiveTradingEngine must define self.portfolio_value in __init__"
+        )
+        self.assertIn(
+            'RISK_CONFIG', source.split('self.portfolio_value')[1][:100],
+            "portfolio_value must be sourced from RISK_CONFIG"
+        )
+
     def test_data_provider_explicitly_set(self):
         """
         מטרה: לוודא ש-DATA_PROVIDER מוגדר במפורש ב-system_config.
