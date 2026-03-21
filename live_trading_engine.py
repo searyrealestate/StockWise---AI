@@ -115,7 +115,7 @@ class TradeJournal:
                 if df_snapshot is not None and not df_snapshot.empty:
                     last = df_snapshot.iloc[-1]
                     # Logic: If Close > SMA50 -> UP, Else DOWN
-                    sma50 = last.get('SMA_50', last['close'])
+                    sma50 = last.get('sma_50', last['close'])
                     if last['close'] > sma50:
                         trend_pre = "UP"
                     else:

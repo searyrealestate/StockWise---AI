@@ -1,5 +1,23 @@
 # Changelog
 
+## [2026-03-21] Fix M4: SMA_50 uppercase + permanent lowercase enforcement test
+
+### Problem
+`TradeJournal.log_signal()` used `last.get('SMA_50')` — uppercase.
+FeatureEngine creates `sma_50` — lowercase. The get() always returned fallback
+(close price), making trend prediction always wrong.
+
+### Fix — `live_trading_engine.py`
+- Changed `'SMA_50'` to `'sma_50'` on line 118
+
+### Test — `master_validator.py`
+- `test_no_uppercase_indicator_references`: scans 9 production .py files for
+  uppercase indicator references in .get() or bracket access. Catches future
+  regressions permanently — any new uppercase reference will break the test.
+
+### Tests
+- 179/179 pass
+
 ## [2026-03-21] Fix M2 Part 2: Add derived indicators + clean ML_FEATURES
 
 ### Problem

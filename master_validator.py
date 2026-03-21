@@ -2643,6 +2643,91 @@ class TestGen12Acceptance(unittest.TestCase):
             "CRITICAL: notification_manager does not use safe_json_io. " \
             "Raw json.load/dump can corrupt files. See CHANGELOG 2026-03-20."
 
+    def test_no_uppercase_indicator_references(self):
+        """M4 Regression: All indicator column references must be lowercase.
+        FeatureEngine outputs lowercase only. Uppercase references silently fail."""
+        import re
+
+        # Uppercase patterns that should never appear in .get() or [''] access
+        # These are indicator families that FeatureEngine outputs as lowercase
+        bad_patterns = [
+            r"\.get\(['\"]SMA_",
+            r"\.get\(['\"]EMA_",
+            r"\.get\(['\"]RSI",
+            r"\.get\(['\"]MACD_",
+            r"\.get\(['\"]ATR",
+            r"\.get\(['\"]ADX",
+            r"\.get\(['\"]BB_",
+            r"\.get\(['\"]STOCH",
+            r"\.get\(['\"]KC",
+            r"\[['\"]SMA_",
+            r"\[['\"]EMA_",
+            r"\[['\"]RSI_",
+            r"\[['\"]ATR_",
+            r"\[['\"]ADX_",
+        ]
+
+        combined = '|'.join(bad_patterns)
+
+        # Scan all production Python files (exclude tests, __pycache__)
+        project_dir = os.path.dirname(__file__)
+        py_files = [
+            'live_trading_engine.py', 'strategy_engine.py', 'stock_hunter.py',
+            'feature_engine.py', 'template_matcher.py', 'portfolio_risk.py',
+            'notification_manager.py', 'data_source_manager.py', 'setup_templates.py'
+        ]
+
+        violations = []
+        for filename in py_files:
+            filepath = os.path.join(project_dir, filename)
+            if not os.path.exists(filepath):
+                continue
+            with open(filepath, 'r', encoding='utf-8') as f:
+                for i, line in enumerate(f, 1):
+                    # Skip comments and docstrings
+                    stripped = line.strip()
+                    if stripped.startswith('#') or stripped.startswith('"""') or stripped.startswith("'''"):
+                        continue
+                    if re.search(combined, line):
+                        violations.append(f"{filename}:{i}: {stripped[:80]}")
+
+        self.assertEqual(
+            violations, [],
+            f"Uppercase indicator references found (must be lowercase):\n" +
+            "\n".join(violations)
+        )
+
+    def test_ml_features_alias_resolution(self):
+        """M2 Regression: FeatureEngine must auto-create ALL ML_FEATURES aliases.
+        Every name in ML_FEATURES must exist in DataFrame after calculate_features()."""
+        import system_config as cfg
+        from feature_engine import FeatureEngine
+
+        fe = FeatureEngine()
+
+        # Build minimal synthetic DataFrame (250 rows for SMA/RSI convergence)
+        np.random.seed(42)
+        n = 250
+        close = 100 + np.cumsum(np.random.randn(n) * 0.5)
+        df = pd.DataFrame({
+            'open': close - np.random.rand(n) * 0.3,
+            'high': close + np.random.rand(n) * 0.5,
+            'low': close - np.random.rand(n) * 0.5,
+            'close': close,
+            'volume': np.random.randint(100000, 1000000, n).astype(float)
+        })
+
+        df = fe.calculate_features(df, strategy_config={"active_indicators": ["all"]})
+
+        # Every ML_FEATURES entry must exist in the DataFrame
+        ml_features = getattr(cfg, 'ML_FEATURES', [])
+        missing = [col for col in ml_features if col not in df.columns]
+
+        self.assertEqual(
+            missing, [],
+            f"ML_FEATURES columns missing from DataFrame after calculate_features(): {missing}"
+        )
+
     def test_qty_uses_risk_actuary_not_hardcoded(self):
         """M1 Regression: qty must be calculated by RiskActuary, not hardcoded as 10."""
         source_path = os.path.join(os.path.dirname(__file__), 'live_trading_engine.py')
