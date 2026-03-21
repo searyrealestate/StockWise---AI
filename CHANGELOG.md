@@ -1,5 +1,24 @@
 # Changelog
 
+## [2026-03-21] notification_manager.py — Migrate to safe_json_io
+
+### Problem
+`sync_trade_status_from_telegram()` used raw `json.load` / `json.dump` for
+`trade_journal.json`. A crash mid-write would truncate the file and corrupt all trade history.
+
+### Fix — `notification_manager.py`
+- Added `from safe_json_io import safe_json_read, safe_json_write`
+- Replaced `open + json.load` with `safe_json_read(path, default={})`
+- Replaced `open + json.dump` with `safe_json_write(path, journal)`
+- Removed the now-redundant `os.path.exists()` guard (safe_json_read handles missing files)
+- Fixed residual indentation from the old nested `with open` block
+
+### Test — `master_validator.py`
+- `test_notification_manager_uses_safe_io`: inspects source for `safe_json_io` / `safe_json_read`
+
+### Tests
+- 173/173 pass
+
 ## [2026-03-21] Add Explicit DATA_PROVIDER=ALPACA + Regression Test
 
 ### Problem

@@ -18,6 +18,7 @@ import system_config as cfg
 from datetime import datetime
 import os
 import json
+from safe_json_io import safe_json_read, safe_json_write
 
 logger = logging.getLogger("NotificationManager")
 
@@ -71,20 +72,15 @@ class NotificationManager:
         
         journal_path = getattr(cfg, 'TRADE_JOURNAL_PATH', 'data/trade_journal.json')
         try:
-            if os.path.exists(journal_path):
-                with open(journal_path, 'r', encoding='utf-8') as f:
-                    journal = json.load(f)
-                
-                # Check if the ticker exists and has history
-                if ticker in journal and len(journal[ticker]) > 0:
-                    # Overwrite the status of the most recent trade entry for this ticker
-                    journal[ticker][-1]['status'] = new_status
-                    
-                    with open(journal_path, 'w', encoding='utf-8') as f:
-                        json.dump(journal, f, indent=4)
-                        
-                    logger.info(f"Shadow Ledger manually synced via Telegram: [{ticker}] marked as {new_status}")
-                    return True
+            journal = safe_json_read(journal_path, default={})
+
+            # Check if the ticker exists and has history
+            if ticker in journal and len(journal[ticker]) > 0:
+                # Overwrite the status of the most recent trade entry for this ticker
+                journal[ticker][-1]['status'] = new_status
+                safe_json_write(journal_path, journal)
+                logger.info(f"Shadow Ledger manually synced via Telegram: [{ticker}] marked as {new_status}")
+                return True
             return False
         except Exception as e:
             logger.error(f"Failed to update ledger from Telegram: {str(e)}")

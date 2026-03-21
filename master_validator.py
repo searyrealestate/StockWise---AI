@@ -2615,6 +2615,19 @@ class TestGen12Acceptance(unittest.TestCase):
         # NUGT (high score) should be in VIP
         assert 'NUGT' in vip, f"NUGT (score=84.9) should be in VIP. VIP={vip}"
 
+    def test_notification_manager_uses_safe_io(self):
+        """
+        מטרה: לוודא ש-notification_manager לא משתמש ב-json.load/json.dump ישירות.
+        כתיבה לא אטומית יכולה להשחית את trade_journal.json.
+        """
+        import inspect
+        import notification_manager
+        source = inspect.getsource(notification_manager)
+        # Must import safe_json_io
+        assert 'safe_json_io' in source or 'safe_json_read' in source, \
+            "CRITICAL: notification_manager does not use safe_json_io. " \
+            "Raw json.load/dump can corrupt files. See CHANGELOG 2026-03-20."
+
     def test_data_provider_explicitly_set(self):
         """
         מטרה: לוודא ש-DATA_PROVIDER מוגדר במפורש ב-system_config.
