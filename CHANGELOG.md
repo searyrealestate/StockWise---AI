@@ -1,5 +1,39 @@
 # Changelog
 
+## [2026-03-21] Unify Symbol Lists + SPY-Only VIP Pin + Fix Comments
+
+### Problem
+- Two separate symbol lists (`DEFAULT_TRAINING_SYMBOLS` + WATCHLIST seed) were out of sync
+- All DEFAULT_TRAINING_SYMBOLS were permanently pinned in VIP (added 2026-03-20) — too aggressive;
+  normal symbols should enter/exit via scanner score, not be permanently locked
+- SCAN_ROUTING_CONFIG comments described wrong values (e.g. "top 50" for a 100-limit field)
+
+### Changes
+
+#### `system_config.py`
+- **Unified symbol list**: `DEFAULT_TRAINING_SYMBOLS` is now the single source of truth (13 symbols,
+  SPY first): `SPY, NVDA, MSFT, AAPL, AMZN, META, GOOGL, TSLA, AMD, NFLX, BRK-B, LLY, AVGO`
+- Moved `DEFAULT_TRAINING_SYMBOLS` **before** `load_dynamic_watchlist()` so it is defined first
+- `load_dynamic_watchlist()` fallback changed from hardcoded list → `return list(DEFAULT_TRAINING_SYMBOLS)`
+- Old duplicate `DEFAULT_TRAINING_SYMBOLS` definition (line ~574) removed
+- `SCAN_ROUTING_CONFIG` comments corrected to match actual field values
+
+#### `stock_hunter.py: _update_daily_review_list()`
+- `always_in_vip` block removed — only SPY (benchmark) is permanently pinned
+- Reverts to clean SPY-only pin: remove-then-insert(0) pattern
+- All other symbols (including AAPL, NVDA etc.) follow normal VIP rules:
+  enter via scanner score ≥ 75, exit after 210 days TTL
+
+#### `master_validator.py` — 4 tests updated
+- `test_spy_in_seed_watchlist`: now checks `DEFAULT_TRAINING_SYMBOLS` contains SPY and
+  `load_dynamic_watchlist` source references `DEFAULT_TRAINING_SYMBOLS`
+- `test_default_symbols_pinned_in_vip_update`: now asserts `always_in_vip` is NOT in source
+- `test_default_symbols_survive_low_er`: only asserts SPY is pinned (not AAPL/NVDA)
+- `test_vip_order_defaults_before_discovered`: checks SPY first + scored symbols present
+
+### Tests
+- All 167/167 master_validator tests pass
+
 ## [2026-03-21] DEFAULT_TRAINING_SYMBOLS VIP Pinning — Regression Tests
 
 ### Added — `master_validator.py`

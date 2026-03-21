@@ -203,6 +203,19 @@ DATA_START_DATE = "2023-01-01" # Fixed start date for consistency in backtesting
 DATA_END_DATE = None # None implies 'Now' or 'Present' in most data fetchers
 
 # --- 3. TRADING TARGETS ---
+# ═══ CORE SYMBOL LIST (2026-03-20) ═══════════════════════════════════
+# DO NOT DELETE: Single source of truth for initial symbols.
+# Used as: (1) VIP fallback on first run, (2) WATCHLIST seed for scanner
+# priority queue, (3) AI training baseline.
+# SPY must always be first — it's the benchmark for Relative Strength.
+# After first scan, VIP is managed by the scanner. Symbols exit VIP
+# after 210 days without recommendation (TTL in SCAN_ROUTING_CONFIG).
+# ═════════════════════════════════════════════════════════════════════
+DEFAULT_TRAINING_SYMBOLS = [
+    'SPY', 'NVDA', 'MSFT', 'AAPL', 'AMZN', 'META', 'GOOGL',
+    'TSLA', 'AMD', 'NFLX', 'BRK-B', 'LLY', 'AVGO'
+]
+
 # Dynamic Loading Wrapper for the Watchlist
 def load_dynamic_watchlist():
     """Loads the active watchlist from JSON, falls back to seed list."""
@@ -218,8 +231,8 @@ def load_dynamic_watchlist():
         except:
             # If read fails, fail silently and proceed to fallback
             pass
-    # Fallback Seed List (Top 10 S&P 500 by weight) - Used if no dynamic list found
-    return ["SPY", "NVDA", "MSFT", "AAPL", "AMZN", "META", "GOOGL", "TSLA", "BRK-B", "LLY", "AVGO"]
+    # Fallback: use DEFAULT_TRAINING_SYMBOLS as the seed list
+    return list(DEFAULT_TRAINING_SYMBOLS)
 
 # Global Variable WATCHLIST now calls the function to load the latest list
 WATCHLIST = load_dynamic_watchlist()
@@ -459,15 +472,14 @@ PORTFOLIO_DEFENSE = {
 }
 
 SCAN_ROUTING_CONFIG = {
-    # The Multi-Level Feedback Queue (MLFQ). This tells the Nightly Scanner how to allocate CPU power.
-    "daily_scan_limit": 4000,             # We check 500 standard stocks sequentially every night to find new blood.
-    "priority_scan_limit": 100,           # We check the top 50 hottest stocks first, every single night.
-    "max_daily_review_stocks": 10,        # The absolute top 5 stocks are promoted to the active intraday watchlist.
-    "min_vip_score_threshold": 75.0,      # A target must hit this baseline score to even be considered for VIP.
-    "max_days_untraded_on_watchlist": 210, # If a stock sits on the VIP list for 7 months doing nothing, we throw it in the garbage.
-    "max_vip_list_size": 50,             # Maximum symbols in the cumulative VIP list (prevents live engine overload)
-    "weight_score_mult": 0.7,            # 70% of tomorrow's scan priority is based on the DSP Score.
-    "weight_volatility_mult": 0.3        # 30% of tomorrow's scan priority is based on raw volatility.
+    "daily_scan_limit": 4000,             # Maximum symbols to scan per nightly run
+    "priority_scan_limit": 100,           # Top N symbols from ledger scanned first (by score)
+    "max_daily_review_stocks": 10,        # Top 10 stocks promoted to VIP list
+    "min_vip_score_threshold": 75.0,      # Minimum master_score to qualify for VIP
+    "max_days_untraded_on_watchlist": 210, # TTL: symbols exit VIP after 7 months without recommendation
+    "max_vip_list_size": 50,              # Maximum symbols in cumulative VIP list
+    "weight_score_mult": 0.7,             # 70% of scan priority = DSP Score
+    "weight_volatility_mult": 0.3         # 30% of scan priority = raw volatility
 }
 
 # Mandatory Structural Templates: run on every stock before any trading analysis.
@@ -569,10 +581,6 @@ PARAM_RANGES = {
     "close_above_ref": [["bb_upper"], ["sma_50"], ["ema_12"]],
     "close_below_ref": [["bb_lower"], ["sma_50"]],
 }
-
-# Default symbols for AI training when scanner results are not available
-DEFAULT_TRAINING_SYMBOLS = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN',
-                             'META', 'TSLA', 'AMD', 'NFLX', 'SPY']
 
 # Relative Strength Configuration
 RELATIVE_STRENGTH_CONFIG = {

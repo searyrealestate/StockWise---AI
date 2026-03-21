@@ -2222,16 +2222,21 @@ class TestGen12Acceptance(unittest.TestCase):
             "Relative Strength requires S&P500 benchmark. See CHANGELOG 2026-03-19."
 
     def test_spy_in_seed_watchlist(self):
-        """Verify SPY is in the seed WATCHLIST fallback."""
+        """Verify SPY is in DEFAULT_TRAINING_SYMBOLS (unified seed list) and load_dynamic_watchlist uses it.
+        Updated 2026-03-21: fallback is now list(DEFAULT_TRAINING_SYMBOLS) — no literal 'SPY' in function source."""
         import system_config as cfg
-        watchlist = cfg.WATCHLIST
-        # Also check the fallback seed directly
-        from system_config import load_dynamic_watchlist
         import inspect
+        # SPY must be in DEFAULT_TRAINING_SYMBOLS (single source of truth)
+        defaults = getattr(cfg, 'DEFAULT_TRAINING_SYMBOLS', [])
+        assert 'SPY' in defaults, \
+            "CRITICAL: SPY missing from DEFAULT_TRAINING_SYMBOLS. " \
+            "See CHANGELOG 2026-03-21."
+        # load_dynamic_watchlist fallback must reference DEFAULT_TRAINING_SYMBOLS
+        from system_config import load_dynamic_watchlist
         source = inspect.getsource(load_dynamic_watchlist)
-        assert 'SPY' in source, \
-            "CRITICAL: SPY missing from seed watchlist fallback in load_dynamic_watchlist. " \
-            "See CHANGELOG 2026-03-19."
+        assert 'DEFAULT_TRAINING_SYMBOLS' in source, \
+            "CRITICAL: load_dynamic_watchlist fallback does not reference DEFAULT_TRAINING_SYMBOLS. " \
+            "See CHANGELOG 2026-03-21."
 
     def test_relative_strength_config_exists(self):
         """Verify RELATIVE_STRENGTH_CONFIG exists with required keys."""
@@ -2355,23 +2360,25 @@ class TestGen12Acceptance(unittest.TestCase):
     # ═══════════════════════════════════════════════════════════════════════
 
     def test_default_symbols_pinned_in_vip_update(self):
-        """Verify _update_daily_review_list pins all DEFAULT_TRAINING_SYMBOLS."""
+        """Verify _update_daily_review_list pins ONLY the benchmark (SPY), not all DEFAULT_TRAINING_SYMBOLS.
+        Updated 2026-03-21: always_in_vip block removed; only SPY is permanently pinned."""
         import inspect
         from stock_hunter import StockHunter
         source = inspect.getsource(StockHunter._update_daily_review_list)
-        assert 'DEFAULT_TRAINING_SYMBOLS' in source, \
-            "CRITICAL: DEFAULT_TRAINING_SYMBOLS not referenced in _update_daily_review_list. " \
-            "Core symbols will be dropped when ER < 0.3. See CHANGELOG 2026-03-20."
-        assert 'always_in_vip' in source, \
-            "CRITICAL: always_in_vip block missing from _update_daily_review_list. " \
-            "See CHANGELOG 2026-03-20."
+        assert 'BENCHMARK_TICKER' in source or 'benchmark' in source.lower(), \
+            "CRITICAL: benchmark pin missing from _update_daily_review_list. " \
+            "SPY must always be first in VIP. See CHANGELOG 2026-03-21."
+        assert 'always_in_vip' not in source, \
+            "CRITICAL: always_in_vip block found — it was removed in 2026-03-21. " \
+            "Only SPY is permanently pinned; DEFAULT_TRAINING_SYMBOLS follow normal VIP rules. " \
+            "See CHANGELOG 2026-03-21."
 
     def test_default_symbols_survive_low_er(self):
-        """Unit test: DEFAULT symbols stay in VIP even with master_score=0."""
+        """Unit test: Only SPY (benchmark) is pinned in VIP; other DEFAULT symbols follow normal rules.
+        Updated 2026-03-21: only SPY is guaranteed; AAPL/NVDA with score=0 are NOT pinned."""
         from stock_hunter import StockHunter
         from unittest.mock import MagicMock
         from datetime import datetime
-        import system_config as cfg
         import json
         import tempfile
         import os
@@ -2416,29 +2423,23 @@ class TestGen12Acceptance(unittest.TestCase):
         vip = saved.get("tickers", [])
         os.unlink(tmp.name)
 
-        # All DEFAULT symbols must be present
-        defaults = getattr(cfg, 'DEFAULT_TRAINING_SYMBOLS',
-            ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD', 'NFLX', 'SPY'])
-
-        for sym in ['SPY', 'AAPL', 'NVDA']:
-            assert sym in vip, \
-                f"{sym} missing from VIP despite being in DEFAULT_TRAINING_SYMBOLS. " \
-                f"VIP={vip}. See CHANGELOG 2026-03-20."
-
-        # SPY must be first
+        # SPY must be present and first (benchmark pin)
+        assert 'SPY' in vip, \
+            f"SPY missing from VIP — benchmark must always be pinned. " \
+            f"VIP={vip}. See CHANGELOG 2026-03-21."
         assert vip[0] == 'SPY', \
-            f"SPY must be first in VIP, got {vip[0]}. See CHANGELOG 2026-03-20."
+            f"SPY must be first in VIP, got {vip[0]}. See CHANGELOG 2026-03-21."
 
         # High-scoring symbol (NUGT) must also be present
         assert 'NUGT' in vip, \
             f"NUGT (master=84.9) should be in VIP but missing. VIP={vip}"
 
     def test_vip_order_defaults_before_discovered(self):
-        """Unit test: DEFAULT symbols appear before discovered symbols in VIP."""
+        """Unit test: SPY is always first; scored symbols follow by master_score.
+        Updated 2026-03-21: only SPY is guaranteed first (not all DEFAULT_TRAINING_SYMBOLS)."""
         from stock_hunter import StockHunter
         from unittest.mock import MagicMock
         from datetime import datetime
-        import system_config as cfg
         import json
         import tempfile
         import os
@@ -2479,19 +2480,16 @@ class TestGen12Acceptance(unittest.TestCase):
         vip = saved.get("tickers", [])
         os.unlink(tmp.name)
 
-        # All defaults that are in VIP should come before discovered symbols
-        defaults = getattr(cfg, 'DEFAULT_TRAINING_SYMBOLS',
-            ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD', 'NFLX', 'SPY'])
+        # SPY must be first (only permanently pinned symbol)
+        assert len(vip) > 0 and vip[0] == 'SPY', \
+            f"SPY must be first in VIP, got {vip[0] if vip else 'empty'}. " \
+            f"VIP={vip}. See CHANGELOG 2026-03-21."
 
-        default_positions = [vip.index(s) for s in defaults if s in vip]
-        discovered = [s for s in vip if s not in defaults]
-        if discovered and default_positions:
-            max_default_pos = max(default_positions)
-            first_discovered_pos = vip.index(discovered[0])
-            assert max_default_pos < first_discovered_pos, \
-                f"Default symbols should come before discovered. " \
-                f"Last default at {max_default_pos}, first discovered at {first_discovered_pos}. " \
-                f"VIP={vip}. See CHANGELOG 2026-03-20."
+        # High-scoring symbols must be present
+        assert 'NUGT' in vip, \
+            f"NUGT (master=84.9) should be in VIP but missing. VIP={vip}"
+        assert 'KGC' in vip, \
+            f"KGC (master=75.0) should be in VIP but missing. VIP={vip}"
 
 
 def run_audit():

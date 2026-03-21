@@ -618,25 +618,18 @@ class StockHunter:
         max_vip_size = cfg.SCAN_ROUTING_CONFIG.get("max_vip_list_size", 50)
         merged_vip = merged_vip[:max_vip_size]
 
-        # ═══ ALWAYS-IN-VIP: Benchmark + DEFAULT_TRAINING_SYMBOLS (2026-03-20) ═══
-        # DO NOT DELETE: These core symbols must ALWAYS be in VIP regardless
-        # of their ER score or master_score. They are the baseline stocks
-        # that the live engine monitors at all times. Without this, stocks
-        # like NVDA/AAPL get dropped when market is sideways (ER < 0.3).
-        # ═════════════════════════════════════════════════════════════════════
-        always_in_vip = list(getattr(cfg, 'DEFAULT_TRAINING_SYMBOLS',
-            ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD', 'NFLX', 'SPY']))
+        # ═══ BENCHMARK ALWAYS IN VIP (2026-03-20) ═══════════════════════
+        # DO NOT DELETE: Only SPY is permanently pinned in VIP (benchmark
+        # for Relative Strength). All other symbols, including DEFAULT_TRAINING_SYMBOLS,
+        # follow normal VIP rules: they enter via scanner score and exit
+        # after 210 days without recommendation (TTL).
+        # DEFAULT_TRAINING_SYMBOLS is used ONLY as fallback when VIP is empty
+        # (first run / fresh install). See system_config.py.
+        # ═════════════════════════════════════════════════════════════════
         benchmark = getattr(cfg, 'BENCHMARK_TICKER', 'SPY')
-        # Ensure benchmark is FIRST so the reversed-insert loop places it at index 0
-        if benchmark in always_in_vip:
-            always_in_vip.remove(benchmark)
-        always_in_vip.insert(0, benchmark)
-
-        # Add at the beginning of VIP, preserving order
-        for sym in reversed(always_in_vip):
-            if sym in merged_vip:
-                merged_vip.remove(sym)
-            merged_vip.insert(0, sym)
+        if benchmark in merged_vip:
+            merged_vip.remove(benchmark)
+        merged_vip.insert(0, benchmark)
 
         self.watchlist = {"tickers": merged_vip, "last_updated": datetime.now().isoformat()}
         self._save_json(self.watchlist_file, self.watchlist)
