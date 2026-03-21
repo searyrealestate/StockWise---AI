@@ -355,7 +355,7 @@ RISK_CONFIG = {
     "max_daily_loss_pct": 0.015,    # Max allowed portfolio % loss per day (-1.5%)
     "target_daily_profit_usd": 1000.0, # Target dollar profit per day
     "spy_crash_trigger_pct": -0.015, # Intraday SPY drop of 1.5% triggers "Crash Mode"
-    "starting_capital": 25000.0     # Baseline capital for calculations (PDT Rule threshold)
+    "starting_capital": 5000.0      # Baseline capital for calculations
 }
 
 # class SniperConfig:

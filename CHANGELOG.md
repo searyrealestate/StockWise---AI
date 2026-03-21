@@ -1,5 +1,25 @@
 # Changelog
 
+## [2026-03-21] Fix C5: Initialize portfolio_value + set starting_capital to 5000
+
+### Problem
+`LiveTradingEngine.__init__` never defined `portfolio_value`. The main loop passed
+`getattr(live_engine, 'portfolio_value', 0)` which always returned 0. In
+`portfolio_risk.py`, `check_drawdown_gate()` skips entirely when `portfolio_value <= 0`.
+Result: circuit breaker, max exposure, and max single position checks all disabled.
+
+Additionally, `RISK_CONFIG["starting_capital"]` was 25000 but actual starting capital
+is 5000.
+
+### Fix
+- `system_config.py`: Changed `starting_capital` from 25000.0 to 5000.0
+- `live_trading_engine.py`: Added `self.portfolio_value = cfg.RISK_CONFIG["starting_capital"]`
+  in `LiveTradingEngine.__init__`
+- Single source of truth: one value in RISK_CONFIG, read by both RiskActuary and portfolio risk gate
+
+### Tests
+- 174/174 pass
+
 ## [2026-03-21] Fix C2: Initialize API credential variables before try block
 
 ### Problem

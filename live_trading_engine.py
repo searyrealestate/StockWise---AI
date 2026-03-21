@@ -362,6 +362,7 @@ class LiveTradingEngine:
         # We use a stateful JSON file to track open positions independently of the broker API
         self.positions_file = os.path.join(cfg.DB_DIR, "open_positions.json")
         self.positions = self._load_json(self.positions_file)
+        self.portfolio_value = cfg.RISK_CONFIG["starting_capital"]
 
     def _process_closed_position(self, ticker, buy_date, buy_price, sell_price, position_data=None):
         """
