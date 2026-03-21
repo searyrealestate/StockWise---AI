@@ -2733,16 +2733,19 @@ class TestGen12Acceptance(unittest.TestCase):
         fe = FeatureEngine()
 
         # Build minimal synthetic DataFrame (250 rows for SMA/RSI convergence)
+        # DatetimeIndex required: ta.vwap needs it; without it the volume block
+        # raises 'RangeIndex has no to_period' and vsa_squat_bar is never computed.
         np.random.seed(42)
         n = 250
         close = 100 + np.cumsum(np.random.randn(n) * 0.5)
+        idx = pd.date_range('2024-01-01', periods=n, freq='D')
         df = pd.DataFrame({
             'open': close - np.random.rand(n) * 0.3,
             'high': close + np.random.rand(n) * 0.5,
             'low': close - np.random.rand(n) * 0.5,
             'close': close,
             'volume': np.random.randint(100000, 1000000, n).astype(float)
-        })
+        }, index=idx)
 
         df = fe.calculate_features(df, strategy_config={"active_indicators": ["all"]})
 
@@ -2846,6 +2849,75 @@ class TestGen12Acceptance(unittest.TestCase):
         assert provider in ('ALPACA', 'MASSIVE', 'IBKR', 'YFINANCE'), \
             f"DATA_PROVIDER='{provider}' is not a valid provider. " \
             "Must be ALPACA, MASSIVE, IBKR, or YFINANCE."
+
+    def test_telegram_command_parsing_comprehensive(self):
+        """L6 Regression: Comprehensive Telegram command parsing tests.
+        Verifies all command paths work without crashing and route correctly."""
+        from notification_manager import NotificationManager
+        from unittest.mock import MagicMock, patch
+
+        nm = NotificationManager()
+
+        # --- Structural check: parts[0] not parts ---
+        source_path = os.path.join(os.path.dirname(__file__), 'notification_manager.py')
+        with open(source_path, 'r', encoding='utf-8') as f:
+            source = f.read()
+        self.assertIn('command = parts[0]', source,
+            "process_incoming_command must use parts[0], not parts")
+
+        # --- Test 1: /confirm AAPL calls _update_ledger_status correctly ---
+        with patch.object(nm, '_update_ledger_status', return_value=True) as mock_update:
+            with patch.object(nm, 'send_message'):
+                nm.process_incoming_command('/confirm AAPL')
+                mock_update.assert_called_once_with('AAPL', cfg.TRADE_STATUS_EXECUTED)
+
+        # --- Test 2: /unfilled NVDA calls _update_ledger_status correctly ---
+        with patch.object(nm, '_update_ledger_status', return_value=True) as mock_update:
+            with patch.object(nm, 'send_message'):
+                nm.process_incoming_command('/unfilled NVDA')
+                mock_update.assert_called_once_with('NVDA', cfg.TRADE_STATUS_UNFILLED)
+
+        # --- Test 3: /buy TSLA starts wizard ---
+        mock_controller = MagicMock()
+        nm.conversation_state = {}  # Reset
+        nm._handle_command(12345, '/buy TSLA', mock_controller)
+        self.assertIn(12345, nm.conversation_state,
+            "/buy must start conversation wizard")
+        self.assertEqual(nm.conversation_state[12345]['data']['ticker'], 'TSLA')
+        nm.conversation_state = {}  # Cleanup
+
+        # --- Test 4: sold AAPL calls mark_position_sold ---
+        mock_controller = MagicMock()
+        mock_controller.mark_position_sold = MagicMock()
+        nm._handle_command(12345, 'sold AAPL', mock_controller)
+        mock_controller.mark_position_sold.assert_called_once_with('AAPL')
+
+        # --- Test 5: /status calls get_status_report ---
+        mock_controller = MagicMock()
+        mock_controller.get_status_report = MagicMock(return_value="All OK")
+        nm._handle_command(12345, '/status', mock_controller)
+        mock_controller.get_status_report.assert_called_once()
+
+        # --- Test 6: Unknown command does not crash ---
+        mock_controller = MagicMock()
+        try:
+            nm._handle_command(12345, '/unknown_cmd', mock_controller)
+        except Exception as e:
+            self.fail(f"Unknown command crashed: {e}")
+
+        # --- Test 7: Empty/None text does not crash ---
+        try:
+            nm.process_incoming_command('')
+            nm.process_incoming_command(None)
+        except Exception as e:
+            self.fail(f"Empty/None input crashed: {e}")
+
+        # --- Test 8: Non-command text does not crash ---
+        try:
+            nm.process_incoming_command('hello world')
+            nm.process_incoming_command('just chatting')
+        except Exception as e:
+            self.fail(f"Non-command text crashed: {e}")
 
 
 def run_audit():

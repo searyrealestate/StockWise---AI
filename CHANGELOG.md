@@ -12,7 +12,7 @@ never executed.
 - Changed `command = parts` to `command = parts[0]`
 
 ### Tests
-- 180/180 pass
+- 181/181 pass (8 sub-tests: structural check, /confirm, /unfilled, /buy wizard, sold, /status, unknown cmd, empty/None input)
 
 ## [2026-03-21] Fix M5+M6: Migrate strategy_engine.py to safe_json_io
 
