@@ -16,6 +16,7 @@ and 1 Conductor who coordinates them.
 
 import os
 import json
+from safe_json_io import safe_json_read, safe_json_write
 import logging
 import pandas as pd
 import numpy as np
@@ -497,14 +498,10 @@ class StrategyEngine:
         
         try:
             path = getattr(cfg, 'MISSED_OPPORTUNITIES_PATH', os.path.join(cfg.DATA_DIR, "missed_opportunities.json"))
-            data = []
-            if os.path.exists(path):
-                with open(path, 'r') as f:
-                    try:
-                        data = json.load(f)
-                    except:
-                        data = []
-                        
+            data = safe_json_read(path, default=[])
+            if not isinstance(data, list):
+                data = []
+
             record = {
                 "timestamp": datetime.now().isoformat(),
                 "symbol": verdict.get('symbol', 'UNKNOWN'),
@@ -513,8 +510,7 @@ class StrategyEngine:
                 "setups": verdict.get('setups_found', [])
             }
             data.append(record)
-            with open(path, 'w') as f:
-                json.dump(data, f, indent=4)
+            safe_json_write(path, data)
                 
             import logging
             logging.getLogger("StrategyEngine").info(f"[{record['symbol']}] Premium Trade Vetoed -> Logged to Missed Opportunities Ledger (Score: {record['master_score']:.1f})")
@@ -614,11 +610,9 @@ class StrategyEngine:
         Returns True if the asset is restricted, forcing the scanner to ignore it.
         """
         try:
-            if not os.path.exists(self.cooldown_file):
+            cooldown_data = safe_json_read(self.cooldown_file, default={})
+            if not cooldown_data:
                 return False
-                
-            with open(self.cooldown_file, 'r', encoding='utf-8') as f:
-                cooldown_data = json.load(f)
                 
             if ticker in cooldown_data:
                 timestamp = cooldown_data[ticker].get("timestamp", 0)

@@ -1,5 +1,22 @@
 # Changelog
 
+## [2026-03-21] Fix M5+M6: Migrate strategy_engine.py to safe_json_io
+
+### Problem
+`strategy_engine.py` used raw `json.load`/`json.dump` in two places:
+- `_track_missed_opportunity()`: raw read+write of missed_opportunities.json
+- `_is_in_cooldown()`: raw read of cooldown_list.json
+A crash mid-write would corrupt these files. Rest of system already uses safe_json_io.
+
+### Fix — `strategy_engine.py`
+- Added `from safe_json_io import safe_json_read, safe_json_write`
+- `_track_missed_opportunity()`: replaced raw json.load/dump with safe_json_read/safe_json_write
+- `_is_in_cooldown()`: replaced raw json.load with safe_json_read
+- Zero logic change — only the I/O mechanism
+
+### Tests
+- 179/179 pass
+
 ## [2026-03-21] Fix M4: SMA_50 uppercase + permanent lowercase enforcement test
 
 ### Problem
