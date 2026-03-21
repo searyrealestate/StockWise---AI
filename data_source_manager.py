@@ -291,8 +291,8 @@ class DataSourceManager:
                 # 2. Try Streamlit Secrets (Runtime)
                 if not self.api_key:
                     try:
-                        self.api_key = st.secrets["ALPACA_KEY"]
-                        self.api_secret = st.secrets["ALPACA_SECRET"]
+                        self.api_key = st.secrets["APCA_API_KEY_ID"]
+                        self.api_secret = st.secrets["APCA_API_SECRET_KEY"]
                     except:
                         pass
                 
@@ -303,8 +303,8 @@ class DataSourceManager:
                         secrets_path = os.path.join(os.getcwd(), ".streamlit", "secrets.toml")
                         if os.path.exists(secrets_path):
                             secrets = toml.load(secrets_path)
-                            self.api_key = secrets.get("ALPACA_KEY")
-                            self.api_secret = secrets.get("ALPACA_SECRET")
+                            self.api_key = secrets.get("APCA_API_KEY_ID")
+                            self.api_secret = secrets.get("APCA_API_SECRET_KEY")
                             if self.api_key: self._log("Loaded keys manually from secrets.toml")
                     except Exception as e:
                         # self._log(f"Manual TOML load failed: {e}", "DEBUG")
@@ -312,8 +312,8 @@ class DataSourceManager:
 
                 # 4. Try Environment Variables
                 if not self.api_key:
-                    self.api_key = os.getenv("ALPACA_KEY")
-                    self.api_secret = os.getenv("ALPACA_SECRET")
+                    self.api_key = os.getenv("APCA_API_KEY_ID")
+                    self.api_secret = os.getenv("APCA_API_SECRET_KEY")
 
                 if self.api_key and self.api_secret:
                     # self.stock_client = StockHistoricalDataClient(self.api_key, self.api_secret)

@@ -1,5 +1,22 @@
 # Changelog
 
+## [2026-03-22] Fix C1: API key name mismatch in DSM fallback chains
+
+### Problem
+When cfg.ALPACA_KEY is None, DSM tries 3 fallbacks (Streamlit secrets, manual TOML,
+env vars) — all searching for `ALPACA_KEY`. But secrets.toml and env vars use
+`APCA_API_KEY_ID` / `APCA_API_SECRET_KEY`. No fallback ever succeeded.
+
+### Fix — `data_source_manager.py`
+- Streamlit secrets fallback: `ALPACA_KEY` → `APCA_API_KEY_ID`
+- Manual TOML fallback: `ALPACA_KEY` → `APCA_API_KEY_ID`
+- Env var fallback: `ALPACA_KEY` → `APCA_API_KEY_ID`
+- Same for secret: `ALPACA_SECRET` → `APCA_API_SECRET_KEY` in all 3 places
+- `getattr(cfg, 'ALPACA_KEY')` unchanged — that reads the Python config object correctly
+
+### Tests
+- 181/181 pass
+
 ## [2026-03-22] Fix M3: Remove duplicate PORTFOLIO_DEFENSE config
 
 ### Problem
