@@ -1,5 +1,23 @@
 # Changelog
 
+## [2026-03-22] Fix C3: Merge clean_raw_data features + remove duplicate from system_config
+
+### Problem
+`clean_raw_data` defined twice — in system_config.py (never called) and data_source_manager.py
+(active). The system_config version had 3 useful features missing from DSM:
+numeric coercion, dropna on OHLCV rows, and duplicate column removal.
+
+### Fix
+- `data_source_manager.py`: Merged 3 features into active clean_raw_data:
+  1. Duplicate column removal (`df.loc[:, ~df.columns.duplicated()]`)
+  2. Numeric coercion for OHLCV (`pd.to_numeric(errors='coerce')`)
+  3. Drop rows with NaN in OHLCV columns (`dropna(subset=ohlcv_cols)`)
+- `system_config.py`: Deleted the dead `clean_raw_data` function entirely
+- Single source of truth: one function in data_source_manager.py
+
+### Tests
+- 181/181 pass
+
 ## [2026-03-22] Fix C1: API key name mismatch in DSM fallback chains
 
 ### Problem

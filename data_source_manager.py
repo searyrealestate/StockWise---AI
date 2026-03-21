@@ -170,6 +170,15 @@ def clean_raw_data(df: pd.DataFrame) -> pd.DataFrame:
     if df.index.tz is not None:
         df.index = df.index.tz_localize(None)
 
+    # 4a. Remove duplicate columns if any exist (merged from system_config)
+    df = df.loc[:, ~df.columns.duplicated(keep='first')]
+
+    # 4b. Enforce numeric types for OHLCV columns (merged from system_config)
+    # Coerce non-numeric values to NaN (e.g. string data from bad provider response)
+    for col in ['open', 'high', 'low', 'close', 'volume']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
     # 4. Filter for required columns (must have OHLCV)
     required = {'open', 'high', 'low', 'close', 'volume'}
     if not required.issubset(df.columns):
@@ -182,6 +191,12 @@ def clean_raw_data(df: pd.DataFrame) -> pd.DataFrame:
     # Ensure AI matrix compatibility for providers missing trade_count
     if 'trade_count' not in df.columns:
         df['trade_count'] = 1.0
+
+    # 5a. Drop rows where any OHLCV column is NaN (merged from system_config)
+    # This removes rows with corrupt or missing price data that would break indicators
+    ohlcv_cols = [c for c in ['open', 'high', 'low', 'close', 'volume'] if c in df.columns]
+    if ohlcv_cols:
+        df.dropna(subset=ohlcv_cols, inplace=True)
 
     # Final cleanup (Forward fill then backward fill NaNs, usually from splits)
     df.ffill(inplace=True)
