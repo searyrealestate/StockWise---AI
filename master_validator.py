@@ -2643,6 +2643,33 @@ class TestGen12Acceptance(unittest.TestCase):
             "CRITICAL: notification_manager does not use safe_json_io. " \
             "Raw json.load/dump can corrupt files. See CHANGELOG 2026-03-20."
 
+    def test_strategy_engine_uses_safe_json(self):
+        """M5+M6 Regression: strategy_engine.py must use safe_json_io, not raw json.load/dump.
+        Exception: TacticalSniper._load_json for model config files (read-only, not shared state)."""
+        source_path = os.path.join(os.path.dirname(__file__), 'strategy_engine.py')
+        with open(source_path, 'r', encoding='utf-8') as f:
+            source = f.read()
+
+        # Must import safe_json_io
+        self.assertIn(
+            'from safe_json_io import', source,
+            "strategy_engine.py must import from safe_json_io"
+        )
+
+        # Check _track_missed_opportunity does NOT use raw json.dump
+        missed_opp_section = source.split('_track_missed_opportunity')[1].split('\n    def ')[0] if '_track_missed_opportunity' in source else ''
+        self.assertNotIn(
+            'json.dump(', missed_opp_section,
+            "_track_missed_opportunity must use safe_json_write, not json.dump"
+        )
+
+        # Check _is_in_cooldown does NOT use raw json.load
+        cooldown_section = source.split('_is_in_cooldown')[1].split('\n    def ')[0] if '_is_in_cooldown' in source else ''
+        self.assertNotIn(
+            'json.load(', cooldown_section,
+            "_is_in_cooldown must use safe_json_read, not json.load"
+        )
+
     def test_no_uppercase_indicator_references(self):
         """M4 Regression: All indicator column references must be lowercase.
         FeatureEngine outputs lowercase only. Uppercase references silently fail."""

@@ -15,7 +15,7 @@ A crash mid-write would corrupt these files. Rest of system already uses safe_js
 - Zero logic change — only the I/O mechanism
 
 ### Tests
-- 179/179 pass
+- 180/180 pass
 
 ## [2026-03-21] Fix M4: SMA_50 uppercase + permanent lowercase enforcement test
 
