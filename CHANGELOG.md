@@ -1,5 +1,12 @@
 # Changelog
 
+## [2026-03-25] Wave 2: Safe I/O Migration (Invariant #5)
+
+- **GAP-09 FIX:** portfolio_manager.py — replaced raw json.load/json.dump with safe_json_read/safe_json_write.
+- **GAP-09 FIX:** system_config.py load_dynamic_watchlist() — replaced raw json.load with safe_json_read.
+- **Invariant #5 compliance:** all shared JSON files now use atomic I/O.
+- Files: portfolio_manager.py, system_config.py
+
 ## [2026-03-25] Wave 1: Config Cleanup (SPEC v13.4 Alignment)
 
 - **GAP-01 FIX:** Alpha threshold unified to 0.5% (was 1.3% in COSTS_CONFIG and FRICTION_AND_ALPHA). DDR #3 compliance.

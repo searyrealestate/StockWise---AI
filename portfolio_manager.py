@@ -18,6 +18,7 @@ from datetime import datetime
 import system_config as cfg
 import numpy as np
 import pandas as pd
+from safe_json_io import safe_json_read, safe_json_write
 
 logger = logging.getLogger("PortfolioManager")
 
@@ -32,23 +33,16 @@ class PortfolioManager:
         
     def _load_portfolio(self):
         """Loads the JSON ledger or initializes a new account."""
-        if os.path.exists(self.file_path):
-            try:
-                with open(self.file_path, "r") as f:
-                    return json.load(f)
-            except:
-                pass
-        # Default / New Account Initialization
-        return {
+        default = {
             "cash": cfg.RISK_CONFIG["starting_capital"],
             "equity": cfg.RISK_CONFIG["starting_capital"],
-            "trades": [] # List of active trade dictionary objects
+            "trades": []  # List of active trade dictionary objects
         }
+        return safe_json_read(self.file_path, default=default)
 
     def _save_portfolio(self):
-        """Persists the ledger to disk."""
-        with open(self.file_path, "w") as f:
-            json.dump(self.portfolio, f, indent=4)
+        """Persists the ledger to disk (atomic write via safe_json_io)."""
+        safe_json_write(self.file_path, self.portfolio)
 
     def calculate_commission(self, qty):
         """

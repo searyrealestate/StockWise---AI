@@ -235,19 +235,13 @@ DEFAULT_TRAINING_SYMBOLS = [
 
 # Dynamic Loading Wrapper for the Watchlist
 def load_dynamic_watchlist():
-    """Loads the active watchlist from JSON, falls back to seed list."""
-    import json
-    # Use absolute path to avoid current working directory issues
+    """Loads the active watchlist from JSON, falls back to seed list (atomic read via safe_json_io)."""
+    from safe_json_io import safe_json_read
     path = os.path.join(DB_DIR, "dynamic_watchlist.json")
-    # Check if the dynamic watchlist file exists
-    if os.path.exists(path):
-        try:
-            with open(path, 'r') as f:
-                # Load the JSON and return the 'tickers' list, defaulting to empty list on failure
-                return json.load(f).get("tickers", [])
-        except:
-            # If read fails, fail silently and proceed to fallback
-            pass
+    data = safe_json_read(path, default={})
+    tickers = data.get("tickers", [])
+    if tickers:
+        return tickers
     # Fallback: use DEFAULT_TRAINING_SYMBOLS as the seed list
     return list(DEFAULT_TRAINING_SYMBOLS)
 
