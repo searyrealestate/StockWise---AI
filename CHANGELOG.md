@@ -1,5 +1,18 @@
 # Changelog
 
+## [2026-03-25] Wave 1: Config Cleanup (SPEC v13.4 Alignment)
+
+- **GAP-01 FIX:** Alpha threshold unified to 0.5% (was 1.3% in COSTS_CONFIG and FRICTION_AND_ALPHA). DDR #3 compliance.
+- **GAP-02 FIX:** Removed DATA_PROVIDER="ALPACA" hardcode. DSM now uses EN_ALPACA flag. DDR #2 compliance.
+- **GAP-08 FIX:** Added MAX_TEMPLATES=5 constant. SPEC §4 ceiling enforcement.
+- **GAP-11 FIX:** Added runner params to KINETIC_STOP_CONFIG. Deprecated in MILESTONE_ALERT_CONFIG. DDR #4 compliance.
+- **GAP-14 FIX:** Added MIN_CANDLES_FOR_PROCESSING=200. SPEC §2 Data Guard.
+- **Blast Radius:** data_source_manager.py patched (DATA_PROVIDER → EN_ALPACA).
+- **Architectural Doc:** Restored DDR #2 waterfall routing documentation in system_config.py (replaces deleted DO NOT DELETE block).
+- **Blast Radius FIX:** data_source_manager.py — replaced all DATA_PROVIDER refs with EN_ALPACA (DDR #2). Lines 298, 343, 567.
+- **master_validator.py:** Replaced test_data_provider_explicitly_set with test_waterfall_routing_replaces_single_provider (DDR #2 — invariant #1 overridden).
+- Files: system_config.py, data_source_manager.py, master_validator.py
+
 ## [2026-03-22] Fix C3: Merge clean_raw_data features + remove duplicate from system_config
 
 ### Problem

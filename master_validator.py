@@ -2835,20 +2835,22 @@ class TestGen12Acceptance(unittest.TestCase):
             "portfolio_value must be sourced from RISK_CONFIG"
         )
 
-    def test_data_provider_explicitly_set(self):
+    def test_waterfall_routing_replaces_single_provider(self):
         """
-        מטרה: לוודא ש-DATA_PROVIDER מוגדר במפורש ב-system_config.
-        בלי הגדרה מפורשת, DSM מסתמך על default שיכול להידרס בטעות.
-        זה גרם ל-Alpaca להיות DISABLED ב-live engine.
+        DDR #2: DATA_PROVIDER removed. System uses EN_* flags + waterfall routing.
+        Replaces: test_data_provider_explicitly_set (Invariant #1 overridden by DDR #2)
         """
-        import system_config as cfg
-        provider = getattr(cfg, 'DATA_PROVIDER', None)
-        assert provider is not None, \
-            "CRITICAL: DATA_PROVIDER not set in system_config.py. " \
-            "Alpaca may be disabled in live engine. See CHANGELOG 2026-03-20."
-        assert provider in ('ALPACA', 'MASSIVE', 'IBKR', 'YFINANCE'), \
-            f"DATA_PROVIDER='{provider}' is not a valid provider. " \
-            "Must be ALPACA, MASSIVE, IBKR, or YFINANCE."
+        # All four provider flags must exist
+        assert hasattr(cfg, 'EN_MASSIVE'), "Missing EN_MASSIVE flag"
+        assert hasattr(cfg, 'EN_ALPACA'), "Missing EN_ALPACA flag"
+        assert hasattr(cfg, 'EN_IBKR'), "Missing EN_IBKR flag"
+        assert hasattr(cfg, 'EN_YFINANCE'), "Missing EN_YFINANCE flag"
+        # At least one must be enabled
+        assert any([cfg.EN_MASSIVE, cfg.EN_ALPACA, cfg.EN_IBKR, cfg.EN_YFINANCE]), \
+            "All data providers disabled — system will starve"
+        # DATA_PROVIDER must NOT exist (DDR #2)
+        assert not hasattr(cfg, 'DATA_PROVIDER'), \
+            "DATA_PROVIDER still exists — should be removed per DDR #2"
 
     def test_telegram_command_parsing_comprehensive(self):
         """L6 Regression: Comprehensive Telegram command parsing tests.

@@ -293,9 +293,12 @@ class DataSourceManager:
 
         # --- ALPACA SETUP (SAFE) ---
         self.stock_client = None
-        # Strict User Request: "change Alpaca broker to False, use only IBKR and YFinance"
-        # We only initialize Alpaca if explicitly allowed or if DATA_PROVIDER is ALPACA
-        is_alpaca_enabled = getattr(cfg, 'DATA_PROVIDER', 'ALPACA') == 'ALPACA'
+        # ═══ WATERFALL ROUTING (2026-03-24 — DDR #2) ═══════════════════════
+        # Previously: DATA_PROVIDER="ALPACA" gated this. Removed per DDR #2
+        # (waterfall replaces single provider). Now uses EN_ALPACA toggle —
+        # same pattern as EN_MASSIVE/EN_IBKR/EN_YFINANCE.
+        # ═══════════════════════════════════════════════════════════════════════
+        is_alpaca_enabled = getattr(cfg, 'EN_ALPACA', True)
         
         if ALPACA_AVAILABLE and is_alpaca_enabled:
             try:
@@ -340,7 +343,7 @@ class DataSourceManager:
                 self._log(f"Alpaca Init Error: {e}", "ERROR")
                 self.stock_client = None
         else:
-             self._log("Alpaca disabled by configuration (DATA_PROVIDER != ALPACA).", "INFO")
+             self._log("Alpaca disabled by configuration (EN_ALPACA = False).", "INFO")
 
         # --- MASSIVE SETUP ---
         self.massive_client = None
@@ -564,7 +567,7 @@ class DataSourceManager:
                 elif provider == 'ALPACA' and self.stock_client:
                     fetched_df = self._download_from_alpaca(clean_symbol, start_date, end_date, days_back, interval, min_rows=min_rows)
                 elif provider == 'ALPACA':
-                    self._log("ALPACA skipped: client not initialized (check API keys or DATA_PROVIDER config).", "WARNING")
+                    self._log("ALPACA skipped: client not initialized (check API keys or EN_ALPACA config).", "WARNING")
                     continue
 
                 # 3. IBKR

@@ -108,6 +108,9 @@ MODELS_DIR = os.path.join(PROJECT_ROOT, 'models')
 DB_DIR = os.path.join(PROJECT_ROOT, 'data')
 TEMPLATES_DIR = os.path.join(DB_DIR, "templates")
 
+# Maximum number of active trading templates (SPEC v13.4 §4 — ceiling, not floor)
+MAX_TEMPLATES = 5
+
 # Ensure that the necessary directories exist; create them if they do not
 for d in [LOGS_DIR, MODELS_DIR, DB_DIR, TEMPLATES_DIR]:
     os.makedirs(d, exist_ok=True)
@@ -147,13 +150,15 @@ PROVIDER_DELAY = {
     "MASSIVE_TIMEOUT": 10
 }
 
-# ═══ DATA PROVIDER SETTING (2026-03-20) ═══════════════════════════════
-# DO NOT DELETE: Explicitly sets the primary data provider.
-# Without this, DSM relies on getattr default which can be overridden
-# accidentally, causing Alpaca to be disabled in live engine.
-# Valid values: "ALPACA", "MASSIVE", "IBKR", "YFINANCE"
-# ═════════════════════════════════════════════════════════════════════
-DATA_PROVIDER = "ALPACA"
+# ═══ WATERFALL ROUTING (2026-03-24 — DDR #2) ════════════════════════════
+# ARCHITECTURAL CHANGE: DATA_PROVIDER = "ALPACA" was removed here.
+# Previous comment said "DO NOT DELETE" — reason was to prevent DSM from
+# silently disabling Alpaca. That concern is now resolved differently:
+# DSM uses EN_ALPACA / EN_MASSIVE / EN_IBKR / EN_YFINANCE flags directly.
+# The system no longer depends on a single provider. Waterfall routing
+# (Massive → Alpaca → IBKR → YFinance) is the standard per SPEC v13.4 §2.
+# See: data_source_manager.py get_stock_data() priority_list.
+# ═════════════════════════════════════════════════════════════════════════
 
 # Validation (Optional sanity check)
 if not any([EN_MASSIVE, EN_ALPACA, EN_IBKR, EN_YFINANCE]):
@@ -263,6 +268,10 @@ TRADE_TYPE_CONFIG = {
     "MID":   {"interval": "1h",  "days_back": 60},  # For swing trading
     "LONG":  {"interval": "1d",  "days_back": 730}  # For long-term investing
 }
+
+# Data Guard: minimum candles required for statistical validity (SPEC v13.4 §2)
+# Prevents processing stocks with insufficient history for VSA and moving averages.
+MIN_CANDLES_FOR_PROCESSING = 200
 
 # --- 4. STRATEGY CONFIGURATION (SRS 2.A) ---
 # Configuration parameters for different trading strategies (Agents)
@@ -388,7 +397,7 @@ COSTS_CONFIG = {
     "slippage_pct": 0.001,          # 0.1% artificial slippage penalty for realism
     "tax_rate": 0.25,               # 25% Capital Gains Tax rate for net profit calc
     # Friction-Adjusted Alpha Thresholds (The Hurdle Rate)
-    "min_net_profit_pct": 0.013,   # Trade must yield > 1.5% net profit
+    "min_net_profit_pct": 0.005,   # Trade must yield > 0.5% net profit (SPEC v13.4 DDR #3)
     "min_net_rr": 1.2              # Reward must be > 1.5x the Risk AFTER fees
 }
 
@@ -407,7 +416,7 @@ DSP_CONFIG = {
 
 FRICTION_AND_ALPHA = {
     # This is our mathematical 'Hurdle Rate'. The system will refuse to trade if the broker/government takes too much.
-    "min_net_profit_pct": 0.013,      # A trade MUST yield > 1.5% in pure, take-home cash.
+    "min_net_profit_pct": 0.005,      # A trade MUST yield > 0.5% net profit (SPEC v13.4 DDR #3 — unified threshold)
     "min_net_rr": 1.2,                # The net reward must be at least 1.5 times the net risk.
     "max_spread_pct": 0.0005          # Microstructure Veto: We reject the stock if the Bid-Ask spread is > 0.05%.
 }
@@ -422,7 +431,9 @@ KINETIC_STOP_CONFIG = {
     "phase1_atr_mult": 2.0,                  # When we enter, we give the stock a wide 2.0 ATR breathing room.
     "phase2_breakeven_trigger_pct": 0.015,   # Once we hit 1.5% net profit, we instantly snap the stop to breakeven.
     "phase3_parabolic_trigger_pct": 0.03,    # At 3.0% net profit, the stock is flying. We activate the choke mechanism.
-    "phase3_atr_mult": 1.0                   # The choke mechanism tightens the stop to just 1.0 ATR from the highest high.
+    "phase3_atr_mult": 1.0,                  # The choke mechanism tightens the stop to just 1.0 ATR from the highest high.
+    "runner_atr_mult": 0.5,               # Phase 4 Runner: ultra-tight trailing (DDR #4)
+    "runner_min_distance_pct": 0.008,      # Phase 4 Runner: floor distance from high (DDR #4)
 }
 
 MILESTONE_ALERT_CONFIG = {
@@ -435,9 +446,9 @@ MILESTONE_ALERT_CONFIG = {
     "min_alert_interval_minutes": 15,    # Minimum 15 min between alerts per ticker
 
     # Phase 4 Runner Mode: replaces hard take_profit with ultra-tight trailing
-    "runner_atr_mult": 0.5,              # Runner stop = highest_high - (ATR * 0.5)
-    "runner_min_distance_pct": 0.008,    # Floor: stop never closer than 0.8% from high
-                                          # Prevents noise exit when ATR is tiny
+    "runner_atr_mult": 0.5,              # DEPRECATED — canonical source is now KINETIC_STOP_CONFIG
+    "runner_min_distance_pct": 0.008,    # DEPRECATED — canonical source is now KINETIC_STOP_CONFIG
+                                          # Kept for backward compatibility with live_trading_engine.py
 }
 
 # Position Management Configuration
