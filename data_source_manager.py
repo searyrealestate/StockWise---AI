@@ -116,6 +116,11 @@ except ImportError:
     MASSIVE_AVAILABLE = False
     logger.debug("[!] Massive SDK not found.")
 
+class DataValidationError(Exception):
+    """Raised when provider data fails normalization (missing OHLCV columns)."""
+    pass
+
+
 def clean_raw_data(df: pd.DataFrame) -> pd.DataFrame:
     """
     Standardizer for Financial DataFrames.
@@ -202,6 +207,85 @@ def clean_raw_data(df: pd.DataFrame) -> pd.DataFrame:
     df.ffill(inplace=True)
     df.bfill(inplace=True)
 
+    return df
+
+
+def normalize_ohlcv(df, provider_name):
+    """
+    SPEC v13.4 §2: Per-provider normalization to guaranteed OHLCV schema.
+    Called inside each _download_from_X() before returning.
+
+    Guarantees:
+    - Columns: open, high, low, close, volume (lowercase)
+    - Index: DatetimeIndex, sorted ascending, no duplicates
+    - Dtypes: float64 for OHLCV
+    - Volume: non-negative (clipped to 0)
+    - Raises DataValidationError if essential columns missing
+
+    Args:
+        df: Raw DataFrame from provider
+        provider_name: "MASSIVE", "ALPACA", "IBKR", "YFINANCE" (for logging)
+    Returns:
+        Normalized DataFrame
+    """
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    # Provider-specific column mappings
+    COLUMN_MAPS = {
+        "MASSIVE": {"o": "open", "h": "high", "l": "low", "c": "close", "v": "volume",
+                    "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"},
+        "ALPACA":  {"open": "open", "high": "high", "low": "low", "close": "close", "volume": "volume",
+                    "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"},
+        "IBKR":    {"Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume",
+                    "Date": "date"},
+        "YFINANCE": {"Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume",
+                     "Adj Close": "adj_close"},
+    }
+
+    # 1. Apply column mapping
+    col_map = COLUMN_MAPS.get(provider_name, {})
+    df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+
+    # 2. Lowercase all columns
+    df.columns = [str(c).lower() for c in df.columns]
+
+    # 3. Validate required columns exist
+    required = {'open', 'high', 'low', 'close', 'volume'}
+    missing = required - set(df.columns)
+    if missing:
+        raise DataValidationError(
+            f"[{provider_name}] Missing OHLCV columns after normalization: {missing}. "
+            f"Available: {list(df.columns)}"
+        )
+
+    # 4. Keep only OHLCV + any extras that don't conflict
+    ohlcv_cols = ['open', 'high', 'low', 'close', 'volume']
+    extra_cols = [c for c in df.columns if c not in ohlcv_cols and c not in ('date', 'adj_close')]
+    df = df[ohlcv_cols + extra_cols]
+
+    # 5. Enforce float64 dtypes
+    for col in ohlcv_cols:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    # 6. DatetimeIndex, sorted, no duplicates
+    if not isinstance(df.index, pd.DatetimeIndex):
+        if 'date' in df.columns:
+            df = df.set_index('date')
+        df.index = pd.to_datetime(df.index, errors='coerce')
+    if df.index.tz is not None:
+        df.index = df.index.tz_localize(None)
+    df = df.sort_index()
+    df = df[~df.index.duplicated(keep='last')]
+    df.index.name = "Date"
+
+    # 7. Volume non-negative
+    df['volume'] = df['volume'].clip(lower=0)
+
+    # 8. Drop rows with NaN in OHLCV
+    df.dropna(subset=ohlcv_cols, inplace=True)
+
+    logging.debug(f"[{provider_name}] Normalized: {len(df)} rows, columns: {list(df.columns)}")
     return df
 
 
@@ -683,7 +767,7 @@ class DataSourceManager:
             if not df.empty and len(df) < min_rows:
                  self._log(f"IBKR Insufficient Data: Got {len(df)} rows (Target: {min_rows})", "WARNING")
 
-            return df
+            return normalize_ohlcv(df, "IBKR")
 
         except Exception as e:
             self._log(f"IBKR Failure: {e} (Target: {min_rows})", "WARNING")
@@ -768,8 +852,8 @@ class DataSourceManager:
                 # Filter for valid rows
                 if len(bars) < min_rows:
                     self._log(f"ALPACA Insufficient Data: Got {len(bars)} rows (Target: {min_rows})", "WARNING")
-            
-            return bars
+
+            return normalize_ohlcv(bars, "ALPACA")
 
         except Exception as e:
             # FIX: 'min_rows' is now in scope, preventing the crash
@@ -887,10 +971,10 @@ class DataSourceManager:
                 
             df = pd.DataFrame(data)
             if df.empty: return df
-            
+
             df.set_index('timestamp', inplace=True)
-            return df
-            
+            return normalize_ohlcv(df, "MASSIVE")
+
         except Exception as e:
             # Re-raise 429 and timeout errors so the outer handler can trip the
             # circuit breaker and session kill flag. All other errors are swallowed.
@@ -951,14 +1035,12 @@ class DataSourceManager:
 
             # 5. Integrity Check
             if not df.empty and len(df) < min_rows:
-																				 
                 self._log(f"YFINANCE Insufficient Data: Got {len(df)} rows (Target: {min_rows})", "WARNING")
                 # return pd.DataFrame() # Optional strict mode
 
-            return df
+            return normalize_ohlcv(df, "YFINANCE")
 
         except Exception as e:
-																						  
             self._log(f"YFINANCE Failure: {e} (Target: {min_rows})", "WARNING")
             return pd.DataFrame()
 
