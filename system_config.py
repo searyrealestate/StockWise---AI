@@ -458,6 +458,17 @@ POSITION_MANAGEMENT_CONFIG = {
     "re_entry_requires_new_signal": True, # Must get a fresh template signal
 }
 
+# Pre-Market Gap Validator (SPEC v13.4 §5)
+PRE_MARKET_CONFIG = {
+    "enabled": True,
+    "check_time": "09:25",           # ET — window: check_time-5m to check_time+10m
+    "max_gap_pct": 0.05,             # Veto if overnight gap > 5%
+    "min_gap_pct": 0.001,            # Ignore gaps < 0.1% (noise floor)
+    "use_ibkr_for_premarket": True,  # Prefer IBKR real pre-market price
+    "fallback_to_last_close": True,  # Use last daily close if IBKR unavailable
+    "veto_cooldown_minutes": 60,     # Suppress repeat vetoes for 60 min
+}
+
 # Portfolio Risk Management (Phase 5)
 PORTFOLIO_RISK_CONFIG = {
     # --- Correlation Check ---

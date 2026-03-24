@@ -1,5 +1,13 @@
 # Changelog
 
+## [2026-03-25] Wave 4.2: Pre-Market Validator (SPEC v13.4 §5)
+
+- **GAP-07 FIX:** Created `pre_market_validator.py` — 09:25 ET gap detection. Vetoes signals where overnight gap > 5% (configurable). IBKR pre-market data preferred, falls back to last close comparison.
+- **PRE_MARKET_CONFIG** added to `system_config.py` (after POSITION_MANAGEMENT_CONFIG).
+- **Wired** into `live_trading_engine.py` signal execution path — both templates pipeline (df_features) and legacy pipeline (df). Lazy DSM injection via `live_engine.pre_market_validator.dsm = market_data`.
+- Tests: 171/171 pass.
+- Files: `pre_market_validator.py` (NEW), `system_config.py`, `live_trading_engine.py`
+
 ## [2026-03-25] Wave 3: Pipeline Fixes (SPEC v13.4 Alignment)
 
 - **GAP-06 FIX:** feature_engine.py — added check_veto_gates() method enforcing Volume<1, Death Cross, VSA Squat veto. SPEC §3. (Note: not yet wired into pipeline — wiring in next prompt.)

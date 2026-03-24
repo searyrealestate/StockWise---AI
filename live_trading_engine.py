@@ -365,6 +365,14 @@ class LiveTradingEngine:
         self.positions = self._load_json(self.positions_file)
         self.portfolio_value = cfg.RISK_CONFIG["starting_capital"]
 
+        # Pre-Market Gap Validator (SPEC v13.4 §5)
+        try:
+            from pre_market_validator import PreMarketValidator
+            self.pre_market_validator = PreMarketValidator(data_source_manager=None)
+        except ImportError:
+            self.pre_market_validator = None
+            logger.warning("PreMarketValidator not available")
+
     def _process_closed_position(self, ticker, buy_date, buy_price, sell_price, position_data=None):
         """
         [Lifecycle Resolution]
@@ -983,6 +991,18 @@ if __name__ == "__main__":
                                     cooldown_cache[symbol] = datetime.now() + timedelta(minutes=60)
                                     continue
 
+                                # ═══ PRE-MARKET GAP CHECK (SPEC v13.4 §5) ═══
+                                if live_engine.pre_market_validator is not None:
+                                    if live_engine.pre_market_validator.dsm is None:
+                                        live_engine.pre_market_validator.dsm = market_data
+                                    pm_ok, pm_reason = live_engine.pre_market_validator.check_gap(symbol, df_features)
+                                    if not pm_ok:
+                                        logger.warning(f"[{symbol}] PRE-MARKET VETO: {pm_reason}")
+                                        journal.log_signal(ticket, df_snapshot=df, status="PREMARKET_VETOED")
+                                        cooldown_cache[symbol] = datetime.now() + timedelta(minutes=60)
+                                        continue
+                                # ═══════════════════════════════════════════
+
                                 # Execute if in auto mode
                                 try:
                                     current_regime = orchestra.router.classify_regime(df_features)
@@ -1012,6 +1032,17 @@ if __name__ == "__main__":
 
                             if pipeline_mode == 'legacy':
                                 if ticket.get("action") == "BUY":
+                                    # ═══ PRE-MARKET GAP CHECK (SPEC v13.4 §5) ═══
+                                    if live_engine.pre_market_validator is not None:
+                                        if live_engine.pre_market_validator.dsm is None:
+                                            live_engine.pre_market_validator.dsm = market_data
+                                        pm_ok, pm_reason = live_engine.pre_market_validator.check_gap(symbol, df)
+                                        if not pm_ok:
+                                            logger.warning(f"[{symbol}] PRE-MARKET VETO: {pm_reason}")
+                                            journal.log_signal(ticket, df_snapshot=df, status="PREMARKET_VETOED")
+                                            cooldown_cache[symbol] = datetime.now() + timedelta(minutes=60)
+                                            continue
+                                    # ═══════════════════════════════════════════
                                     current_regime = orchestra.router.classify_regime(df)
                                     journal.log_signal(ticket, df_snapshot=df, status="SIGNAL_DETECTED")
                                     try:
