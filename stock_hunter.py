@@ -354,7 +354,14 @@ class StockHunter:
                 
                 if 'er_slow' not in df_features.columns:
                     continue
-                
+
+                # ═══ VETO GATE (SPEC v13.4 §3) ═══
+                vetoed, veto_reason = self.fe.check_veto_gates(df_features, symbol)
+                if vetoed:
+                    logger.info(f"[{symbol}] VETO GATE: {veto_reason} — skipping")
+                    continue
+                # ═══════════════════════════════════
+
                 # 2. Identify Regime and extract Fast Math metrics
                 regime = self.orchestra.router.classify_regime(df_features)
                 latest = df_features.iloc[-1]
@@ -380,7 +387,14 @@ class StockHunter:
                     # Stock has a heartbeat! Now we calculate the heavy candlestick features 
                     # and ask the Sniper to grade it.
                     df_full = self.fe.calculate_features(df, strategy_config={"active_indicators": ["all"]})
-                    
+
+                    # ═══ VETO GATE (SPEC v13.4 §3) ═══
+                    vetoed, veto_reason = self.fe.check_veto_gates(df_full, symbol)
+                    if vetoed:
+                        logger.info(f"[{symbol}] VETO GATE: {veto_reason} — skipping")
+                        continue
+                    # ═══════════════════════════════════
+
                     # RUN FULL STRATEGY (Agent 2 - The Sniper)
                     verdict = self.orchestra.sniper.analyze(symbol, df_full, regime)
                     

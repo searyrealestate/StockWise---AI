@@ -893,6 +893,13 @@ if __name__ == "__main__":
                             # Calculate features for template evaluation
                             df_features = fe.calculate_features(df, strategy_config={"active_indicators": ["all"]})
 
+                            # ═══ VETO GATE (SPEC v13.4 §3) ═══
+                            vetoed, veto_reason = fe.check_veto_gates(df_features, symbol)
+                            if vetoed:
+                                logger.info(f"[{symbol}] VETO GATE: {veto_reason} — skipping")
+                                continue
+                            # ═══════════════════════════════════
+
                             # Run template matcher
                             signals = matcher.scan_ticker(symbol, df_features, stock_state=ledger_state)
 
