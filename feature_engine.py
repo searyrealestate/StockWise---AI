@@ -642,3 +642,35 @@ class FeatureEngine:
             import logging
             logging.getLogger("FeatureEngine").error(f"Dynamic Stop Loss calculation failed: {e}")
             return df
+
+    def check_veto_gates(self, df, symbol=""):
+        """
+        SPEC v13.4 §3: Stocks are rejected entirely before processing if:
+        1. Volume < 1 (no liquidity)
+        2. Death Cross (SMA50 < SMA200 crossover)
+        3. VSA Squat Bars (institutional manipulation signal)
+        Returns: (bool vetoed, str reason)
+        NOTE: This method is defined here but wired into the pipeline in a separate prompt.
+        """
+        if df is None or df.empty:
+            return True, "Empty DataFrame"
+
+        last = df.iloc[-1]
+
+        # Gate 1: Volume
+        vol = last.get('volume', 0)
+        if pd.isna(vol) or vol < 1:
+            logger.info(f"[{symbol}] VETO: Volume={vol} < 1")
+            return True, f"Volume={vol} < 1"
+
+        # Gate 2: Death Cross
+        if last.get('death_cross', False) == True:
+            logger.info(f"[{symbol}] VETO: Death Cross active")
+            return True, "Death Cross active"
+
+        # Gate 3: VSA Squat Bar
+        if last.get('vsa_squat_bar', False) == True:
+            logger.info(f"[{symbol}] VETO: VSA Squat Bar detected")
+            return True, "VSA Squat Bar detected"
+
+        return False, ""

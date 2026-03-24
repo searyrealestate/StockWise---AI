@@ -146,9 +146,9 @@ class PortfolioRiskManager:
         - Single position would exceed max_single_position_pct
         """
         if portfolio_value <= 0:
-            # Can't check without portfolio value — let it through with warning
-            logger.debug("Portfolio value unknown, skipping drawdown gate")
-            return True, ""
+            # Zero or negative portfolio = cannot assess risk = block all new entries (SPEC v13.4 §5)
+            logger.warning(f"Portfolio value is {portfolio_value} — blocking new entries")
+            return False, f"Portfolio value is {portfolio_value} — cannot assess risk"
 
         max_dd = self.config.get('max_portfolio_drawdown_pct', 0.10)
         max_exposure = self.config.get('max_total_exposure_pct', 0.60)

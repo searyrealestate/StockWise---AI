@@ -1,5 +1,13 @@
 # Changelog
 
+## [2026-03-25] Wave 3: Pipeline Fixes (SPEC v13.4 Alignment)
+
+- **GAP-06 FIX:** feature_engine.py — added check_veto_gates() method enforcing Volume<1, Death Cross, VSA Squat veto. SPEC §3. (Note: not yet wired into pipeline — wiring in next prompt.)
+- **GAP-10 FIX:** live_trading_engine.py — PAUSE now requires profit >= phase3 threshold (3%+). Prevents stop freeze on unproven trades. SPEC §5.
+- **GAP-25 FIX:** portfolio_risk.py — portfolio_value <= 0 now returns BLOCK instead of pass. SPEC §5.
+- Tests: 171/171 pass.
+- Files: feature_engine.py, live_trading_engine.py, portfolio_risk.py
+
 ## [2026-03-25] Wave 2: Safe I/O Migration (Invariant #5)
 
 - **GAP-09 FIX:** portfolio_manager.py — replaced raw json.load/json.dump with safe_json_read/safe_json_write.
