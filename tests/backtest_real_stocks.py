@@ -48,7 +48,7 @@ from portfolio_risk import PortfolioRiskManager
 logging.basicConfig(level=logging.WARNING,
                     format='%(asctime)s | %(levelname)s | %(message)s')
 logger = logging.getLogger("Backtest")
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 
 
 def run_backtest(symbols, days_back=500, provider='YFINANCE'):
@@ -103,6 +103,20 @@ def run_backtest(symbols, days_back=500, provider='YFINANCE'):
 
                 # Run template matcher
                 signals = matcher.scan_ticker(symbol, df_slice, stock_state=state)
+
+                # Detailed debug: log ALL template evaluations, not just matches
+                if not signals:
+                    state_matched = matcher.tm.get_for_state(state)
+                    all_enabled = matcher.tm.get_enabled()
+
+                    if len(state_matched) == 0:
+                        logger.debug(f"[{symbol}][Day {i}] STATE BLOCK: {state} matched 0/{len(all_enabled)} templates")
+                    else:
+                        for tmpl in state_matched:
+                            passed, details = tmpl.evaluate_conditions(df_slice.iloc[-1])
+                            failed_blocks = [d['block'] for d in details if not d.get('passed')]
+                            if failed_blocks:
+                                logger.debug(f"[{symbol}][Day {i}] {tmpl.id}: BLOCKS FAILED: {failed_blocks}")
 
                 if signals:
                     results["days_with_signals"] += 1

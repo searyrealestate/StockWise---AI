@@ -5,26 +5,123 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="3acaacc8-020f-4c5a-b82f-11a15b326b39" name="Changes" comment="perf(optimizer): Parallelize grid search and optimize data handling&#10;&#10;This commit introduces a major performance overhaul to the strategy optimizer.&#10;&#10;Key improvements include:&#10;&#10;- **Parallel Processing**: The optimizer now uses a `ThreadPoolExecutor` to test multiple parameter combinations simultaneously, significantly reducing the total runtime for grid searches.&#10;- **Data Pre-fetching**: Historical market data is now downloaded once per model optimization and passed to worker threads. This eliminates thousands of redundant data fetches during the backtesting phase.&#10;- **Refactored Architecture**: The core optimization logic has been extracted into a `_process_combination` worker function to support concurrent execution.&#10;- **Real-time Progress**: The progress bar logic has been updated to accurately track the completion of parallel tasks.">
-      <change afterPath="$PROJECT_DIR$/notification_manager.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/signal_processor.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/stockwise_scanner.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/strategy_engine.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/system_config.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/test_ablation.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/continuous_learning_analyzer.py" beforeDir="false" afterPath="$PROJECT_DIR$/continuous_learning_analyzer.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.streamlit/secrets.toml" beforeDir="false" afterPath="$PROJECT_DIR$/.streamlit/secrets.toml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/App.base44/Components/Stocks/StockCard.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/App.base44/Components/Stocks/StockFilters.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/App.base44/Entities/Favorites" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/App.base44/Entities/Portfolio.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/App.base44/Entities/Stock.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/App.base44/Layout.js" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/App.base44/Pages/Allocation.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/App.base44/Pages/Dashboard.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/App.base44/Pages/Favorites.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/App.base44/Pages/Portfolio.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/App.base44/Pages/Settings.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/App.base44/Pages/StockDetails.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Application.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Create_parquet_file_NASDAQ.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Create_pkl_file_on_cloud-SP500.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Debug_algo.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/IBKR_connection_test.py" beforeDir="false" afterPath="$PROJECT_DIR$/IBKR_connection_test.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/NVDA_Accuracy_Report.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/NVDA_Adaptive_Learning_Report.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/NVDA_Trade_Execution_Report.html" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/TWS_connect_test.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/adaptive_learning_engine.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/advanced_testing_features.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/algo_configurator.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/algo_testing_script.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/algorithm_debug_system.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/analyze_model.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/analyze_test_results.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/analyze_trades.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/api_manager.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/auditor.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/brain_reset.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/build_nasdaq_market_cap.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/chart_pattern_recognizer.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/check_phase2.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/confidence_system.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/config.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/conftest.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/continuous_learning_analyzer.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/create_list_of_stocks.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/daily_maintenance.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/data_fetcher.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/data_manager.py" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/data_source_manager.py" beforeDir="false" afterPath="$PROJECT_DIR$/data_source_manager.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/feature_engine.py" beforeDir="false" afterPath="$PROJECT_DIR$/feature_engine.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/mico_optimizer.py" beforeDir="false" afterPath="$PROJECT_DIR$/mico_optimizer.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/mico_system.py" beforeDir="false" afterPath="$PROJECT_DIR$/mico_system.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/enhanced_ibkr_manager.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/enhanced_signals.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/entry_signal_analyzer.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/evaluate_models_streamlit.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/find_missing_stocks.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/fundamental_analyzer.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/generate_model_performance_summary.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/hasher.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/hyperparameter_tuner.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ibkr_connection_manager.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/israeli_costs.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/logging_manager.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/logging_setup.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/manual_trade_debugger.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/merge_intraday_with_context.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/mico_ai_module.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/mico_optimizer.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/mico_optimizer_gen4.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/mico_system.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/model_evaluator.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/model_trainer.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/model_training_enhancement.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/nasdaq_full_download.py" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/nasdaq_stocks.csv" beforeDir="false" afterPath="$PROJECT_DIR$/nasdaq_stocks.csv" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/notification_manager.py" beforeDir="false" afterPath="$PROJECT_DIR$/notification_manager.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/nvda_debug_implementation.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/optimization_integration.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/orchestrate_tuning.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/portfolio_manager.py" beforeDir="false" afterPath="$PROJECT_DIR$/portfolio_manager.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/realtime_data_feed.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/repair_brain.py" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/results_analyzer.py" beforeDir="false" afterPath="$PROJECT_DIR$/results_analyzer.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/screener.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results_analyzer.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results_compiler.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/risk_manager.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/rl_model_trainer.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/run_all_tests.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/run_master_test.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/run_optimization.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/run_optimization_gen4.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/run_strict_test.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/run_unit_tests.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/signal_processor.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/stockwise_ai_core.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/stockwise_gui.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/stockwise_scanner.py" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/stockwise_simulation.py" beforeDir="false" afterPath="$PROJECT_DIR$/stockwise_simulation.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/test_stockwise_gen2.py" beforeDir="false" afterPath="$PROJECT_DIR$/test_stockwise_gen2.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/trading_models.py" beforeDir="false" afterPath="$PROJECT_DIR$/trading_models.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/utils.py" beforeDir="false" afterPath="$PROJECT_DIR$/utils.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/technical_analyzer.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_ablation.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_algo_configurator.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_api_manager.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_create_parquet_NASDAQ_file.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_data_fetch.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_data_source_manager.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_integration_connections.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_stockwise_gen2.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_system_performance.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/testing_apps.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading_environment.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/trading_models.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/train_gen9_model.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/train_models_from_pkl.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tune_hyperparameters.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/unit_test_model_evaluator.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/unit_test_model_trainer.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/update_conids.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/update_stocks.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/utils.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/verify_fix.py" beforeDir="false" afterPath="$PROJECT_DIR$/verify_fix.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/verify_sniper_logic.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/visualize_results.py" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -49,7 +146,7 @@
 }</component>
   <component name="GithubPullRequestsUISettings">{
   &quot;selectedUrlAndAccountId&quot;: {
-    &quot;url&quot;: &quot;git@github.com:/searyrealestate/StockWise.git&quot;,
+    &quot;url&quot;: &quot;https://github.com/searyrealestate/StockWise---AI.git&quot;,
     &quot;accountId&quot;: &quot;9745097e-b986-40cd-9155-7984abf8fa18&quot;
   }
 }</component>
@@ -68,107 +165,108 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "Python tests.Python tests for ibkr_connection_manager.test_enhanced_ibkr_connection.executor": "Run",
-    "Python tests.Python tests for test_algo_configurator.TestStockWiseAutoCalibrator.executor": "Run",
-    "Python tests.Python tests for test_algo_configurator.TestStockWiseAutoCalibrator.test_calculate_actual_return_negative.executor": "Run",
-    "Python tests.Python tests for test_algo_configurator.TestStockWiseAutoCalibrator.test_generate_param_grid.executor": "Run",
-    "Python tests.Python tests for test_algo_configurator.TestStockWiseAutoCalibrator.test_normalize_numeric_values.executor": "Run",
-    "Python tests.Python tests for test_create_parquet_NASDAQ_file.TestDataSourcing.executor": "Run",
-    "Python tests.Python tests for test_create_parquet_NASDAQ_file.TestDataSourcing.test_ibkr_success_path.executor": "Run",
-    "Python tests.Python tests for test_create_parquet_NASDAQ_file.TestDataSourcing.test_ibkr_to_yfinance_fallback.executor": "Run",
-    "Python tests.Python tests for test_create_parquet_NASDAQ_file.TestDataSourcing.test_ibkr_to_yfinance_fallback.test_process_ticker_list_uses_ibkr_successfully.executor": "Run",
-    "Python tests.Python tests for test_create_parquet_NASDAQ_file.test_all_expected_features_exist.executor": "Run",
-    "Python tests.Python tests for test_create_parquet_NASDAQ_file.test_feature_correlation_to_qqq.executor": "Run",
-    "Python tests.Python tests for test_create_parquet_NASDAQ_file.test_feature_volatility_cluster.executor": "Run",
-    "Python tests.Python tests for test_create_parquet_NASDAQ_file.test_new_feature_dominant_cycle.executor": "Run",
-    "Python tests.Python tests for test_create_parquet_NASDAQ_file.test_new_feature_stochastic.executor": "Run",
-    "Python tests.Python tests for test_create_parquet_NASDAQ_file.test_triple_barrier_labeling.executor": "Run",
-    "Python tests.Python tests for test_create_parquet_NASDAQ_file.test_triple_barrier_logic_scenario.executor": "Run",
-    "Python tests.Python tests for test_data_source_manager.TestDataSourceManager.test_ibkr_connection_failure_scenario.executor": "Run",
-    "Python tests.Python tests for test_data_source_manager.TestDataSourceManager.test_total_failure_scenario.executor": "Run",
-    "Python tests.Python tests for test_data_source_manager.TestDataSourceManager.test_yfinance_fallback_scenario.executor": "Run",
-    "Python tests.Python tests for test_integration_connections.TestLiveConnections.executor": "Run",
-    "Python tests.Python tests for test_integration_connections.TestLiveConnections.test_ibkr_real_connection.executor": "Run",
-    "Python tests.Python tests for test_integration_connections.TestLiveConnections.test_yfinance_real_connection.test_ibkr_real_connection.executor": "Run",
-    "Python tests.Python tests for test_integration_connections.TestLiveTwsConnection.executor": "Run",
-    "Python tests.Python tests for test_integration_connections.TestLiveTwsConnection.test_ibkr_to_yfinance_fallback.executor": "Run",
-    "Python tests.Python tests for test_integration_connections.TestLiveTwsConnection.test_tws_api_real_connection.executor": "Run",
-    "Python tests.Python tests for test_integration_connections.TestLiveTwsConnection.test_yfinance_real_connection.executor": "Run",
-    "Python tests.Python tests for test_system_performance.TestFinancialBacktesting.executor": "Run",
-    "Python tests.Python tests for test_system_performance.TestFinancialBacktesting.test_overall_performance.executor": "Run",
-    "Python tests.Python tests for test_system_performance.TestFinancialBacktesting.test_stress_test_bear_market.executor": "Run",
-    "Python tests.Python tests for unit_test_model_evaluator.test_evaluator_handles_empty_test_data.executor": "Run",
-    "Python tests.Python tests for unit_test_model_trainer.test_train_single_model_saves_correctly.executor": "Run",
-    "Python tests.Python tests for unit_test_model_trainer.test_trained_model_meets_kpi.executor": "Run",
-    "Python tests.Python tests for unit_test_model_trainer.test_trainer_handles_insufficient_labels.executor": "Run",
-    "Python tests.Python tests in IBKR_connection_test.py.executor": "Run",
-    "Python tests.Python tests in ibkr_connection_manager.py.executor": "Run",
-    "Python tests.Python tests in stockwise_simulation.py.executor": "Run",
-    "Python tests.Python tests in test_ablation.py.executor": "Debug",
-    "Python tests.Python tests in test_algo_configurator.py.executor": "Run",
-    "Python tests.Python tests in test_create_parquet_NASDAQ_file.py.executor": "Run",
-    "Python tests.Python tests in test_data_source_manager.py.executor": "Run",
-    "Python tests.Python tests in test_integration_connections.py.executor": "Run",
-    "Python tests.Python tests in test_stockwise_gen2.py.executor": "Run",
-    "Python tests.Python tests in test_system_performance.py.executor": "Run",
-    "Python tests.Python tests in unit_test_model_evaluator.py.executor": "Run",
-    "Python tests.Python tests in unit_test_model_trainer.py.executor": "Run",
-    "Python.Create_parquet_file_NASDAQ.executor": "Run",
-    "Python.IBKR_connection_test.executor": "Run",
-    "Python.TWS_connect_test.executor": "Run",
-    "Python.advanced_testing_features.executor": "Run",
-    "Python.algo_configurator.executor": "Run",
-    "Python.algo_testing_script.executor": "Run",
-    "Python.algorithm_debug_system.executor": "Run",
-    "Python.analyze_model.executor": "Run",
-    "Python.analyze_test_results.executor": "Run",
-    "Python.api_manager.executor": "Run",
-    "Python.build_nasdaq_market_cap.executor": "Run",
-    "Python.continuous_learning_analyzer.executor": "Debug",
-    "Python.create_list_of_stocks.executor": "Run",
-    "Python.data_manager.executor": "Run",
-    "Python.data_source_manager.executor": "Run",
-    "Python.merge_intraday_with_context.executor": "Run",
-    "Python.model_evaluator.executor": "Run",
-    "Python.model_trainer.executor": "Run",
-    "Python.nasdaq_full_download.executor": "Run",
-    "Python.nvda_debug_implementation.executor": "Run",
-    "Python.orchestrate_tuning.executor": "Run",
-    "Python.results_compiler.executor": "Run",
-    "Python.run_all_tests.executor": "Run",
-    "Python.run_master_test.executor": "Run",
-    "Python.run_optimization.executor": "Run",
-    "Python.run_unit_tests.executor": "Run",
-    "Python.sanity_test (1).executor": "Run",
-    "Python.stockwise_simulation-gen2.executor": "Run",
-    "Python.stockwise_simulation.executor": "Run",
-    "Python.test_ablation.executor": "Debug",
-    "Python.testing.executor": "Run",
-    "Python.train_models_from_pkl (1).executor": "Run",
-    "Python.train_sp500_model.executor": "Run",
-    "Python.tune_hyperparameters.executor": "Run",
-    "RunOnceActivity.ChatTagsLlmMigration": "true",
-    "RunOnceActivity.ClientConfigCleanupMigration": "true",
-    "RunOnceActivity.CodyAccountHistoryMigration": "true",
-    "RunOnceActivity.CodyAccountsIdsRefresh": "true",
-    "RunOnceActivity.CodyAssignOrphanedChatsToActiveAccount": "true",
-    "RunOnceActivity.CodyConvertUrlToCodebaseName": "true",
-    "RunOnceActivity.CodyHistoryLlmMigration": "true",
-    "RunOnceActivity.CodyMigrateChatHistory-v2": "true",
-    "RunOnceActivity.CodyProjectSettingsMigration": "true",
-    "RunOnceActivity.DeprecatedChatLlmMigration": "true",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.ToggleCodyToolWindowAfterMigration": "true",
-    "SHARE_PROJECT_CONFIGURATION_FILES": "true",
-    "com.codeium.enabled": "true",
-    "didalgo.chatgpt.ToolWindow.ACTIVE": "GPT_4",
-    "git-widget-placeholder": "master",
-    "ignore.virus.scanning.warn.message": "true",
-    "settings.editor.selected.configurable": "preferences.pluginManager"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;Python tests.Python tests for ibkr_connection_manager.test_enhanced_ibkr_connection.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_algo_configurator.TestStockWiseAutoCalibrator.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_algo_configurator.TestStockWiseAutoCalibrator.test_calculate_actual_return_negative.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_algo_configurator.TestStockWiseAutoCalibrator.test_generate_param_grid.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_algo_configurator.TestStockWiseAutoCalibrator.test_normalize_numeric_values.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_create_parquet_NASDAQ_file.TestDataSourcing.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_create_parquet_NASDAQ_file.TestDataSourcing.test_ibkr_success_path.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_create_parquet_NASDAQ_file.TestDataSourcing.test_ibkr_to_yfinance_fallback.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_create_parquet_NASDAQ_file.TestDataSourcing.test_ibkr_to_yfinance_fallback.test_process_ticker_list_uses_ibkr_successfully.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_create_parquet_NASDAQ_file.test_all_expected_features_exist.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_create_parquet_NASDAQ_file.test_feature_correlation_to_qqq.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_create_parquet_NASDAQ_file.test_feature_volatility_cluster.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_create_parquet_NASDAQ_file.test_new_feature_dominant_cycle.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_create_parquet_NASDAQ_file.test_new_feature_stochastic.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_create_parquet_NASDAQ_file.test_triple_barrier_labeling.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_create_parquet_NASDAQ_file.test_triple_barrier_logic_scenario.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_data_source_manager.TestDataSourceManager.test_ibkr_connection_failure_scenario.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_data_source_manager.TestDataSourceManager.test_total_failure_scenario.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_data_source_manager.TestDataSourceManager.test_yfinance_fallback_scenario.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_integration_connections.TestLiveConnections.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_integration_connections.TestLiveConnections.test_ibkr_real_connection.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_integration_connections.TestLiveConnections.test_yfinance_real_connection.test_ibkr_real_connection.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_integration_connections.TestLiveTwsConnection.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_integration_connections.TestLiveTwsConnection.test_ibkr_to_yfinance_fallback.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_integration_connections.TestLiveTwsConnection.test_tws_api_real_connection.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_integration_connections.TestLiveTwsConnection.test_yfinance_real_connection.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_system_performance.TestFinancialBacktesting.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_system_performance.TestFinancialBacktesting.test_overall_performance.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for test_system_performance.TestFinancialBacktesting.test_stress_test_bear_market.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for unit_test_model_evaluator.test_evaluator_handles_empty_test_data.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for unit_test_model_trainer.test_train_single_model_saves_correctly.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for unit_test_model_trainer.test_trained_model_meets_kpi.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for unit_test_model_trainer.test_trainer_handles_insufficient_labels.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests in IBKR_connection_test.py.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests in ibkr_connection_manager.py.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests in stockwise_simulation.py.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests in test_ablation.py.executor&quot;: &quot;Debug&quot;,
+    &quot;Python tests.Python tests in test_algo_configurator.py.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests in test_create_parquet_NASDAQ_file.py.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests in test_data_source_manager.py.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests in test_integration_connections.py.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests in test_stockwise_gen2.py.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests in test_system_performance.py.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests in unit_test_model_evaluator.py.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests in unit_test_model_trainer.py.executor&quot;: &quot;Run&quot;,
+    &quot;Python.Create_parquet_file_NASDAQ.executor&quot;: &quot;Run&quot;,
+    &quot;Python.IBKR_connection_test.executor&quot;: &quot;Run&quot;,
+    &quot;Python.TWS_connect_test.executor&quot;: &quot;Run&quot;,
+    &quot;Python.advanced_testing_features.executor&quot;: &quot;Run&quot;,
+    &quot;Python.algo_configurator.executor&quot;: &quot;Run&quot;,
+    &quot;Python.algo_testing_script.executor&quot;: &quot;Run&quot;,
+    &quot;Python.algorithm_debug_system.executor&quot;: &quot;Run&quot;,
+    &quot;Python.analyze_model.executor&quot;: &quot;Run&quot;,
+    &quot;Python.analyze_test_results.executor&quot;: &quot;Run&quot;,
+    &quot;Python.api_manager.executor&quot;: &quot;Run&quot;,
+    &quot;Python.build_nasdaq_market_cap.executor&quot;: &quot;Run&quot;,
+    &quot;Python.continuous_learning_analyzer.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.create_list_of_stocks.executor&quot;: &quot;Run&quot;,
+    &quot;Python.data_manager.executor&quot;: &quot;Run&quot;,
+    &quot;Python.data_source_manager.executor&quot;: &quot;Run&quot;,
+    &quot;Python.merge_intraday_with_context.executor&quot;: &quot;Run&quot;,
+    &quot;Python.model_evaluator.executor&quot;: &quot;Run&quot;,
+    &quot;Python.model_trainer.executor&quot;: &quot;Run&quot;,
+    &quot;Python.nasdaq_full_download.executor&quot;: &quot;Run&quot;,
+    &quot;Python.nvda_debug_implementation.executor&quot;: &quot;Run&quot;,
+    &quot;Python.orchestrate_tuning.executor&quot;: &quot;Run&quot;,
+    &quot;Python.results_compiler.executor&quot;: &quot;Run&quot;,
+    &quot;Python.run_all_tests.executor&quot;: &quot;Run&quot;,
+    &quot;Python.run_master_test.executor&quot;: &quot;Run&quot;,
+    &quot;Python.run_optimization.executor&quot;: &quot;Run&quot;,
+    &quot;Python.run_unit_tests.executor&quot;: &quot;Run&quot;,
+    &quot;Python.sanity_test (1).executor&quot;: &quot;Run&quot;,
+    &quot;Python.stockwise_simulation-gen2.executor&quot;: &quot;Run&quot;,
+    &quot;Python.stockwise_simulation.executor&quot;: &quot;Run&quot;,
+    &quot;Python.test_ablation.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.testing.executor&quot;: &quot;Run&quot;,
+    &quot;Python.train_models_from_pkl (1).executor&quot;: &quot;Run&quot;,
+    &quot;Python.train_sp500_model.executor&quot;: &quot;Run&quot;,
+    &quot;Python.tune_hyperparameters.executor&quot;: &quot;Run&quot;,
+    &quot;RunOnceActivity.ChatTagsLlmMigration&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ClientConfigCleanupMigration&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.CodyAccountHistoryMigration&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.CodyAccountsIdsRefresh&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.CodyAssignOrphanedChatsToActiveAccount&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.CodyConvertUrlToCodebaseName&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.CodyHistoryLlmMigration&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.CodyMigrateChatHistory-v2&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.CodyProjectSettingsMigration&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.DeprecatedChatLlmMigration&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ToggleCodyToolWindowAfterMigration&quot;: &quot;true&quot;,
+    &quot;SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
+    &quot;com.codeium.enabled&quot;: &quot;true&quot;,
+    &quot;didalgo.chatgpt.ToolWindow.ACTIVE&quot;: &quot;GPT_4&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+    &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
+    &quot;last_opened_file_path&quot;: &quot;C:/Users/user/PycharmProjects/StockWise - AI&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;preferences.pluginManager&quot;
   }
-}]]></component>
+}</component>
   <component name="RunManager" selected="Python.test_ablation">
     <configuration name="continuous_learning_analyzer" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
       <module name="StockWise" />
@@ -277,11 +375,11 @@
       <method v="2" />
     </configuration>
     <list>
-      <item itemvalue="Python.test_ablation" />
       <item itemvalue="Python.continuous_learning_analyzer" />
       <item itemvalue="Python.run_master_test" />
-      <item itemvalue="Python tests.Python tests in test_ablation.py" />
+      <item itemvalue="Python.test_ablation" />
       <item itemvalue="Python tests.Python tests in IBKR_connection_test.py" />
+      <item itemvalue="Python tests.Python tests in test_ablation.py" />
     </list>
     <recent_temporary>
       <list>
