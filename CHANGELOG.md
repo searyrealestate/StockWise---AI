@@ -1,5 +1,14 @@
 # Changelog
 
+## [2026-03-26] Batch 5: Execution Tests (TDD v1.1 §7) — MONEY PATH
+
+- Created `tests/test_execution.py` — 28 tests (PM-01→07, OT-01→04, KS-01→17).
+- **PM-01→07 (Pre-Market Validator):** Large gap (12%) vetoed; small gap (1.5%) passes; threshold driven by `max_gap_pct` from config; window behavior (09:25 ET fires, 10:00 ET always passes); `use_ibkr_for_premarket=True` verified; veto cached — second call returns cached veto without re-checking gap. Datetime mocked via `patch('pre_market_validator.datetime')` with pytz-aware `_IN_WINDOW`/`_OUT_WINDOW` sentinels.
+- **OT-01→04 (Order Types):** `exec_price` assigned from `limit_price` (LIMIT-style fill); no `order_type='MARKET'`/`'MKT'` in source; `execute_ticket` returns `FILLED` status; `slippage_pct` sourced from `COSTS_CONFIG` not hardcoded.
+- **KS-01→17 (Kinetic Stop):** All 5 phases tested directly on `LifecycleManager.manage_kinetic_stop()`: Phase 1 ATR trail; Phase 2 breakeven ≥ entry; Phase 3 parabolic choke; PAUSE (all 3 conditions: pullback 0.5–3% + RSI≥40 + ER≥0.45); PAUSE blocked when RSI<40; PAUSE blocked when ER<0.45; Phase 4 runner ultra-tight; returns exactly 3 values; stop monotonically non-decreasing; phase 3 tighter than phase 1; no profit-taking patterns; all params from config; zero price no crash; PAUSE cannot fire from Phase 1 (profit < phase3 trigger); Phase 4 takes priority over PAUSE when `runner_mode=True`.
+- Execution: 28/28 passed in 1.80s first-pass. Full suite: 315/319 (4 pre-existing failures unrelated).
+- Files: `tests/test_execution.py` (NEW)
+
 ## [2026-03-26] Batch 4: Template System Tests (TDD v1.1 §6)
 
 - Created `tests/test_template_system.py` — 29 tests (BR-01→12, TV-01→07, TM-01→10).
