@@ -1,5 +1,15 @@
 # Changelog
 
+## [2026-03-26] Batch 4: Template System Tests (TDD v1.1 §6)
+
+- Created `tests/test_template_system.py` — 29 tests (BR-01→12, TV-01→07, TM-01→10).
+- **BR-01→12 (Block Registry):** `rsi_between` in/out of range; `close_above_sma` strict-greater-than; `volume_surge` 4× threshold; `er_slow_above` above/below; `stop_atr`/`target_atr` arithmetic; all CONDITION_BLOCKS survive NaN and None rows (generic `[50, 200]` params cover both 1-param and 2-param blocks like `sma_above_sma`).
+- **TV-01→07 (Template Validation):** ≤5 enabled templates (SPEC §4 ceiling); required fields present; non-empty conditions; `required_state` values from documented enum set; stop/take-profit methods registered in block dicts; no duplicate names; `MAX_TEMPLATES == 5`.
+- **TM-01→10 (Template Matcher):** BULL state + passing row → signal; BEAR state mismatch → 0 signals; failing row → 0 signals; empty df → []; signal fields verified; NaN df no crash; empty state no match; `SIGNAL_PIPELINE_MODE` key exists; mode is in `{legacy, templates, dual}`; scan statistics counter increments correctly.
+- Adapted: `assert bool(result) is True/False` to handle `np.True_`/`np.False_` from pandas comparisons.
+- Execution: 29/29 passed in 1.50s. Full suite (excl. pre-existing failures): 287/290.
+- Files: `tests/test_template_system.py` (NEW)
+
 ## [2026-03-26] Batch 3: Feature Engine Tests (TDD v1.1 §4)
 
 - Created `tests/test_feature_engine.py` — 20 tests (VG-01→08, CN-01→05, RC-01→07).
