@@ -1,5 +1,18 @@
 # Changelog
 
+## [2026-03-25] Wave 4.5: Vectorized Decay Rates (SPEC v13.4 §4)
+
+- **GAP-12 FIX:** `shadow_ledger.py` — added `apply_decay()` method. Adds `decayed_win_rate`, `decay_weight`, `decay_category` to all stored template stats.
+- Decay formula: `raw_wr * weight + 50.0 * (1 - weight)` — regresses to neutral (50%), not zero.
+- Per-category rates: momentum=0.90, breakout=0.92, mean_reversion=0.93, vsa_institutional=0.99, default=0.95.
+- `apply_decay()` called in `run_full_evaluation()` before `_save_ledger()` (post-processing step).
+- `setup_templates.py` — added `get_category()` to `SetupTemplate`. Infers category from template ID naming conventions (no JSON file changes needed).
+- `template_matcher.py` — `get_template_win_rate()` now prefers `decayed_win_rate` with raw `win_rate` fallback. `_aggregate_global_stats()` computes weighted-average `decayed_win_rate` across symbols.
+- `VECTORIZED_DECAY_CONFIG` added to `system_config.py` after `ASSET_SPECIFIC_CONFIG`.
+- **PLANNED (Phase 2):** Per-timeframe decay rates for MTFA (4H/1H/15m).
+- Tests: 171/171 pass.
+- Files: `shadow_ledger.py`, `setup_templates.py`, `template_matcher.py`, `system_config.py`
+
 ## [2026-03-25] Wave 4.4: Asset-Specific Template Weighting (DDR #1)
 
 - **GAP-05 FIX:** `template_matcher.py` — added `get_template_win_rate(template_id, symbol)` with cold start fallback.

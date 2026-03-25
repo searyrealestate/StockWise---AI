@@ -496,6 +496,23 @@ ASSET_SPECIFIC_CONFIG = {
     "shadow_ledger_path": "data/shadow_ledger.json",  # Must match SHADOW_LEDGER_CONFIG.ledger_path
 }
 
+# Vectorized Decay: per-template-category aging rates (SPEC v13.4 §4)
+# Momentum signals lose relevance quickly. VSA/institutional patterns persist.
+# Applied by Shadow Ledger after each full evaluation run.
+# Phase 2: MTFA will introduce per-timeframe decay rates.
+VECTORIZED_DECAY_CONFIG = {
+    "enabled": True,
+    "decay_rates": {
+        "momentum": 0.90,           # Fast decay — momentum signals lose relevance quickly
+        "breakout": 0.92,           # Medium-fast decay
+        "mean_reversion": 0.93,     # Medium decay
+        "vsa_institutional": 0.99,  # Slow decay — institutional accumulation patterns persist
+        "default": 0.95,            # Default for uncategorized templates
+    },
+    "decay_period_days": 7,         # Decay applied per this many days of age
+    "min_weight": 0.05,             # Floor — signals never fully forgotten
+}
+
 # Portfolio Risk Management (Phase 5)
 PORTFOLIO_RISK_CONFIG = {
     # --- Correlation Check ---

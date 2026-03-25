@@ -379,6 +379,30 @@ class SetupTemplate:
             "updated_at": datetime.now().isoformat()
         }
 
+    def get_category(self):
+        """
+        Return template category for vectorized decay (SPEC v13.4 §4).
+
+        If template data contains a 'category' field, use it.
+        Otherwise infer from template ID naming conventions so existing seed
+        templates get correct decay rates without modifying JSON files.
+        """
+        # Explicit category field takes priority
+        explicit = self.data.get('category', None)
+        if explicit:
+            return explicit
+        # Infer from ID — covers all current seed templates
+        tid = self.id.upper()
+        if 'VSA' in tid or 'INSTITUTIONAL' in tid:
+            return 'vsa_institutional'
+        if 'BREAKOUT' in tid:
+            return 'breakout'
+        if 'BOUNCE' in tid or 'REVERSION' in tid or 'OVERSOLD' in tid:
+            return 'mean_reversion'
+        if 'MOMENTUM' in tid or 'TREND' in tid or 'PULLBACK' in tid:
+            return 'momentum'
+        return 'default'
+
     def validate(self):
         """
         Validates the template structure. Returns (is_valid, errors_list).

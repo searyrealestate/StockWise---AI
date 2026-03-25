@@ -238,6 +238,72 @@ class ShadowLedger:
 
         return global_stats
 
+    def apply_decay(self):
+        """
+        SPEC v13.4 §4: Apply vectorized decay to all stored template stats.
+
+        Recent signals are weighted more; old signals fade at a rate that depends
+        on template category. VSA/institutional templates retain memory longer
+        than momentum templates.
+
+        Adds 'decayed_win_rate', 'decay_weight', and 'decay_category' to each
+        template's stats entry. template_matcher reads decayed_win_rate for
+        confidence scoring.
+
+        Decay formula: decayed_win_rate = raw_wr * weight + 50.0 * (1 - weight)
+        As weight → min_weight, win_rate regresses to 50% (neutral/unknown),
+        NOT to 0% — an old template should be uncertain, not condemned.
+        """
+        decay_config = getattr(cfg, 'VECTORIZED_DECAY_CONFIG', {})
+        if not decay_config.get('enabled', True):
+            return
+
+        decay_rates = decay_config.get('decay_rates', {})
+        period_days = decay_config.get('decay_period_days', 7)
+        min_weight = decay_config.get('min_weight', 0.05)
+
+        last_run = self.ledger.get("metadata", {}).get("last_run")
+        if not last_run:
+            logger.debug("No previous run timestamp — skipping decay")
+            return
+
+        now = datetime.now()
+        try:
+            last_dt = datetime.fromisoformat(last_run)
+            days_since = (now - last_dt).days
+        except (ValueError, TypeError):
+            logger.warning(f"Invalid last_run timestamp: {last_run}")
+            return
+
+        if days_since <= 0:
+            return  # Same day — no decay
+
+        periods = days_since / period_days
+
+        # Build id → template map for category lookup
+        templates_by_id = {t.id: t for t in self.tm.get_enabled()}
+
+        for symbol, sym_stats in self.ledger.get("template_stats", {}).items():
+            for tid, stats in sym_stats.items():
+                template = templates_by_id.get(tid)
+                if template and hasattr(template, 'get_category'):
+                    category = template.get_category()
+                else:
+                    category = getattr(template, 'category', 'default') if template else 'default'
+
+                rate = decay_rates.get(category, decay_rates.get('default', 0.95))
+                weight = max(rate ** periods, min_weight)
+
+                raw_wr = stats.get("win_rate", 50.0)
+                stats["decayed_win_rate"] = round(raw_wr * weight + 50.0 * (1 - weight), 1)
+                stats["decay_weight"] = round(weight, 4)
+                stats["decay_category"] = category
+
+        logger.info(
+            f"Vectorized decay applied: {days_since}d since last run, "
+            f"{periods:.1f} periods (rates by category)"
+        )
+
     def run_full_evaluation(self, data_source_manager, symbols=None, feature_engine=None):
         """
         Batch evaluation: run candle-by-candle for all symbols.
@@ -282,6 +348,9 @@ class ShadowLedger:
                 logger.error(f"[{symbol}] Shadow evaluation failed: {e}")
                 skipped += 1
                 continue
+
+        # Apply vectorized decay before saving (SPEC v13.4 §4)
+        self.apply_decay()
 
         self._save_ledger()
         logger.info(

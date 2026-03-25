@@ -310,8 +310,9 @@ class TemplateMatcher:
             # Cold start — not enough per-symbol history, use global only
             return global_stat.get('win_rate', 50.0)
 
-        per_wr = per_stock.get('win_rate', 50.0)
-        global_wr = global_stat.get('win_rate', 50.0)
+        # Prefer decayed_win_rate if available (W4-5), fall back to raw win_rate
+        per_wr = per_stock.get('decayed_win_rate', per_stock.get('win_rate', 50.0))
+        global_wr = global_stat.get('decayed_win_rate', global_stat.get('win_rate', 50.0))
         blended = (per_wr * per_weight) + (global_wr * global_weight)
         return round(blended, 1)
 
@@ -340,11 +341,26 @@ class TemplateMatcher:
         if total_signals == 0:
             return {"win_rate": 50.0, "avg_pnl_pct": 0.0, "signal_count": 0}
 
-        return {
+        result = {
             "win_rate": round(total_wins / total_signals * 100, 1),
             "avg_pnl_pct": round(total_pnl / total_signals, 2),
             "signal_count": total_signals,
         }
+
+        # Weighted average of decayed_win_rate across symbols (W4-5)
+        total_decayed_wr = 0.0
+        decayed_count = 0
+        for sym_stats in shadow_stats.values():
+            t_stats = sym_stats.get(template_id, {})
+            sc = t_stats.get('signal_count', 0)
+            if 'decayed_win_rate' in t_stats and sc > 0:
+                total_decayed_wr += t_stats['decayed_win_rate'] * sc
+                decayed_count += sc
+
+        if decayed_count > 0:
+            result["decayed_win_rate"] = round(total_decayed_wr / decayed_count, 1)
+
+        return result
 
     def _get_template_by_id(self, template_id):
         """Find template by ID. Delegates to TemplateManager's registry."""
