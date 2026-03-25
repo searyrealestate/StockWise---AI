@@ -1,5 +1,17 @@
 # Changelog
 
+## [2026-03-26] Batch 2: Data Layer Tests (TDD v1.1 §3)
+
+- Created `tests/test_data_layer.py` — 23 tests (DL-01→08, NL-01→09, DG-01→06).
+- **DL-01→08 (Waterfall Routing):** MASSIVE-first ordering, provider fallback chain, partial-data fallback via `min_rows`, timeout handling, all-fail safety, IBKR fallback with forced `use_ibkr=True`.
+- **NL-01→09 (Normalization):** All 4 provider formats (ALPACA/IBKR/YFINANCE/MASSIVE), missing-column raises `DataValidationError`, extra columns survive, numeric dtype coercion, sorted DatetimeIndex, negative volume clipped.
+- **DG-01→06 (Data Guard):** below/at/above threshold semantics, empty df, None safety, threshold sourced from `MIN_CANDLES_FOR_PROCESSING` in `system_config.py`.
+- NL-07 adapted: `pd.to_numeric` on integers yields int64 (not float64) — asserted `is_numeric_dtype` instead; documents actual normalize_ohlcv behavior.
+- DL-03 adapted: `IBKR_AVAILABLE=False` in this environment — forced `dsm.use_ibkr = True` post-construction.
+- All files opened with `encoding='utf-8'` for Windows compatibility.
+- Execution: 23/23 passed in 2.5s. Full suite: 209/209 (171 + 15 + 23).
+- Files: `tests/test_data_layer.py` (NEW)
+
 ## [2026-03-26] Batch 1: Regression Guards (TDD v1.1 §13)
 
 - Created `tests/test_regression.py` — 15 source-code inspection regression guards (RG-01 to RG-15).
