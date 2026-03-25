@@ -1,5 +1,28 @@
 # Changelog
 
+## [2026-03-26] Batch 1: Regression Guards (TDD v1.1 §13)
+
+- Created `tests/test_regression.py` — 15 source-code inspection regression guards (RG-01 to RG-15).
+- Created `tests/__init__.py` (empty package marker).
+- All P0 — pure file inspection, zero mocking, zero API calls.
+- **RG-01:** Waterfall routing active (≥3 `_download_from_X` methods present).
+- **RG-02:** `DEFAULT_TRAINING_SYMBOLS[0] == "SPY"` at runtime.
+- **RG-03:** No `always_in_vip` in `_update_daily_review_list`.
+- **RG-04:** `manage_kinetic_stop()` every multi-value return = exactly 3 values.
+- **RG-05:** No raw `json.load`/`json.dump` in wave-updated money-path files.
+- **RG-06:** API credentials accessed via `getattr(..., None)` defensive pattern.
+- **RG-07:** No programmatic profit-taking patterns in execution code.
+- **RG-08:** `FeatureEngine()` instantiated ≤2 times in live_trading_engine (not per-ticker).
+- **RG-09:** `scan_ledger.json` not read per-ticker inside scan loop.
+- **RG-10:** `min_net_profit_pct` is 0.005 (0.5%), old 0.013 (1.3%) absent.
+- **RG-11:** Phase 4 Runner params present in `KINETIC_STOP_CONFIG`.
+- **RG-12:** No `MARKET`/`MKT` order_type in execution code.
+- **RG-13:** `normalize_ohlcv()` defined and called ≥4 times (all providers wired).
+- **RG-14:** ≤5 template JSON files; `MAX_TEMPLATES` enforced in config.
+- **RG-15:** No single `DATA_PROVIDER = 'X'` hardcoded; waterfall flags used.
+- Execution: 15/15 passed in 5.4s. master_validator: 171/171 unchanged.
+- Files: `tests/test_regression.py` (NEW), `tests/__init__.py` (NEW)
+
 ## [2026-03-25] Wave 4.5: Vectorized Decay Rates (SPEC v13.4 §4)
 
 - **GAP-12 FIX:** `shadow_ledger.py` — added `apply_decay()` method. Adds `decayed_win_rate`, `decay_weight`, `decay_category` to all stored template stats.
