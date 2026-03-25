@@ -1,5 +1,18 @@
 # Changelog
 
+## [2026-03-25] Wave 4.3: Shadow Ledger Engine (SPEC v13.4 §4)
+
+- **GAP-04 FIX:** Created `shadow_ledger.py` with `ShadowLedger` class.
+- Candle-by-candle evaluation of all templates across 3 years of historical data (1095 days).
+- Signal cooldown: `min_bars_between_signals=20` prevents correlated duplicate signals.
+- Virtual signal tracking with target/stop resolution (stop checked first — conservative).
+- Per-symbol and global template statistics (`win_rate`, `avg_pnl_pct`).
+- Runs offline (weekends) per DDR Part C — does not block nightly scan.
+- `SHADOW_LEDGER_CONFIG` added to `system_config.py` after `PRE_MARKET_CONFIG`.
+- **PLANNED (Phase 2):** MTFA (Multi-Timeframe Analysis) — 4H/1H/15m confluence scoring. Will extend Shadow Ledger after daily baseline is established and measured. Requires DDR #5 for architectural decision on intraday data sources and alignment.
+- Tests: 171/171 pass.
+- Files: `shadow_ledger.py` (NEW), `system_config.py`
+
 ## [2026-03-25] Wave 4.2: Pre-Market Validator (SPEC v13.4 §5)
 
 - **GAP-07 FIX:** Created `pre_market_validator.py` — 09:25 ET gap detection. Vetoes signals where overnight gap > 5% (configurable). IBKR pre-market data preferred, falls back to last close comparison.

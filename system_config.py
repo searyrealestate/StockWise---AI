@@ -469,6 +469,21 @@ PRE_MARKET_CONFIG = {
     "veto_cooldown_minutes": 60,     # Suppress repeat vetoes for 60 min
 }
 
+# Shadow Ledger: Candle-by-Candle Learning Engine (SPEC v13.4 §4)
+# Runs OFFLINE (weekends) — evaluates all templates across historical data bar-by-bar.
+# Output: per-symbol, per-template win rates used by template_matcher (W4-4).
+# Phase 2 planned: MTFA (Multi-Timeframe Analysis) — daily only for now.
+SHADOW_LEDGER_CONFIG = {
+    "enabled": True,
+    "ledger_path": "data/shadow_ledger.json",
+    "eval_days_back": 1095,              # 3 years — enough for ~26 signals per template with cooldown
+    "max_templates": 5,                  # Matches MAX_TEMPLATES ceiling
+    "lookahead_candles": 20,             # How many candles forward to check target/stop
+    "min_candles_for_eval": 200,         # Matches MIN_CANDLES_FOR_PROCESSING — indicator warmup
+    "min_bars_between_signals": 20,      # Cooldown: prevent correlated signals from same template
+    "run_mode": "offline",               # "offline" = weekend batch only
+}
+
 # Portfolio Risk Management (Phase 5)
 PORTFOLIO_RISK_CONFIG = {
     # --- Correlation Check ---
