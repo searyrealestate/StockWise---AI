@@ -1,5 +1,14 @@
 # Changelog
 
+## [2026-03-26] Batch 3: Feature Engine Tests (TDD v1.1 §4)
+
+- Created `tests/test_feature_engine.py` — 20 tests (VG-01→08, CN-01→05, RC-01→07).
+- **VG-01→08 (Veto Gates):** None/empty DF vetoed; volume < 1 (zero, negative, NaN) triggers Gate 1; death_cross=True on last row triggers Gate 2; vsa_squat_bar=True triggers Gate 3; historical death_cross (not last row) does not veto; return type contract (bool, str).
+- **CN-01→05 (Candle Noise Reduction):** Doji/SpinningTop → `CANDLE_INDECISION`; Hammer/Engulf → `CANDLE_BULLISH_REVERSAL`; ShootingStar/Evening → `CANDLE_BEARISH_REVERSAL`; unknown/structural patterns pass through; empty input returns []; mixed families produce all three canonical labels with raw names absorbed.
+- **RC-01→07 (Regime Classification Columns):** `sma_50`/`sma_200` present; `death_cross`/`golden_cross` present with boolean-compatible dtype; death_cross sparse (single-crossing candle, not persistent); `adx` in range 0–100; `rsi` in range 0–100; `vsa_squat_bar` column present; calculate_features idempotent (double-call no crash).
+- Execution: 20/20 passed. Full suite: 229/229 (171 + 15 + 23 + 20).
+- Files: `tests/test_feature_engine.py` (NEW)
+
 ## [2026-03-26] Batch 2: Data Layer Tests (TDD v1.1 §3)
 
 - Created `tests/test_data_layer.py` — 23 tests (DL-01→08, NL-01→09, DG-01→06).
