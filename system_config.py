@@ -484,6 +484,18 @@ SHADOW_LEDGER_CONFIG = {
     "run_mode": "offline",               # "offline" = weekend batch only
 }
 
+# Asset-Specific Optimization (DDR #1)
+# Uses per-symbol template win rates from Shadow Ledger instead of global averages.
+# Cold start: symbols with < cold_start_min_signals fall back to global average.
+# Blended: per_stock_weight% per-stock + global_weight% global for established symbols.
+ASSET_SPECIFIC_CONFIG = {
+    "enabled": True,
+    "cold_start_min_signals": 5,                    # Below this → use global average only
+    "per_stock_weight": 0.7,                        # 70% weight to per-stock stats
+    "global_weight": 0.3,                           # 30% weight to global stats
+    "shadow_ledger_path": "data/shadow_ledger.json",  # Must match SHADOW_LEDGER_CONFIG.ledger_path
+}
+
 # Portfolio Risk Management (Phase 5)
 PORTFOLIO_RISK_CONFIG = {
     # --- Correlation Check ---

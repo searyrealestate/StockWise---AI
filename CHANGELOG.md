@@ -1,5 +1,18 @@
 # Changelog
 
+## [2026-03-25] Wave 4.4: Asset-Specific Template Weighting (DDR #1)
+
+- **GAP-05 FIX:** `template_matcher.py` — added `get_template_win_rate(template_id, symbol)` with cold start fallback.
+- Per-symbol win rates loaded from Shadow Ledger (`data/shadow_ledger.json`).
+- Cold start: symbols with < 5 signals fall back to global average only.
+- Blended mode: 70% per-stock + 30% global for established symbols.
+- Helper methods: `_load_shadow_stats()`, `_aggregate_global_stats()`, `_get_template_by_id()`.
+- `ASSET_SPECIFIC_CONFIG` added to `system_config.py` (all thresholds configurable).
+- No signature changes to existing methods — `symbol` was already in `_build_signal`.
+- Blast radius: zero — `live_trading_engine.py` caller unchanged.
+- Tests: 171/171 pass.
+- Files: `template_matcher.py`, `system_config.py`
+
 ## [2026-03-25] Wave 4.3: Shadow Ledger Engine (SPEC v13.4 §4)
 
 - **GAP-04 FIX:** Created `shadow_ledger.py` with `ShadowLedger` class.
