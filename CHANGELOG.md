@@ -1,5 +1,22 @@
 # Changelog
 
+## [2026-03-27] Migrate raw json.load/dump to safe_json_io in 6 files
+
+**Diagnosis:** 9 raw `json.load`/`json.dump` (file I/O) calls across 7 files. `stockwise_simulation_v2.py` was already clean.
+
+| File | Calls migrated | Notes |
+|---|---|---|
+| `setup_templates.py` | 2 (load + dump) | Added `safe_json_io` import |
+| `strategy_engine.py` | 2 (load × 2) | Already imported; `_load_json` simplified (try/except removed — safe_json_read handles retries internally) |
+| `train_model.py` | 3 (load × 2 + dump) | Added import |
+| `notebooklm_sync.py` | 1 (load) | Added import; `json.dumps` (string) left intact |
+| `stockwise_simulation.py` | 1 (load) | Added import |
+| `system_config.py` | 0 (skipped) | `json.dump(..., ensure_ascii=False)` not supported by `safe_json_write`; tagged `# TODO: migrate to safe_json_io` |
+
+**Remaining raw `json.dump`/`json.load`:** 1 — `system_config.py:946` (tagged TODO, non-migratable without `ensure_ascii` support).
+- All 6 changed files compile clean.
+- Suite: **248/248 passed**, 0 regressions (17.77s).
+
 ## [2026-03-27] Observability Layer Part 2 — Wire DecisionLogger into 5 pipeline decision points
 
 - **`feature_engine.py`:** Import `_dl` at module level (try/except). 3 veto log calls in `check_veto_gates` — one per gate (volume, death_cross, vsa_squat_bar), each before its `return True` with `log_veto(gate=..., passed=False)`.

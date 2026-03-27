@@ -19,6 +19,7 @@ They can be:
 
 import os
 import json
+from safe_json_io import safe_json_read, safe_json_write
 import logging
 from datetime import datetime
 import system_config as cfg
@@ -778,8 +779,7 @@ class TemplateManager:
                 continue
             filepath = os.path.join(self.templates_dir, filename)
             try:
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
+                data = safe_json_read(filepath, default={})
                 template = SetupTemplate(data)
                 is_valid, errors = template.validate()
                 if is_valid:
@@ -796,8 +796,7 @@ class TemplateManager:
         """Save a single template to disk."""
         filepath = os.path.join(self.templates_dir, f"{template.id}.json")
         try:
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump(template.to_dict(), f, indent=2)
+            safe_json_write(filepath, template.to_dict())
             logger.debug(f"Saved template: {template.id}")
         except Exception as e:
             logger.error(f"Failed to save template {template.id}: {e}")

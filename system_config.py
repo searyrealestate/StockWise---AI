@@ -941,6 +941,7 @@ def snapshot_configuration(logger_instance=None):
         filename = f"config_snapshot_{run_id}.json"
         filepath = os.path.join(LOGS_DIR, filename)
 
+        # TODO: migrate to safe_json_io (needs ensure_ascii=False support not in safe_json_write)
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(snapshot, f, indent=2, ensure_ascii=False)
 

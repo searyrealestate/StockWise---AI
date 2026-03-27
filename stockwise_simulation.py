@@ -56,6 +56,7 @@ import logging
 import sys
 import os
 import json
+from safe_json_io import safe_json_read
 import traceback
 from datetime import datetime, timedelta
 import yaml
@@ -749,8 +750,7 @@ class ProfessionalStockAdvisor:
                 model_name = os.path.basename(model_path).replace(".pkl", "")
                 features_path = model_path.replace(".pkl", "_features.json")
                 models[model_name] = joblib.load(model_path)
-                with open(features_path, 'r') as f:
-                    feature_names[model_name] = json.load(f)
+                feature_names[model_name] = safe_json_read(features_path, default=[])
             self.log.info(f"✅ Successfully loaded {len(models)} models from local disk.")
             return models, feature_names
         except Exception as e:

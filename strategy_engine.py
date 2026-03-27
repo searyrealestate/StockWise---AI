@@ -130,12 +130,7 @@ class TacticalSniper:
     def _load_json(self, path):
         """Safely loads a .json file."""
         if os.path.exists(path):
-            try:
-                with open(path, 'r') as f:
-                    return json.load(f)
-            except Exception as e:
-                logger.error(f"Failed to load JSON {path}: {e}")
-                return {}
+            return safe_json_read(path, default={})
         return []
 
     def get_ai_probability(self, df, regime):
@@ -642,8 +637,7 @@ class StrategyEngine:
         try:
             strategy_file = getattr(cfg, 'STRATEGY_MAP_FILE', 'ticker_strategies.json')
             if os.path.exists(strategy_file):
-                with open(strategy_file, 'r', encoding='utf-8') as f:
-                    strategies = json.load(f)
+                strategies = safe_json_read(strategy_file, default={})
                 return strategies.get(ticker, strategies.get("DEFAULT"))
         except Exception as e:
             logger.warning(f"Failed to load strategy map: {str(e)}")

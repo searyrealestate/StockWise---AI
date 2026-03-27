@@ -12,6 +12,7 @@ Combines core files, state, and recent logs into structured TXT files.
 
 import os
 import json
+from safe_json_io import safe_json_read
 from datetime import datetime
 import time
 
@@ -77,10 +78,9 @@ def sync_live_state():
             if os.path.exists(filepath):
                 outfile.write(f"--- STATE FILE: {filename} ---\n")
                 try:
-                    with open(filepath, "r", encoding="utf-8") as infile:
-                        data = json.load(infile)
-                        # Pretty print JSON to readable text
-                        outfile.write(json.dumps(data, indent=4))
+                    data = safe_json_read(filepath, default={})
+                    # Pretty print JSON to readable text
+                    outfile.write(json.dumps(data, indent=4))
                 except Exception as e:
                     outfile.write(f"Error parsing JSON: {e}")
                 outfile.write("\n\n")
