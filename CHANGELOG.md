@@ -1,5 +1,21 @@
 # Changelog
 
+## [2026-03-27] Batch 8: Shadow Ledger Tests (TDD v1.1 §10)
+
+- Created `tests/test_shadow_ledger.py` — 9 tests (SL-01→09).
+- **SL-01 (P0):** `evaluate_history` records ≥ 1 signal across the eval window (300 rows, 200 warmup, cooldown=20 → 4 signals per template).
+- **SL-02 (P0):** Uptrend + tight target (close+2, stop close-5) → target hit within lookahead → wins > 0.
+- **SL-03 (P0):** Downtrend + tight stop (close-1) → low < stop in 1 bar (checked FIRST per conservative eval) → losses > 0.
+- **SL-04 (P0):** Shadow tracks ALL qualifying signals regardless of live execution state.
+- **SL-05 (P0):** Two templates (T1, T2) both appear in results with signal_count > 0 — candle-by-candle eval is per-template independent.
+- **SL-06 (P1):** Stats dict contains all required keys: `signal_count`, `wins`, `losses`, `win_rate`, `avg_pnl_pct`.
+- **SL-07 (P0):** Source inspection: `safe_json_write`/`safe_json_read` present, zero raw `json.dump` calls.
+- **SL-08 (P1):** `SHADOW_LEDGER_CONFIG['run_mode'] == 'offline'` — no nightly scan contamination.
+- **SL-09 (P0):** Corrupted JSON file → `safe_json_read` retries 3× → returns default dict → `sl.ledger` is dict, no crash. `time.sleep` mocked to suppress retry delays.
+- Adaptations: Config patched via `patch.object(cfg, 'SHADOW_LEDGER_CONFIG', ...)` before `__init__` so `sl.config` and `sl.ledger_path` point to temp dir; patch exits safely after instantiation.
+- Execution: 9/9 passed in 1.53s first-pass. Full suite 175→184, 0 regressions.
+- Files: `tests/test_shadow_ledger.py` (NEW)
+
 ## [2026-03-27] Batch 7: Strategy Engine Tests (TDD v1.1 §5)
 
 - Created `tests/test_strategy_engine.py` — 24 tests (AE-01→08, RCp-01→05, AS-01→06, VD-01→05).
