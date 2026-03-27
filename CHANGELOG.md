@@ -1,5 +1,22 @@
 # Changelog
 
+## [2026-03-27] Batch 10: Notification & I/O Tests (TDD v1.1 §11)
+
+- Created `tests/test_notification.py` — 11 tests (TG-01→05, IO-01→06).
+- **TG-01 (P1):** Source confirms `/CONFIRM` in `process_incoming_command` + `_update_ledger_status` called.
+- **TG-02 (P1):** Source confirms `/UNFILLED` handler present.
+- **TG-03 (P0):** Adapted — `/veto` Telegram command not yet implemented; test verifies `self.fe.check_veto_gates` is called per-ticker in `stock_hunter.py` scan loop (equivalent veto protection).
+- **TG-04 (P1):** Behavioral — `process_incoming_command('/CONFIRM AAPL')` → `_update_ledger_status('AAPL', 'CONFIRMED')` called (mocked). `NotificationManager` instantiated with empty tokens (`self.enabled=False`) so no Telegram API calls.
+- **TG-05 (P2):** Behavioral — non-`/` text and empty string both return `None` immediately (early return guard).
+- **IO-01 (P0):** `safe_json_write` creates valid readable JSON file.
+- **IO-02 (P0):** Corrupted JSON → `safe_json_read` returns provided default (`time.sleep` mocked to suppress retry delays).
+- **IO-03 (P1):** Missing file → `safe_json_read` returns provided default.
+- **IO-04 (P0):** No raw `json.dump` in 6 critical live-path files: `live_trading_engine`, `stock_hunter`, `notification_manager`, `shadow_ledger`, `pre_market_validator`, `portfolio_risk`. Adapted from "all files" — training/simulation/utility scripts excluded.
+- **IO-05 (P0):** No raw `json.load` in same 6 critical live-path files.
+- **IO-06 (P0):** `live_trading_engine.py` comment `"once per cycle (not per ticker)"` confirmed — scan_ledger loaded once before the per-symbol loop.
+- Execution: 11/11 passed in 1.58s first-pass. Full suite 197→208, 0 regressions.
+- Files: `tests/test_notification.py` (NEW)
+
 ## [2026-03-27] Batch 9: VIP List & Scanner Tests (TDD v1.1 §9)
 
 - Created `tests/test_vip_scanner.py` — 13 tests (VP-01→12 + VP-05b boundary).
