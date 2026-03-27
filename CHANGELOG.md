@@ -1,5 +1,20 @@
 # Changelog
 
+## [2026-03-27] validation_runner.py — automated system validation
+
+- **New file: `validation_runner.py`** — one-command validation pipeline, outputs `data/validation_results.json`.
+- **CLI flags:** `--quick` (skip shadow ledger), `--no-pytest` (skip pytest), `--symbols`, `--days-back`, `--output`.
+- **5 phases:**
+  - **Phase 0 — Environment:** 8 required module imports + 7 config keys + template file count.
+  - **Phase 1 — Data Fetch:** DSM waterfall (no IBKR) per symbol; reports rows, date range, elapsed.
+  - **Phase 2 — Features:** FeatureEngine per symbol; reports row/column counts.
+  - **Phase 3 — Shadow Ledger:** candle-by-candle eval writes to `data/validation_shadow_ledger.json` (production ledger untouched via config patch + restore). Cross-symbol template aggregate computed.
+  - **Phase 4 — Risk Gates:** 6 synthetic checks (correlation block/allow, circuit breaker, zero portfolio, unknown sector, weekly trend on live data).
+  - **Phase 5 — pytest:** subprocess run per test file; parses pass/fail/error counts; gen7 files skipped.
+- **Safety:** all phases wrapped in `_safe()` — partial results on crash; production data never written.
+- **Smoke test:** `--quick --no-pytest --symbols AAPL MSFT` → OVERALL PASS (4/4 phases, 6.1s, 2 symbols × 501 rows × 76 features).
+- No existing files modified. Suite: **248/248 passed**, 0 regressions.
+
 ## [2026-03-27] Migrate raw json.load/dump to safe_json_io in 6 files
 
 **Diagnosis:** 9 raw `json.load`/`json.dump` (file I/O) calls across 7 files. `stockwise_simulation_v2.py` was already clean.
