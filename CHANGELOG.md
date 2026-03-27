@@ -1,5 +1,16 @@
 # Changelog
 
+## [2026-03-27] backtest_engine.py — chronological portfolio backtest + survivability analysis
+
+- **New file: `backtest_engine.py`** — day-by-day portfolio backtest using all production components.
+- **Components wired:** FeatureEngine → StockHunter (state classification) → TemplateMatcher → PortfolioRiskManager → Kinetic Stop phases.
+- **StockHunter integration:** `classify_stock_state(df_slice)` called per symbol per day so template state filters (`BULLISH`, `NEAR_SUPPORT`, etc.) match correctly. Uses `_MockDM` stub — only classification methods are exercised.
+- **Kinetic Stop simulation:** PHASE_1 → PHASE_2 (breakeven) → PHASE_3 (parabolic) → PHASE_4 (runner) bar-by-bar. Stop tightens; position exits on close below stop or target hit.
+- **Survivability analysis:** analytical Risk of Ruin, Monte Carlo (1000 sims), Kelly Criterion, max consecutive losses, capital floor events, months to ruin, worst-case scenarios, survival verdict (`SAFE` / `WARNING` / `DANGER` / `CRITICAL` / `NO_TRADES`).
+- **CLI:** `python backtest_engine.py --symbols NVDA META --capital 100000 [--no-risk-gates] [--days-back N]`
+- **Output:** `data/backtest_results.json` with sections: `summary`, `survivability`, `equity_curve`, `trades`, `monthly_returns`, `per_template`, `per_symbol`, `phase_distribution`, `metadata`.
+- **Tests:** 248/248 pass.
+
 ## [2026-03-27] validation_runner.py — automated system validation
 
 - **New file: `validation_runner.py`** — one-command validation pipeline, outputs `data/validation_results.json`.
