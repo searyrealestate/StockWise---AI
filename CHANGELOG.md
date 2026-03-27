@@ -1,5 +1,24 @@
 # Changelog
 
+## [2026-03-27] Batch 9: VIP List & Scanner Tests (TDD v1.1 §9)
+
+- Created `tests/test_vip_scanner.py` — 13 tests (VP-01→12 + VP-05b boundary).
+- **VP-01 (P0):** `DEFAULT_TRAINING_SYMBOLS[0] == 'SPY'` — Core Invariant #2.
+- **VP-02 (P0):** SPY present in DEFAULT_TRAINING_SYMBOLS exactly once (no duplicates).
+- **VP-03 (P0):** `assign_tier(74.9)` → 3 (below `tier2_min=75`, not in VIP/Watch tiers).
+- **VP-04 (P1):** `max_vip_list_size == 50` from `SCAN_ROUTING_CONFIG`.
+- **VP-05 (P1):** `_cleanup_stale_ledger()` evicts symbol with `last_scanned=211 days ago` (TTL=210). VP-05b: symbol scanned 1 day ago is NOT evicted.
+- **VP-06 (P1):** `min_vip_score_threshold == 75.0` from `SCAN_ROUTING_CONFIG`.
+- **VP-07 (P1):** `assign_tier(75.0)` → 2 (exactly at tier2 boundary → Watch tier, not Pool).
+- **VP-08 (P0):** Source contains `er_score < 0.3` quick-reject logic.
+- **VP-09 (P1):** ER boundary is strict `<` (not `<=`), confirmed by regex — ER=0.30 passes.
+- **VP-10 (P0):** Core Invariant #3 — `always_in_vip` not present in `_update_daily_review_list`.
+- **VP-11 (P1):** `priority_scan_limit` key present in `SCAN_ROUTING_CONFIG` (adapted from spec "40-ticker batch" — actual impl uses priority_scan_limit=100 for MLFQ priority queue).
+- **VP-12 (P1):** No `random.random()`/`random.choice()`/`random.uniform()` in stock_hunter.py — only `random.shuffle` for queue ordering, not score calculation. Scoring is deterministic.
+- Adaptations: `StockHunter.__init__` mocked via `patch('stock_hunter.FeatureEngine')` + `patch('stock_hunter.StrategyEngine')` + `patch('stock_hunter.safe_json_read', return_value={})`. TTL tests set `sh.ledger` directly then call `_cleanup_stale_ledger()`.
+- Execution: 13/13 passed in 2.41s first-pass. Full suite 184→197, 0 regressions.
+- Files: `tests/test_vip_scanner.py` (NEW)
+
 ## [2026-03-27] Batch 8: Shadow Ledger Tests (TDD v1.1 §10)
 
 - Created `tests/test_shadow_ledger.py` — 9 tests (SL-01→09).
