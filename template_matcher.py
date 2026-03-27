@@ -25,6 +25,12 @@ from safe_json_io import safe_json_read
 
 logger = logging.getLogger("TemplateMatcher")
 
+try:
+    from decision_logger import DecisionLogger as _DecisionLogger
+    _dl = _DecisionLogger()
+except Exception:
+    _dl = None
+
 
 class TemplateMatcher:
     """
@@ -111,6 +117,9 @@ class TemplateMatcher:
                 signal = self._build_signal(symbol, template, last_row, details, stock_state)
                 if signal:
                     signals.append(signal)
+                    if _dl:
+                        try: _dl.log_signal(symbol=symbol, template_id=template.id, confidence=float(signal.get('confidence_score', 0)), regime=str(stock_state.get('trend', '') if stock_state else ''))
+                        except Exception: pass
                     logger.info(f"[{symbol}] SIGNAL: {template.name} | "
                                 f"Entry: ${signal['entry_price']:.2f} | "
                                 f"Stop: ${signal['stop_loss']:.2f} | "

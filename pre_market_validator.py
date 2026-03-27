@@ -19,6 +19,12 @@ import system_config as cfg
 
 logger = logging.getLogger("PreMarketValidator")
 
+try:
+    from decision_logger import DecisionLogger as _DecisionLogger
+    _dl = _DecisionLogger()
+except Exception:
+    _dl = None
+
 ET = pytz.timezone("America/New_York")
 
 
@@ -97,6 +103,9 @@ class PreMarketValidator:
                 )
                 logger.warning(f"[{symbol}] PRE-MARKET VETO: {reason}")
                 self._veto_cache[symbol] = datetime.now() + timedelta(minutes=cooldown_minutes)
+                if _dl:
+                    try: _dl.log_veto(symbol=symbol, gate="premarket_gap", passed=False, reason=reason, gap_pct=round(gap_pct, 4), max_gap=max_gap)
+                    except Exception: pass
                 return False, reason
 
             logger.debug(f"[{symbol}] Pre-market gap {gap_pct:+.2%} — within limit")

@@ -17,6 +17,12 @@ warnings.filterwarnings("ignore", category=UserWarning, module="pandas_ta")
 # Initialize Logger
 logger = cfg.LoggerSetup.setup_logger("FeatureEngine")
 
+try:
+    from decision_logger import DecisionLogger as _DecisionLogger
+    _dl = _DecisionLogger()
+except Exception:
+    _dl = None
+
 
 class FeatureEngine:
     """
@@ -661,16 +667,25 @@ class FeatureEngine:
         vol = last.get('volume', 0)
         if pd.isna(vol) or vol < 1:
             logger.info(f"[{symbol}] VETO: Volume={vol} < 1")
+            if _dl:
+                try: _dl.log_veto(symbol=symbol, gate="volume", passed=False, reason=f"Volume={vol} < 1")
+                except Exception: pass
             return True, f"Volume={vol} < 1"
 
         # Gate 2: Death Cross
         if last.get('death_cross', False) == True:
             logger.info(f"[{symbol}] VETO: Death Cross active")
+            if _dl:
+                try: _dl.log_veto(symbol=symbol, gate="death_cross", passed=False, reason="Death Cross active")
+                except Exception: pass
             return True, "Death Cross active"
 
         # Gate 3: VSA Squat Bar
         if last.get('vsa_squat_bar', False) == True:
             logger.info(f"[{symbol}] VETO: VSA Squat Bar detected")
+            if _dl:
+                try: _dl.log_veto(symbol=symbol, gate="vsa_squat_bar", passed=False, reason="VSA Squat Bar detected")
+                except Exception: pass
             return True, "VSA Squat Bar detected"
 
         return False, ""

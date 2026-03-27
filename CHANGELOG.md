@@ -1,5 +1,16 @@
 # Changelog
 
+## [2026-03-27] Observability Layer Part 2 — Wire DecisionLogger into 5 pipeline decision points
+
+- **`feature_engine.py`:** Import `_dl` at module level (try/except). 3 veto log calls in `check_veto_gates` — one per gate (volume, death_cross, vsa_squat_bar), each before its `return True` with `log_veto(gate=..., passed=False)`.
+- **`template_matcher.py`:** Import `_dl`. Log `log_signal(template_id, confidence, regime)` immediately after `signals.append(signal)` — fires once per confirmed signal.
+- **`strategy_engine.py`:** Import `_dl`. Log `log_risk(gate="alpha_net_profit"|"alpha_net_rr", passed=False)` at each of the two alpha-veto `return False` points in `evaluate_friction_adjusted_alpha`.
+- **`portfolio_risk.py`:** Import `_dl`. Log `log_risk(gate="portfolio_risk", passed=False, reason=joined_reasons)` in `check_all_gates` when `approved=False`.
+- **`pre_market_validator.py`:** Import `_dl`. Log `log_veto(gate="premarket_gap", passed=False, gap_pct, max_gap)` at the `return False, reason` gap-veto path in `check_gap`.
+- Safety: every log call is `if _dl: try: _dl.log_...; except Exception: pass` — pipeline never breaks if logger fails.
+- All 5 files compile clean. Suite: **248/248 passed**, 0 regressions (17.75s).
+- Files modified: `feature_engine.py`, `template_matcher.py`, `strategy_engine.py`, `portfolio_risk.py`, `pre_market_validator.py`
+
 ## [2026-03-27] Observability Layer Part 1 — decision_logger.py + OBSERVABILITY_CONFIG
 
 - **`system_config.py`:** Appended `OBSERVABILITY_CONFIG` dict after `STRATEGY_PARAMS`. Keys: `log_dir`, `log_filename`, `max_log_size_mb` (50), `max_rotated_files` (5), five `log_*_events` booleans, `async_write` (False), `flush_every_n_events` (1), `schema_version` ("1.0").
