@@ -1,5 +1,15 @@
 # Changelog
 
+## [2026-03-27] Batch 6: Portfolio Risk Tests (TDD v1.1 §8) — MONEY PATH
+
+- Created `tests/test_portfolio_risk.py` — 25 tests (G1-01→07, G2-01→07, G3-01→05, GC-01→06).
+- **G1-01→07 (Gate 1 Correlation & Sector):** 2 tech + new tech → blocked; different sector → allowed; high corr (≈1.0, mocked monotone series) → blocked; low corr (orthogonal random) → allowed; boundary test: `corr > 0.80` strict, config=0.80 → 0.80 passes; config keys verified; unknown symbol (not in SECTOR_MAP) → no sector block, no crash.
+- **G2-01→07 (Gate 2 Drawdown & Exposure):** 12% drawdown → circuit breaker fires; 8% → allowed; 62% exposure → blocked; 55% → allowed; circuit breaker persists on subsequent calls within 24h; `portfolio_value=0` → blocked gracefully (no ZeroDivisionError); config keys + threshold values asserted.
+- **G3-01→05 (Gate 3 Weekly Trend):** 320-day bearish df → weekly close < SMA_40 → blocked; bullish → allowed; constant flat prices → close == SMA → allowed (strict `<`); `weekly_sma_period=40` in config; < 50 daily rows → automatic pass (insufficient data).
+- **GC-01→06 (Combined):** All pass → `approved=True, reasons=[]`; Gate 2 drawdown → blocks with circuit-breaker reason; Gate 1+3 both fail → 2 reasons reported; `caplog` verifies logger.warning fires with RISK VETO; circuit breaker blocks subsequent symbols; source inspection confirms `check_all_gates` + `PortfolioRiskManager` wired into `live_trading_engine.py`.
+- Execution: 25/25 passed in 1.60s first-pass. No false-positive exposure: each test uses fresh `_prm()` instance.
+- Files: `tests/test_portfolio_risk.py` (NEW)
+
 ## [2026-03-26] Batch 5: Execution Tests (TDD v1.1 §7) — MONEY PATH
 
 - Created `tests/test_execution.py` — 28 tests (PM-01→07, OT-01→04, KS-01→17).
