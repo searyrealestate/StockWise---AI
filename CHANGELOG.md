@@ -1,5 +1,15 @@
 # Changelog
 
+## [2026-03-27] Batch 7: Strategy Engine Tests (TDD v1.1 §5)
+
+- Created `tests/test_strategy_engine.py` — 24 tests (AE-01→08, RCp-01→05, AS-01→06, VD-01→05).
+- **AE-01→08 (Alpha Equation):** High score (85, atr=0.02) passes; low score (20, atr=0.01) rejected; exact threshold (score=80, atr=0.01 → rise=0.008, net=0.005) passes; `MIN_NET_PROFIT=0.005` asserted (no old 1.3% remnant); zero score no crash; max score no overflow; returns exactly 3 values `(is_profitable, expected_rise, friction)`. Formula: `(score/100 × atr_pct) − BASE_FRICTION ≥ MIN_NET_PROFIT`.
+- **RCp-01→05 (Regime Coupling):** `RegimeRouter.classify_regime()` — TREND (er_slow=0.75, er_fast=0.65); CHOP (er_slow=0.25); HALT via velocity divergence (er_slow=0.70, er_fast=0.10); NEUTRAL dead zone (er_slow=0.50); empty df → HALT (fail-closed).
+- **AS-01→06 (Asset-Specific Optimization):** Per-stock stats used when ≥5 signals; unknown symbol → global fallback; < cold-start threshold → global fallback; ≥ cold-start → 70% per-stock + 30% global blended; `COLD_START_SIGNALS=5` from config; different stocks produce different rankings (AAPL with 80% WR > TSLA with 30% WR). Shadow ledger mocked via `patch.object(matcher, '_load_shadow_stats')`.
+- **VD-01→05 (Vectorized Decay):** Recent (1-day) weighted more than old (30-day); VSA signal retained after 180 days (rate=0.99, weight≥0.43); momentum decays fast (rate=0.90, 30 days → weight≈0.013, floored to min=0.05); `apply_decay` method exists in `ShadowLedger`; decay rates ordered: vsa_institutional (0.99) > momentum (0.90). Formula: `weight = max(rate^(days/period_days), min_weight)`.
+- Execution: 24/24 passed in 3.02s first-pass.
+- Files: `tests/test_strategy_engine.py` (NEW)
+
 ## [2026-03-27] Batch 6: Portfolio Risk Tests (TDD v1.1 §8) — MONEY PATH
 
 - Created `tests/test_portfolio_risk.py` — 25 tests (G1-01→07, G2-01→07, G3-01→05, GC-01→06).
