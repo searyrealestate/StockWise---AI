@@ -1,5 +1,19 @@
 # Changelog
 
+## [2026-03-27] Observability Layer Part 1 — decision_logger.py + OBSERVABILITY_CONFIG
+
+- **`system_config.py`:** Appended `OBSERVABILITY_CONFIG` dict after `STRATEGY_PARAMS`. Keys: `log_dir`, `log_filename`, `max_log_size_mb` (50), `max_rotated_files` (5), five `log_*_events` booleans, `async_write` (False), `flush_every_n_events` (1), `schema_version` ("1.0").
+- **`decision_logger.py` (NEW):** `DecisionLogger` class — append-only JSONL audit trail for the live trading pipeline.
+  - 5 public methods: `log_signal`, `log_veto`, `log_risk`, `log_execution`, `log_exit`
+  - Each event: `{ ts (ISO-8601 UTC), schema_v, event, symbol, ...event-specific fields }`
+  - Auto-creates `data/decision_logs/` on first use; respects all `OBSERVABILITY_CONFIG` settings
+  - File rotation: when size exceeds `max_log_size_mb`, current file → `.1`, shifts older rotations up to `.N`, drops beyond `max_rotated_files`
+  - Writes suppressed per `log_*_events` flags; immediate flush by default (`flush_every_n_events=1`)
+  - Graceful error handling: write failures logged as warnings, never raise
+- Verification: `python -c "from decision_logger import DecisionLogger; ..."` writes 5 event types correctly.
+- Suite: **248/248 passed**, 0 regressions (17.58s).
+- Files: `decision_logger.py` (NEW), `system_config.py` (OBSERVABILITY_CONFIG added)
+
 ## [2026-03-27] Fix pre-existing test failures — test_bug_1_3_er_trend.py + test_integration.py
 
 - **Fix 1+2 (`test_bug_1_3_er_trend.py`):** `TacticalSniper.analyze()` signature evolved from `(df)` to `(symbol, df, regime)`. Updated both calls: `analyze("TEST", df, "TREND")` and `analyze("TEST", df, "CHOP")`. Additionally fixed stale key reference: `active_setups` → `setups_found` (the actual key `analyze()` returns in its result dict).

@@ -690,6 +690,28 @@ STRATEGY_PARAMS = {
     'wavelet_noise_max': 1.5
 }
 
+OBSERVABILITY_CONFIG = {
+    # ── Storage ──────────────────────────────────────────────────────────────
+    "log_dir": "data/decision_logs",          # Directory for JSONL decision logs
+    "log_filename": "decisions.jsonl",        # Append-only JSONL file
+    "max_log_size_mb": 50,                    # Rotate when file exceeds this size
+    "max_rotated_files": 5,                   # How many rotated files to keep
+
+    # ── What to capture ──────────────────────────────────────────────────────
+    "log_signal_events": True,                # Log every template signal generated
+    "log_veto_events": True,                  # Log every veto-gate decision (pass/block)
+    "log_risk_events": True,                  # Log every risk-gate decision
+    "log_execution_events": True,             # Log every execute_ticket call
+    "log_exit_events": True,                  # Log every position exit
+
+    # ── Async / performance ───────────────────────────────────────────────────
+    "async_write": False,                     # False = synchronous (safe default)
+    "flush_every_n_events": 1,               # Flush to disk after every N events (1 = immediate)
+
+    # ── Schema version ────────────────────────────────────────────────────────
+    "schema_version": "1.0",
+}
+
 # --- 11. AI FEATURE CONTRACT (Gen-12) ---
 ML_FEATURES = [
     # 1. Base Price Action
