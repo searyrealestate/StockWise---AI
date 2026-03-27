@@ -11,13 +11,14 @@ Phases:
   3. Shadow Ledger— candle-by-candle template evaluation (separate ledger)
   4. Risk Gates   — synthetic portfolio risk checks
   5. pytest       — run all test files, collect per-file pass/fail
-  6. Aggregate    — merge, compute stats, save JSON
+  6. Backtest     — chronological portfolio backtest (--full flag)
 
 Usage:
     python validation_runner.py              # Full run (~5–15 min with data fetch)
     python validation_runner.py --quick      # Skip shadow ledger phase
     python validation_runner.py --no-pytest  # Skip pytest phase
     python validation_runner.py --symbols AAPL MSFT NVDA
+    python validation_runner.py --full       # Include Phase 6 backtest
 """
 
 import argparse
@@ -527,7 +528,38 @@ def phase_pytest() -> dict:
 # Main
 # ═══════════════════════════════════════════════════════════════════════════
 
-def run_validation(symbols: list, days_back: int, quick: bool, no_pytest: bool) -> dict:
+def phase_backtest(feature_frames: dict, symbols: list) -> dict:
+    """Phase 6: Chronological portfolio backtest using cached feature frames."""
+    t0 = time.perf_counter()
+    from backtest_engine import BacktestEngine
+    engine = BacktestEngine(
+        data_cache=feature_frames,
+        symbols=symbols,
+        use_risk_gates=False,
+    )
+    bt = engine.run()
+    summary = bt.get("summary", {})
+    surv = bt.get("survivability", {})
+    return {
+        "passed": True,
+        "elapsed_s": round(time.perf_counter() - t0, 2),
+        "total_trades": len(bt.get("trades", [])),
+        "total_return_pct": summary.get("total_return_pct", 0),
+        "win_rate": summary.get("win_rate", 0),
+        "profit_factor": summary.get("profit_factor", 0),
+        "max_drawdown_pct": summary.get("max_drawdown_pct", 0),
+        "survival_verdict": surv.get("survival_verdict", "NO_TRADES"),
+        "risk_of_ruin_mc_pct": surv.get("risk_of_ruin_monte_carlo_pct", None),
+        "summary": summary,
+        "survivability": surv,
+        "monthly_returns": bt.get("monthly_returns", []),
+        "per_template": bt.get("per_template", {}),
+        "per_symbol": bt.get("per_symbol", {}),
+    }
+
+
+def run_validation(symbols: list, days_back: int, quick: bool, no_pytest: bool,
+                   run_backtest: bool = False) -> dict:
     run_start = time.perf_counter()
     run_ts = _ts()
 
@@ -601,6 +633,17 @@ def run_validation(symbols: list, days_back: int, quick: bool, no_pytest: bool) 
     else:
         results["phases"]["pytest"] = {"passed": None, "skipped": True, "reason": "--no-pytest"}
 
+    # ── Phase 6: Backtest (optional, --full flag) ─────────────────────────────
+    if run_backtest and feature_frames:
+        results["phases"]["backtest"] = _safe(
+            lambda: phase_backtest(feature_frames, symbols),
+            default={"passed": False, "error": "exception"},
+            label="P6"
+        )
+    elif run_backtest:
+        results["phases"]["backtest"] = {"passed": False, "skipped": True,
+                                         "reason": "no feature frames available"}
+
     # ── Summary ───────────────────────────────────────────────────────────────
     phases_with_result = [
         v for v in results["phases"].values()
@@ -638,6 +681,7 @@ def main():
     parser = argparse.ArgumentParser(description="StockWise Gen-13 Validation Runner")
     parser.add_argument("--quick",     action="store_true", help="Skip shadow ledger phase")
     parser.add_argument("--no-pytest", action="store_true", help="Skip pytest phase")
+    parser.add_argument("--full",      action="store_true", help="Include Phase 6 backtest")
     parser.add_argument("--symbols",   nargs="+",           help="Override symbol list")
     parser.add_argument("--days-back", type=int, default=1095, help="Days of history (default 1095)")
     parser.add_argument("--output",    default=OUTPUT_PATH,  help="Output JSON path")
@@ -654,6 +698,7 @@ def main():
         days_back=args.days_back,
         quick=args.quick,
         no_pytest=args.no_pytest,
+        run_backtest=args.full,
     )
 
     # Strip internal keys and save

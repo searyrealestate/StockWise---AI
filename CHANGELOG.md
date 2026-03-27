@@ -1,5 +1,18 @@
 # Changelog
 
+## [2026-03-27] validation_report.py + validation_runner Phase 6
+
+- **New file: `validation_report.py`** — reads `validation_results.json` + `backtest_results.json`, generates filled DOCX report (17 tables, 17 sections).
+  - Sections: Executive Summary, Environment, Data Pipeline, Entry Logic, Position Management, Exit Logic, Risk Gates, Backtest Results, Survivability, Monthly Returns, Sign-Off.
+  - Falls back to `.txt` if `python-docx` not installed.
+  - CLI: `python validation_report.py [--validation PATH] [--backtest PATH]`
+  - Output: `data/StockWise_Validation_Report_YYYY-MM-DD.docx`
+- **Modified: `validation_runner.py`** — added Phase 6 (portfolio backtest, `--full` flag).
+  - New `phase_backtest()` function; uses cached `feature_frames` from Phase 2 as `data_cache`.
+  - New `--full` argparse flag; `run_backtest=False` default (non-breaking).
+  - Phase 6 result stored at `phases.backtest` in `validation_results.json`.
+- **Tests:** 248/248 pass.
+
 ## [2026-03-27] backtest_engine.py — chronological portfolio backtest + survivability analysis
 
 - **New file: `backtest_engine.py`** — day-by-day portfolio backtest using all production components.
