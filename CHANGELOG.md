@@ -1,5 +1,12 @@
 # Changelog
 
+## [2026-03-27] Fix pre-existing test failures — test_bug_1_3_er_trend.py + test_integration.py
+
+- **Fix 1+2 (`test_bug_1_3_er_trend.py`):** `TacticalSniper.analyze()` signature evolved from `(df)` to `(symbol, df, regime)`. Updated both calls: `analyze("TEST", df, "TREND")` and `analyze("TEST", df, "CHOP")`. Additionally fixed stale key reference: `active_setups` → `setups_found` (the actual key `analyze()` returns in its result dict).
+- **Fix 3 (`test_integration.py::test_zero_portfolio_value`):** Test previously asserted `ok == True` for `portfolio_value=0`. Current implementation (SPEC v13.4 §5 / GAP-25) correctly returns `(False, "cannot assess risk")` when portfolio is zero. Updated assertion to `assert not ok`.
+- Outcome: 0 pre-existing failures remain. Full suite: **420/420 passed** (228 TDD + 192 master_validator/legacy, 32.56s).
+- Files: `tests/test_bug_1_3_er_trend.py` (3 lines changed), `tests/test_integration.py` (1 line changed)
+
 ## [2026-03-27] Batch 12: Performance & Stability Tests (TDD v1.1 §14) — FINAL BATCH
 
 - Created `tests/test_performance.py` — 10 tests (PF-01→10).

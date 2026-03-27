@@ -24,8 +24,8 @@ def test_setup1_fires_when_er_slow_above_threshold():
     }
     df = pd.DataFrame([row])
 
-    result = sniper.analyze(df)
-    assert 'DSP_SUPER_TREND' in result.get('active_setups', []), \
+    result = sniper.analyze("TEST", df, "TREND")
+    assert 'DSP_SUPER_TREND' in result.get('setups_found', result.get('active_setups', [])), \
         f"Setup 1 should fire when er_slow=0.65 >= 0.55. Got: {result}"
     print("PASS: Setup 1 fires correctly with er_slow above threshold")
 
@@ -46,7 +46,7 @@ def test_setup1_blocked_when_er_slow_below_threshold():
     }
     df = pd.DataFrame([row])
 
-    result = sniper.analyze(df)
+    result = sniper.analyze("TEST", df, "CHOP")
     setups = result.get('active_setups', [])
     assert 'DSP_SUPER_TREND' not in setups, \
         f"Setup 1 should NOT fire when er_slow=0.30 < 0.55. Got: {setups}"

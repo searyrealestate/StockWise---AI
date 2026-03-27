@@ -368,8 +368,8 @@ class TestIntegration_EdgeCases:
 
         mgr = PortfolioRiskManager()
         ok, reason = mgr.check_drawdown_gate({}, portfolio_value=0)
-        assert ok, f"Zero portfolio should pass: {reason}"
-        print(f"  Zero portfolio handled correctly")
+        assert not ok, f"Zero portfolio should be BLOCKED per SPEC v13.4 §5: {reason}"
+        print(f"  Zero portfolio correctly blocked")
 
     def test_template_with_missing_block(self):
         """Template with invalid block name should fail validation gracefully."""
