@@ -1,5 +1,22 @@
 # Changelog
 
+## [2026-03-27] Batch 11: Integration Pipeline Tests (TDD v1.1 §12)
+
+- Created `tests/test_integration_pipeline.py` — 10 tests (IT-01→10). Separate file to avoid conflict with pre-existing `test_integration.py`.
+- **IT-01 (P0):** Behavioral — `execute_ticket(ticket, "TREND")` stores position in `engine.positions` with correct `entry_price`. `LiveTradingEngine` instantiated with mocked `NotificationManager` + `safe_json_read/write`.
+- **IT-02 (P0):** Source line-order — `check_veto_gates` (line 905) before `matcher.scan_ticker` (line 912).
+- **IT-03 (P0):** Source line-order — `check_all_gates` (risk, line 976) between `matcher.scan_ticker` (912) and `execute_ticket(ticket, current_regime)` (1009).
+- **IT-04 (P0):** `BASE_FRICTION` / `MIN_NET_PROFIT` / `calculate_entry_equation` in `strategy_engine.py`.
+- **IT-05 (P0):** `get_stock_data` / `DataSourceManager` wired in `live_trading_engine.py` (waterfall fallback).
+- **IT-06 (P0):** Source line-order — `pre_market_validator.check_gap` (line 998) between risk gates (976) and execute (1009).
+- **IT-07 (P0):** All 5 kinetic stop phase strings in source: `PHASE_1_BREATHING`, `PHASE_2_BREAKEVEN`, `PHASE_3_PARABOLIC`, `PHASE_PAUSE`, `PHASE_4_RUNNER`.
+- **IT-08 (P1):** VIP flow — `stock_hunter.py` has VIP/watchlist, `live_trading_engine.py` reads VIP list for signal loop.
+- **IT-09 (P1):** Behavioral — `send_daily_position_summary()` callable with 1 open position; mocked notifier suppresses Telegram.
+- **IT-10 (P1):** Adapted — zombie protocol has `zombie_timestamp` + `zombie_trade_ttl_hours` + force liquidation path; `check_zombie_protocol` method confirmed on `LifecycleManager`. (Spec said "no auto-liquidate" — actual code DOES force-liquidate after TTL expiry.)
+- `_line_of(source, pattern)` helper for ordering assertions — robust to line renumbering.
+- Execution: 10/10 passed in 1.62s first-pass. Full suite 208→218, 0 regressions.
+- Files: `tests/test_integration_pipeline.py` (NEW)
+
 ## [2026-03-27] Batch 10: Notification & I/O Tests (TDD v1.1 §11)
 
 - Created `tests/test_notification.py` — 11 tests (TG-01→05, IO-01→06).
