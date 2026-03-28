@@ -118,7 +118,16 @@ class ShadowLedger:
 
                     # evaluate_conditions returns (bool, list_of_dicts)
                     all_passed, _details = template.evaluate_conditions(row)
+
+                    # Record block-level statistics (P1 #7A)
                     if not all_passed:
+                        try:
+                            template.record_block_results(
+                                _details, symbol=symbol, all_passed=False,
+                                outcome=None
+                            )
+                        except Exception:
+                            pass
                         continue
 
                     # Signal detected — record virtual entry
@@ -139,6 +148,15 @@ class ShadowLedger:
                     outcome = self._resolve_outcome(
                         df, i, entry_price, stop_loss, take_profit
                     )
+
+                    # Record block stats WITH outcome for passed signals
+                    try:
+                        template.record_block_results(
+                            _details, symbol=symbol, all_passed=True,
+                            outcome=outcome
+                        )
+                    except Exception:
+                        pass
 
                     # Record result
                     results[template.id]["signal_count"] += 1
@@ -369,6 +387,13 @@ class ShadowLedger:
                         f"WR={wr:.1f}%, AvgPnL={avg_pnl:+.2f}%"
                     )
 
+        # Save updated block_stats back to template JSON files
+        try:
+            self.tm.save_all()
+            logger.info("Template block_stats saved to disk")
+        except Exception as e:
+            logger.warning(f"Failed to save template block_stats: {e}")
+
         self._save_ledger()
         logger.info(
             f"Shadow Ledger: Complete. Evaluated: {evaluated}, Skipped: {skipped}. "
@@ -443,6 +468,53 @@ def _print_summary(sl):
 
     for sym, count in sym_signals[:10]:
         print(f"   {sym:<8} {count:>5} signals")
+
+    # Block-level statistics summary
+    print(f"\n{'-' * 55}")
+    print(f" Top Blockers (blocks that most often kill signals):")
+    print(f"{'-' * 55}")
+
+    all_block_stats = {}
+    try:
+        from setup_templates import TemplateManager
+        tm = TemplateManager()
+        for template in tm.get_enabled():
+            bstats = template.statistics.get("block_stats", {})
+            for block_name, bs in bstats.items():
+                if block_name not in all_block_stats:
+                    all_block_stats[block_name] = {
+                        "evaluated": 0, "passed": 0, "failed": 0,
+                        "was_the_blocker": 0,
+                        "when_passed_trades": 0, "when_passed_wins": 0,
+                    }
+                agg = all_block_stats[block_name]
+                agg["evaluated"] += bs.get("evaluated", 0)
+                agg["passed"] += bs.get("passed", 0)
+                agg["failed"] += bs.get("failed", 0)
+                agg["was_the_blocker"] += bs.get("was_the_blocker", 0)
+                wp = bs.get("when_passed", {})
+                agg["when_passed_trades"] += wp.get("total_trades", 0)
+                agg["when_passed_wins"] += wp.get("wins", 0)
+    except Exception:
+        pass
+
+    if all_block_stats:
+        print(f" {'Block':<28} {'Eval':>6} {'Pass%':>6} {'Blkr':>5} {'WR%':>6}")
+        print(f"{'-' * 55}")
+        sorted_blocks = sorted(
+            all_block_stats.items(),
+            key=lambda x: x[1]["was_the_blocker"],
+            reverse=True
+        )
+        for block_name, bs in sorted_blocks:
+            ev = bs["evaluated"]
+            pr = round(bs["passed"] / ev * 100, 1) if ev > 0 else 0
+            blkr = bs["was_the_blocker"]
+            wp_trades = bs["when_passed_trades"]
+            wr = round(bs["when_passed_wins"] / wp_trades * 100, 1) if wp_trades > 0 else 0
+            print(f" {block_name:<28} {ev:>6} {pr:>5.1f}% {blkr:>5} {wr:>5.1f}%")
+    else:
+        print(" (no block stats collected yet)")
 
     print(f"{'=' * 55}\n")
 

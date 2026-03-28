@@ -1,5 +1,26 @@
 # Changelog
 
+## [2026-03-29] feat(templates): block-level statistics (P1 #7A)
+
+### Added
+- `record_block_results()` method on `SetupTemplate` — tracks per-block:
+  - Level 1: `evaluated`/`passed`/`failed`/`pass_rate`/`was_the_blocker`/`blocker_rate`
+  - Level 2: `when_passed` outcome (trades/wins/WR/avg_pnl)
+  - Level 3: `per_symbol` breakdown (pass_rate + WR per stock)
+- `block_stats` field in `_empty_stats()` (persisted to template JSON via `to_dict`)
+- Wired into `shadow_ledger.evaluate_history()` — records on every candle evaluation
+  (both pass and fail), passes outcome for signals
+- Block stats summary in `shadow_ledger._print_summary()` — shows top blockers
+- `save_all()` called in `run_full_evaluation()` to persist `block_stats` to JSON
+- `tests/test_block_stats.py`: 13 unit tests + 3 regression guards
+
+### Impact
+- Can now identify which specific condition block kills signals per template
+- Can see per-symbol block performance (RSI works for AAPL, fails for TSLA)
+- Foundation for Template Discovery Engine (Phase 2)
+
+---
+
 ## [2026-03-29] feat(infra): versioned output saves for backtest/validation
 
 ### Added

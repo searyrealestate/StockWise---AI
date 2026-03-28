@@ -382,7 +382,18 @@ class SetupTemplate:
             "last_win_ticker": None,
             "last_loss_ticker": None,
             "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat()
+            "updated_at": datetime.now().isoformat(),
+
+            # --- Per-Block Performance (P1 #7A) ---
+            "block_stats": {},
+            # Structure per block:
+            # "rsi_between": {
+            #     "evaluated": 0, "passed": 0, "failed": 0, "pass_rate": 0.0,
+            #     "was_the_blocker": 0, "blocker_rate": 0.0,
+            #     "when_passed": {"total_trades": 0, "wins": 0, "losses": 0,
+            #                     "wr": 0.0, "avg_pnl": 0.0, "total_pnl": 0.0},
+            #     "per_symbol": {}
+            # }
         }
 
     def get_category(self):
@@ -752,6 +763,147 @@ class SetupTemplate:
             day_stats[day_key] = {"wins": 0, "losses": 0}
         day_stats[day_key]["wins" if won else "losses"] += 1
         stats['day_of_week_stats'] = day_stats
+
+    def record_block_results(self, details, symbol="", all_passed=False,
+                             outcome=None):
+        """
+        Record per-block pass/fail statistics from evaluate_conditions.
+
+        Called by shadow_ledger during candle-by-candle evaluation.
+
+        Args:
+            details: list of dicts from evaluate_conditions(), each:
+                     {"block": "rsi_between", "params": [40,65], "passed": True}
+            symbol: ticker symbol for per-symbol tracking
+            all_passed: whether ALL conditions passed (signal generated)
+            outcome: dict with trade outcome if all_passed, e.g.:
+                     {"hit": "target", "pnl_pct": 2.5} or
+                     {"hit": "stop", "pnl_pct": -1.2} or None
+        """
+        if not details:
+            return
+
+        stats = self.statistics
+        if "block_stats" not in stats:
+            stats["block_stats"] = {}
+
+        block_stats = stats["block_stats"]
+
+        # Determine if there's exactly one blocker
+        passed_blocks = [d for d in details if d.get("passed", False)]
+        failed_blocks = [d for d in details if not d.get("passed", False)]
+        single_blocker = None
+        if len(failed_blocks) == 1 and len(passed_blocks) == len(details) - 1:
+            single_blocker = failed_blocks[0].get("block", "")
+
+        for detail in details:
+            block_name = detail.get("block", "")
+            if not block_name:
+                continue
+            passed = detail.get("passed", False)
+
+            # Initialize block entry if new
+            if block_name not in block_stats:
+                block_stats[block_name] = {
+                    "evaluated": 0,
+                    "passed": 0,
+                    "failed": 0,
+                    "pass_rate": 0.0,
+                    "was_the_blocker": 0,
+                    "blocker_rate": 0.0,
+                    "when_passed": {
+                        "total_trades": 0,
+                        "wins": 0,
+                        "losses": 0,
+                        "wr": 0.0,
+                        "avg_pnl": 0.0,
+                        "total_pnl": 0.0,
+                    },
+                    "per_symbol": {},
+                }
+
+            bs = block_stats[block_name]
+
+            # Level 1: basic counts
+            bs["evaluated"] += 1
+            if passed:
+                bs["passed"] += 1
+            else:
+                bs["failed"] += 1
+
+            # Blocker detection
+            if block_name == single_blocker:
+                bs["was_the_blocker"] += 1
+
+            # Recalculate rates
+            if bs["evaluated"] > 0:
+                bs["pass_rate"] = round(bs["passed"] / bs["evaluated"] * 100, 1)
+            if bs["failed"] > 0:
+                bs["blocker_rate"] = round(
+                    bs["was_the_blocker"] / bs["failed"] * 100, 1
+                )
+
+            # Level 2: outcome correlation (only when all conditions passed)
+            if all_passed and passed and outcome is not None:
+                wp = bs["when_passed"]
+                hit = outcome.get("hit", "neither")
+                pnl = outcome.get("pnl_pct", 0.0)
+
+                if hit in ("target", "stop"):
+                    wp["total_trades"] += 1
+                    wp["total_pnl"] += pnl
+                    if hit == "target":
+                        wp["wins"] += 1
+                    else:
+                        wp["losses"] += 1
+
+                    if wp["total_trades"] > 0:
+                        wp["wr"] = round(
+                            wp["wins"] / wp["total_trades"] * 100, 1
+                        )
+                        wp["avg_pnl"] = round(
+                            wp["total_pnl"] / wp["total_trades"], 2
+                        )
+
+            # Level 3: per-symbol
+            if symbol:
+                if symbol not in bs["per_symbol"]:
+                    bs["per_symbol"][symbol] = {
+                        "evaluated": 0,
+                        "passed": 0,
+                        "pass_rate": 0.0,
+                        "trades_when_passed": 0,
+                        "wins_when_passed": 0,
+                        "wr_when_passed": 0.0,
+                    }
+
+                ps = bs["per_symbol"][symbol]
+                ps["evaluated"] += 1
+                if passed:
+                    ps["passed"] += 1
+
+                if ps["evaluated"] > 0:
+                    ps["pass_rate"] = round(
+                        ps["passed"] / ps["evaluated"] * 100, 1
+                    )
+
+                # Per-symbol outcome
+                if all_passed and passed and outcome is not None:
+                    hit = outcome.get("hit", "neither")
+                    if hit in ("target", "stop"):
+                        ps["trades_when_passed"] += 1
+                        if hit == "target":
+                            ps["wins_when_passed"] += 1
+                        if ps["trades_when_passed"] > 0:
+                            ps["wr_when_passed"] = round(
+                                ps["wins_when_passed"] / ps["trades_when_passed"] * 100, 1
+                            )
+
+        logger.debug(
+            f"[{self.id}] Block stats updated: "
+            f"{len(passed_blocks)} passed, {len(failed_blocks)} failed"
+            f"{f', blocker={single_blocker}' if single_blocker else ''}"
+        )
 
     def to_dict(self):
         """Serialize back to dictionary for JSON storage."""
