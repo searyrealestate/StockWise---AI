@@ -749,6 +749,7 @@ ANALYTICS_CONFIG = {
         "total_trades", "win_rate", "profit_factor",
         "avg_win_pct", "avg_loss_pct", "avg_bars_held",
     ],
+    "include_block_evaluations": True,     # Section 8: per-block pass/fail/blocker stats (second pass)
 }
 
 class EmojiFilter(logging.Filter):

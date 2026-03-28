@@ -184,6 +184,7 @@ class BacktestEngine:
         self.open_positions = []   # list[Position]
         self.closed_trades  = []   # list[dict]
         self.equity_curve   = []   # list[{date, equity, cash, open_positions}]
+        self.block_eval_stats = {}   # Populated by _collect_block_evaluations()
 
     # ───────────────────────────────────────────────────────────────────────
     # Public entry point
@@ -225,6 +226,13 @@ class BacktestEngine:
             "date_range":       f"{timeline[0].date()} to {timeline[-1].date()}",
             "risk_gates_enabled": self.use_risk_gates,
         }
+
+        # Collect block-level evaluation stats (second pass, read-only)
+        try:
+            self._collect_block_evaluations()
+        except Exception as exc:
+            logger.warning(f"Block evaluation collection failed (non-fatal): {exc}")
+            self.block_eval_stats = {}
 
         results["analytics"] = self._compute_analytics(
             self.closed_trades, results.get("summary", {})
@@ -1006,6 +1014,10 @@ class BacktestEngine:
             "worst_5_trades":           _trade_summary(bot_n),
         }
 
+        # ── Section 8: block_evaluations (from second pass) ──────────────────
+        _bes = getattr(self, "block_eval_stats", {})
+        analytics["block_evaluations"] = _bes if _bes else {}
+
         return analytics
 
     def _print_analytics(self, analytics: dict) -> None:
@@ -1128,6 +1140,251 @@ class BacktestEngine:
                     print(f"    {t['symbol']:<6} {t['template_id']:<25} "
                           f"{t['entry_date'][:10]}  {t['pnl_pct']:>+.2f}%  "
                           f"{t['bars_held']} bars")
+
+        # ── Section 8: block_evaluations ─────────────────────────────────────
+        be = analytics.get("block_evaluations", {})
+        if be:
+            print("\n" + "─" * 43 + " BLOCK / INDICATOR STATISTICS " + "─" * 37)
+            for tid, ts in sorted(be.items()):
+                sf     = ts.get("state_filter", {})
+                total  = sf.get("total_scans",    0)
+                matched  = sf.get("state_matched",  0)
+                rejected = sf.get("state_rejected", 0)
+                match_pct = round(matched / total * 100, 1) if total > 0 else 0.0
+                print(f"\n  [{tid}] {total} scans -> {matched} state-matched ({match_pct}%)")
+
+                rr = sf.get("rejection_reasons", {})
+                if rr:
+                    parts = []
+                    for axis, reasons in rr.items():
+                        for reason, count in sorted(reasons.items(), key=lambda x: -x[1]):
+                            parts.append(f"{axis}.{reason}={count}")
+                    if parts:
+                        print(f"    Rejections: {', '.join(parts[:6])}")
+
+                blocks = ts.get("blocks", {})
+                if blocks:
+                    print(f"    {'Block':<28} {'Eval':>6} {'Pass':>6} {'Fail':>6} "
+                          f"{'Pass%':>6} {'SolBlk':>7} {'SB%':>5} {'WP->WR':>7} {'WP->PnL':>8}")
+                    print(f"    {'─' * 86}")
+                    for bn, bd in sorted(blocks.items(),
+                                         key=lambda x: -x[1].get("was_sole_blocker", 0)):
+                        ev  = bd.get("evaluated",       0)
+                        pa  = bd.get("passed",          0)
+                        fa  = bd.get("failed",          0)
+                        pr  = bd.get("pass_rate",       0.0)
+                        sb  = bd.get("was_sole_blocker", 0)
+                        sbr = bd.get("sole_blocker_rate", 0.0)
+                        wp  = bd.get("when_passed",     {})
+                        wp_wr  = (f"{wp.get('wr', 0):.1f}%"
+                                  if wp.get("total_trades", 0) > 0 else "—")
+                        wp_pnl = (f"{wp.get('avg_pnl', 0):+.2f}%"
+                                  if wp.get("total_trades", 0) > 0 else "—")
+                        print(f"    {bn:<28} {ev:>6} {pa:>6} {fa:>6} "
+                              f"{pr:>5.1f}% {sb:>7} {sbr:>4.1f}% {wp_wr:>7} {wp_pnl:>8}")
+
+                    # Per-symbol lowest pass rates (investigation targets, min 10 evals)
+                    all_sym_rates = []
+                    for bn, bd in blocks.items():
+                        for sym, sd in bd.get("per_symbol", {}).items():
+                            if sd.get("evaluated", 0) >= 10:
+                                all_sym_rates.append((sym, bn, sd.get("pass_rate", 0.0)))
+                    if all_sym_rates:
+                        all_sym_rates.sort(key=lambda x: x[2])
+                        print(f"    Lowest per-symbol pass rates:")
+                        for sym, bn, pr in all_sym_rates[:5]:
+                            print(f"      {sym} -> {bn}: {pr:.1f}%")
+
+    def _collect_block_evaluations(self):
+        """
+        Second-pass analysis: evaluate every template's conditions on every trading day
+        to collect per-block pass/fail statistics. READ-ONLY — does not affect trades.
+
+        Runs AFTER the backtest loop. Re-scans the timeline to record what each block
+        did on each day, then links outcomes to actual closed trades.
+
+        Output: self.block_eval_stats dict, consumed by _compute_analytics Section 8.
+        """
+        analytics_cfg = getattr(cfg, "ANALYTICS_CONFIG", {})
+        if not analytics_cfg.get("include_block_evaluations", True):
+            logger.info("Block evaluations disabled in ANALYTICS_CONFIG")
+            return
+
+        if not self.data_cache:
+            logger.info("Block evaluations: no data cache, skipping")
+            return
+
+        logger.info("Collecting block-level evaluation statistics (second pass)...")
+        t0 = time.perf_counter()
+
+        warmup = self.config["min_candles_warmup"]
+
+        # Build trade lookup: (symbol, entry_date) -> trade dict
+        trade_lookup = {}
+        for trade in self.closed_trades:
+            key = (trade["symbol"], trade["entry_date"])
+            trade_lookup[key] = trade
+
+        # Reuse the existing TemplateManager from the matcher
+        tm = self.matcher.tm
+        all_templates = tm.get_enabled()
+
+        # Initialize stats structure per template
+        stats = {}
+        for template in all_templates:
+            block_names = [c.get("block", "?") for c in template.conditions]
+            stats[template.id] = {
+                "state_filter": {
+                    "total_scans":    0,
+                    "state_matched":  0,
+                    "state_rejected": 0,
+                    "rejection_reasons": defaultdict(lambda: defaultdict(int)),
+                },
+                "blocks": {},
+            }
+            for bn in block_names:
+                stats[template.id]["blocks"][bn] = {
+                    "evaluated":       0,
+                    "passed":          0,
+                    "failed":          0,
+                    "was_sole_blocker": 0,
+                    "when_passed": {
+                        "total_trades": 0, "wins": 0, "losses": 0, "pnl_sum": 0.0,
+                    },
+                    "per_symbol": defaultdict(lambda: {"evaluated": 0, "passed": 0, "failed": 0}),
+                }
+
+        timeline = self._build_timeline()
+
+        for trading_day in timeline:
+            for sym in self.symbols:
+                df = self.data_cache.get(sym)
+                if df is None or trading_day not in df.index:
+                    continue
+
+                try:
+                    loc = df.index.get_loc(trading_day)
+                    if isinstance(loc, slice):
+                        loc = loc.stop - 1
+                    elif isinstance(loc, np.ndarray):
+                        loc = int(np.flatnonzero(loc)[0])
+                except Exception:
+                    continue
+
+                df_slice = df.iloc[:loc + 1]
+                if len(df_slice) < warmup:
+                    continue
+
+                last_row = df_slice.iloc[-1]
+
+                # Classify state
+                stock_state = {}
+                if self.hunter:
+                    try:
+                        stock_state = self.hunter.classify_stock_state(df_slice)
+                    except Exception:
+                        pass
+
+                for template in all_templates:
+                    tid = template.id
+                    ts  = stats[tid]
+                    ts["state_filter"]["total_scans"] += 1
+
+                    # State filter check
+                    if not tm._state_matches(template.required_state, stock_state):
+                        ts["state_filter"]["state_rejected"] += 1
+                        for axis, acceptable in template.required_state.items():
+                            actual = stock_state.get(axis, "")
+                            if actual not in acceptable:
+                                ts["state_filter"]["rejection_reasons"][axis][actual] += 1
+                        continue
+
+                    ts["state_filter"]["state_matched"] += 1
+
+                    # Evaluate all conditions
+                    try:
+                        all_passed, details = template.evaluate_conditions(last_row)
+                    except Exception:
+                        continue
+
+                    # Record per-block stats
+                    failed_blocks = []
+                    for detail in details:
+                        bn = detail.get("block", "?")
+                        if bn not in ts["blocks"]:
+                            continue
+                        bs = ts["blocks"][bn]
+                        bs["evaluated"] += 1
+                        if sym not in bs["per_symbol"]:
+                            bs["per_symbol"][sym] = {"evaluated": 0, "passed": 0, "failed": 0}
+                        bs["per_symbol"][sym]["evaluated"] += 1
+                        if detail.get("passed"):
+                            bs["passed"] += 1
+                            bs["per_symbol"][sym]["passed"] += 1
+                        else:
+                            bs["failed"] += 1
+                            bs["per_symbol"][sym]["failed"] += 1
+                            failed_blocks.append(bn)
+
+                    # Sole blocker detection
+                    if len(failed_blocks) == 1:
+                        sole = failed_blocks[0]
+                        if sole in ts["blocks"]:
+                            ts["blocks"][sole]["was_sole_blocker"] += 1
+
+                    # Link to trade outcome if signal was generated
+                    if all_passed:
+                        day_str = str(trading_day.date())
+                        trade = trade_lookup.get((sym, day_str))
+                        if trade and trade.get("template_id") == tid:
+                            won     = trade["pnl"] > 0
+                            pnl_pct = trade.get("pnl_pct", 0.0)
+                            for detail in details:
+                                bn = detail.get("block", "?")
+                                if bn in ts["blocks"] and detail.get("passed"):
+                                    wp = ts["blocks"][bn]["when_passed"]
+                                    wp["total_trades"] += 1
+                                    if won:
+                                        wp["wins"] += 1
+                                    else:
+                                        wp["losses"] += 1
+                                    wp["pnl_sum"] += pnl_pct
+
+        # Compute derived metrics and convert defaultdicts for JSON serialisation
+        for tid, ts in stats.items():
+            sf = ts["state_filter"]
+            sf["rejection_reasons"] = {
+                k: dict(v) for k, v in sf["rejection_reasons"].items()
+            }
+            for bn, bs in ts["blocks"].items():
+                ev = bs["evaluated"]
+                bs["pass_rate"] = round(bs["passed"] / ev * 100, 1) if ev > 0 else 0.0
+                bs["sole_blocker_rate"] = (
+                    round(bs["was_sole_blocker"] / bs["failed"] * 100, 1)
+                    if bs["failed"] > 0 else 0.0
+                )
+                wp = bs["when_passed"]
+                if wp["total_trades"] > 0:
+                    wp["wr"]      = round(wp["wins"] / wp["total_trades"] * 100, 1)
+                    wp["avg_pnl"] = round(wp["pnl_sum"] / wp["total_trades"], 2)
+                else:
+                    wp["wr"]      = 0.0
+                    wp["avg_pnl"] = 0.0
+
+                bs["per_symbol"] = {
+                    s: {
+                        **d,
+                        "pass_rate": round(d["passed"] / d["evaluated"] * 100, 1)
+                                     if d["evaluated"] > 0 else 0.0,
+                    }
+                    for s, d in bs["per_symbol"].items()
+                }
+
+        self.block_eval_stats = stats
+        elapsed = round(time.perf_counter() - t0, 1)
+        logger.info(
+            f"Block evaluation collection complete: {len(stats)} templates, {elapsed}s"
+        )
 
     def _compute_monthly(self) -> list:
         if not self.equity_curve:

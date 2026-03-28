@@ -1,5 +1,26 @@
 # Changelog
 
+## [2026-03-28] feat(analytics): block-level evaluation statistics — Section 8
+
+### Added
+- `_collect_block_evaluations()` on `BacktestEngine` — second-pass read-only analysis:
+  - Per-block `evaluated`/`passed`/`failed`/`pass_rate`/`was_sole_blocker`/`sole_blocker_rate`
+  - State filter rejection tracking (which state axis blocked which template per scan)
+  - Block → trade outcome linking (`when_passed`: WR, avg_pnl for trades triggered after pass)
+  - Per-symbol pass rates (flags investigation targets with min 10 evals)
+  - Runs AFTER the backtest loop; does NOT modify `_scan_for_signals()` (verified by test)
+- `block_eval_stats` instance attribute initialised to `{}` in `__init__`
+- Section 8 (`block_evaluations`) added to `_compute_analytics()` output
+- Section 8 formatted table added to `_print_analytics()` console output
+- `ANALYTICS_CONFIG["include_block_evaluations"]` toggle in `system_config.py`
+- `tests/test_block_evaluations.py`: 8 unit tests + 3 regression guards (11 total)
+
+### Safety
+- `_scan_for_signals()` completely untouched (regression test enforces this)
+- Wrapped in `try/except` in `run()` — Sections 1–7 unaffected if second pass fails
+
+---
+
 ## [2026-03-28] feat(analytics): comprehensive backtest analytics reporting (P1 §5)
 
 ### Added
