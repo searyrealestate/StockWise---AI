@@ -1,5 +1,35 @@
 # Changelog
 
+## [2026-03-28] feat(templates): anti-overfitting rules + block registry expansion + PULLBACK fix
+
+### Change 1: Anti-Overfitting Rules (system_config.py + setup_templates.py)
+- `TEMPLATE_CONFIG` expanded: hard_limit=7, max_conditions_per_category=2, block_categories dict
+- `validate()` now enforces two rules instead of one hard ceiling:
+  - Rule 1: Hard ceiling (safety net at 7)
+  - Rule 2: Category diversity — max 2 blocks from same category
+- `block_categories` maps all 31 blocks to 5 categories (trend/momentum/volume/volatility/price)
+- Legacy `max_conditions_per_template` key preserved for backward compatibility
+
+### Change 2: Block Registry Expansion (setup_templates.py + system_config.py)
+- 12 new condition blocks added (19 → 31 total):
+  - Trend: `adx_above`, `supertrend_bullish`, `golden_cross_active`
+  - Momentum: `stoch_oversold`, `cci_between`, `roc_positive`
+  - Volume: `obv_rising`, `cmf_positive`, `vwap_above`
+  - Price: `gap_up_today`, `fib_near_support`, `double_bottom_active`
+- `PARAM_RANGES` updated with entries for all 12 new blocks
+
+### Change 3: Template Fixes (data/templates/)
+- `TREND_PULLBACK_EMA` v2: removed 2 redundant SMA blocks, added er_slow_above + volume_surge
+  + bullish_candle — now spans 4 categories; RSI narrowed [40,65]→[42,62]; stats reset
+- `SQUEEZE_BREAKOUT` v2: replaced redundant `bb_width_below` (covered by state filter) with
+  `rvol_above(1.2)` — now 2 volatility + 1 trend + 1 volume; stats reset
+
+### Tests
+- `tests/test_anti_overfitting.py`: 53 tests (config, validation, 19 block behavior, PULLBACK fix, regression)
+- `tests/test_template_conditions_ceiling.py`: updated T2 error-message assertion for new format
+
+---
+
 ## [2026-03-28] feat(analytics): block-level evaluation statistics — Section 8
 
 ### Added

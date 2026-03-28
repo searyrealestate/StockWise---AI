@@ -646,6 +646,20 @@ PARAM_RANGES = {
     "bullish_candle": [[]],
     "close_above_ref": [["bb_upper"], ["sma_50"], ["ema_12"]],
     "close_below_ref": [["bb_lower"], ["sma_50"]],
+
+    # New blocks (added with registry expansion)
+    "adx_above": [[20], [22], [25], [30]],
+    "supertrend_bullish": [[]],
+    "golden_cross_active": [[]],
+    "stoch_oversold": [[15], [20], [25], [30]],
+    "cci_between": [[-100, 100], [-50, 50], [0, 100], [-100, 0]],
+    "roc_positive": [[]],
+    "obv_rising": [[20]],
+    "cmf_positive": [[]],
+    "vwap_above": [[]],
+    "gap_up_today": [[]],
+    "fib_near_support": [[0.015], [0.02], [0.03]],
+    "double_bottom_active": [[]],
 }
 
 # Relative Strength Configuration
@@ -728,11 +742,42 @@ ML_FEATURES = [
 
 # ════════════════════════════════════════════════════════════════
 # TEMPLATE ENGINE CONFIG
-# SPEC v13.4 §4: Max 5 condition blocks per template to prevent
-# overfitting. No limit on total number of templates.
+# TEMPLATE ENGINE CONFIG
+# Anti-overfitting rules replace the hard "max 5 conditions" ceiling.
+# A template is valid if it passes ALL these checks:
+#   1. Max 2 blocks from same category (diversity)
+#   2. Min activations in historical data (not a fluke)
+#   3. Works on multiple symbols (not stock-specific)
+#   4. Survives out-of-sample validation (not curve-fit)
+#   5. Hard ceiling as safety net (not the primary limit)
 # ════════════════════════════════════════════════════════════════
 TEMPLATE_CONFIG = {
-    "max_conditions_per_template": 5,   # SPEC v13.4 §4 ceiling
+    # ── Anti-Overfitting Rules ────────────────────────────────────
+    "max_conditions_per_category": 2,        # Max blocks from same category
+    "min_activations": 10,                   # Must fire 10+ times in history
+    "min_profitable_symbols": 3,             # Must work on 3+ different stocks
+    "max_wr_degradation_pct": 15.0,          # Train->Test WR drop < 15%
+    "max_conditions_hard_limit": 7,          # Absolute ceiling (safety net)
+
+    # ── Legacy (backward compat) ────────────────────────────────
+    "max_conditions_per_template": 7,        # Updated from 5 to match hard_limit
+
+    # ── Block Category Definitions ────────────────────────────────
+    # Used by validate() to enforce category diversity.
+    "block_categories": {
+        "trend":      ["close_above_sma", "sma_above_sma", "close_above_ema",
+                       "er_slow_above", "trend_alignment", "adx_above",
+                       "supertrend_bullish", "golden_cross_active"],
+        "momentum":   ["rsi_between", "rsi_below", "rsi_above",
+                       "macd_above_signal", "macd_histogram_positive",
+                       "stoch_oversold", "cci_between", "roc_positive"],
+        "volume":     ["volume_surge", "rvol_above", "obv_rising",
+                       "cmf_positive", "vwap_above"],
+        "volatility": ["squeeze_active", "squeeze_momentum_positive",
+                       "bb_width_below", "atr_percent_above"],
+        "price":      ["bullish_candle", "close_above_ref", "close_below_ref",
+                       "gap_up_today", "fib_near_support", "double_bottom_active"],
+    },
 }
 
 # ════════════════════════════════════════════════════════════════

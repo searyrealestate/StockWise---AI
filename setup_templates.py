@@ -156,6 +156,77 @@ def block_close_below_ref(row, params):
     return _safe_get(row, 'close') < _safe_get(row, params[0])
 
 
+# --- NEW BLOCKS: TREND (expanded) ---
+
+def block_adx_above(row, params):
+    """ADX above threshold (strong trend). params: [threshold]  e.g. [25]"""
+    return _safe_get(row, 'adx') > params[0]
+
+def block_supertrend_bullish(row, params):
+    """SuperTrend direction is bullish (+1). params: []"""
+    return _safe_get(row, 'supertrend_direction', 0) > 0
+
+def block_golden_cross_active(row, params):
+    """Golden Cross detected (SMA50 crossed above SMA200). params: []"""
+    return bool(_safe_get(row, 'golden_cross', False))
+
+
+# --- NEW BLOCKS: MOMENTUM (expanded) ---
+
+def block_stoch_oversold(row, params):
+    """Stochastic %K below threshold (oversold). params: [threshold]  e.g. [20]"""
+    return _safe_get(row, 'stoch_k', 50) < params[0]
+
+def block_cci_between(row, params):
+    """CCI is in range. params: [min, max]  e.g. [-100, 100]"""
+    cci = _safe_get(row, 'cci', 0)
+    return params[0] <= cci <= params[1]
+
+def block_roc_positive(row, params):
+    """Rate of Change is positive (upward momentum). params: []"""
+    return _safe_get(row, 'roc', 0) > 0
+
+
+# --- NEW BLOCKS: VOLUME (expanded) ---
+
+def block_obv_rising(row, params):
+    """OBV is rising (net accumulation proxy). params: [sma_period]  e.g. [20]
+    Uses OBV > 0 combined with volume >= 80% of average as accumulation signal."""
+    obv = _safe_get(row, 'obv', 0)
+    vol = _safe_get(row, 'volume', 0)
+    avg = _safe_get(row, 'vol_avg_20', 1)
+    return obv > 0 and vol > avg * 0.8
+
+def block_cmf_positive(row, params):
+    """Chaikin Money Flow is positive (buying pressure). params: []"""
+    return _safe_get(row, 'cmf', 0) > 0
+
+def block_vwap_above(row, params):
+    """Close is above VWAP (trading above fair value). params: []"""
+    close = _safe_get(row, 'close', 0)
+    vwap  = _safe_get(row, 'vwap', 0)
+    return close > vwap > 0
+
+
+# --- NEW BLOCKS: PRICE ACTION (expanded) ---
+
+def block_gap_up_today(row, params):
+    """Gap up detected. params: []"""
+    return bool(_safe_get(row, 'gap_up', False))
+
+def block_fib_near_support(row, params):
+    """Price within tolerance_pct of Fibonacci 61.8% level. params: [tolerance_pct]  e.g. [0.02]"""
+    close  = _safe_get(row, 'close', 0)
+    fib618 = _safe_get(row, 'fib_618', 0)
+    if close <= 0 or fib618 <= 0:
+        return False
+    return abs(close - fib618) / close <= params[0]
+
+def block_double_bottom_active(row, params):
+    """Double bottom pattern detected. params: []"""
+    return bool(_safe_get(row, 'double_bottom', False))
+
+
 # --- STOP-LOSS METHOD BLOCKS ---
 
 def stop_atr(row, params):
@@ -207,33 +278,45 @@ def target_fixed_pct(row, params):
 
 CONDITION_BLOCKS = {
     # Trend
-    "close_above_sma": block_close_above_sma,
-    "sma_above_sma": block_sma_above_sma,
-    "close_above_ema": block_close_above_ema,
-    "er_slow_above": block_er_slow_above,
-    "trend_alignment": block_trend_alignment,
+    "close_above_sma":        block_close_above_sma,
+    "sma_above_sma":          block_sma_above_sma,
+    "close_above_ema":        block_close_above_ema,
+    "er_slow_above":          block_er_slow_above,
+    "trend_alignment":        block_trend_alignment,
+    "adx_above":              block_adx_above,              # NEW
+    "supertrend_bullish":     block_supertrend_bullish,     # NEW
+    "golden_cross_active":    block_golden_cross_active,    # NEW
 
     # Momentum
-    "rsi_between": block_rsi_between,
-    "rsi_below": block_rsi_below,
-    "rsi_above": block_rsi_above,
-    "macd_above_signal": block_macd_above_signal,
+    "rsi_between":            block_rsi_between,
+    "rsi_below":              block_rsi_below,
+    "rsi_above":              block_rsi_above,
+    "macd_above_signal":      block_macd_above_signal,
     "macd_histogram_positive": block_macd_histogram_positive,
+    "stoch_oversold":         block_stoch_oversold,         # NEW
+    "cci_between":            block_cci_between,            # NEW
+    "roc_positive":           block_roc_positive,           # NEW
 
     # Volume
-    "volume_surge": block_volume_surge,
-    "rvol_above": block_rvol_above,
+    "volume_surge":           block_volume_surge,
+    "rvol_above":             block_rvol_above,
+    "obv_rising":             block_obv_rising,             # NEW
+    "cmf_positive":           block_cmf_positive,           # NEW
+    "vwap_above":             block_vwap_above,             # NEW
 
     # Volatility
-    "squeeze_active": block_squeeze_active,
+    "squeeze_active":         block_squeeze_active,
     "squeeze_momentum_positive": block_squeeze_momentum_positive,
-    "bb_width_below": block_bb_width_below,
-    "atr_percent_above": block_atr_percent_above,
+    "bb_width_below":         block_bb_width_below,
+    "atr_percent_above":      block_atr_percent_above,
 
     # Price Action
-    "bullish_candle": block_bullish_candle,
-    "close_above_ref": block_close_above_ref,
-    "close_below_ref": block_close_below_ref,
+    "bullish_candle":         block_bullish_candle,
+    "close_above_ref":        block_close_above_ref,
+    "close_below_ref":        block_close_below_ref,
+    "gap_up_today":           block_gap_up_today,           # NEW
+    "fib_near_support":       block_fib_near_support,       # NEW
+    "double_bottom_active":   block_double_bottom_active,   # NEW
 }
 
 STOP_BLOCKS = {
@@ -451,17 +534,46 @@ class SetupTemplate:
         if self.take_profit.get('method') not in ['atr', 'resistance', 'fixed_pct']:
             errors.append(f"Invalid take_profit method: {self.take_profit.get('method')}")
 
-        # Condition count ceiling (SPEC v13.4 §4)
-        max_cond = getattr(cfg, 'TEMPLATE_CONFIG', {}).get('max_conditions_per_template', 5)
-        if len(self.conditions) > max_cond:
+        # ── Anti-Overfitting Validation ──────────────────────────────
+        tmpl_cfg = getattr(cfg, 'TEMPLATE_CONFIG', {})
+
+        # Rule 1: Hard ceiling (safety net)
+        hard_limit = tmpl_cfg.get('max_conditions_hard_limit',
+                                  tmpl_cfg.get('max_conditions_per_template', 7))
+        if len(self.conditions) > hard_limit:
             errors.append(
-                f"Too many conditions: {len(self.conditions)} > max {max_cond} "
-                f"(SPEC v13.4 §4 — overfitting prevention)"
+                f"Too many conditions: {len(self.conditions)} > hard limit {hard_limit}"
             )
             logger.warning(
                 f"[{self.id}] Template rejected: {len(self.conditions)} conditions "
-                f"exceeds ceiling of {max_cond}"
+                f"exceeds hard limit of {hard_limit}"
             )
+
+        # Rule 2: Category diversity — max N blocks from same category
+        max_per_cat = tmpl_cfg.get('max_conditions_per_category', 2)
+        categories  = tmpl_cfg.get('block_categories', {})
+        if categories and self.conditions:
+            block_to_cat = {}
+            for cat, blocks in categories.items():
+                for b in blocks:
+                    block_to_cat[b] = cat
+
+            cat_counts = {}
+            for cond in self.conditions:
+                bn  = cond.get('block', '')
+                cat = block_to_cat.get(bn, 'unknown')
+                cat_counts[cat] = cat_counts.get(cat, 0) + 1
+
+            for cat, count in cat_counts.items():
+                if cat != 'unknown' and count > max_per_cat:
+                    errors.append(
+                        f"Category '{cat}' has {count} blocks (max {max_per_cat}) — "
+                        f"reduces diversity, risk of redundancy"
+                    )
+                    logger.warning(
+                        f"[{self.id}] Category diversity violation: "
+                        f"'{cat}' has {count} blocks (max {max_per_cat})"
+                    )
 
         return len(errors) == 0, errors
 
