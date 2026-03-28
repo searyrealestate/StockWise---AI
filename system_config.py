@@ -107,12 +107,13 @@ LOGS_DIR = os.path.join(PROJECT_ROOT, 'logs')
 MODELS_DIR = os.path.join(PROJECT_ROOT, 'models')
 DB_DIR = os.path.join(PROJECT_ROOT, 'data')
 TEMPLATES_DIR = os.path.join(DB_DIR, "templates")
+REPORTS_DIR = os.path.join(DB_DIR, "reports")
 
 # Maximum number of active trading templates (SPEC v13.4 §4 — ceiling, not floor)
 MAX_TEMPLATES = 5
 
 # Ensure that the necessary directories exist; create them if they do not
-for d in [LOGS_DIR, MODELS_DIR, DB_DIR, TEMPLATES_DIR]:
+for d in [LOGS_DIR, MODELS_DIR, DB_DIR, TEMPLATES_DIR, REPORTS_DIR]:
     os.makedirs(d, exist_ok=True)
 
 # --- 2. API CREDENTIALS ---
@@ -732,6 +733,22 @@ ML_FEATURES = [
 # ════════════════════════════════════════════════════════════════
 TEMPLATE_CONFIG = {
     "max_conditions_per_template": 5,   # SPEC v13.4 §4 ceiling
+}
+
+# ════════════════════════════════════════════════════════════════
+# ANALYTICS CONFIG — backtest_engine comprehensive reporting
+# SPEC v13.4 §5 — post-run analytics for template/block insight
+# ════════════════════════════════════════════════════════════════
+ANALYTICS_CONFIG = {
+    "reports_dir":            "data/reports",
+    "include_block_stats":    True,
+    "include_shadow_matrix":  True,
+    "include_temporal":       True,
+    "bars_buckets":           [2, 5, 10, 20],
+    "comparison_metrics":     [
+        "total_trades", "win_rate", "profit_factor",
+        "avg_win_pct", "avg_loss_pct", "avg_bars_held",
+    ],
 }
 
 class EmojiFilter(logging.Filter):

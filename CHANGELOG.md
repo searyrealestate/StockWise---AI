@@ -1,5 +1,30 @@
 # Changelog
 
+## [2026-03-28] feat(analytics): comprehensive backtest analytics reporting (P1 §5)
+
+### Added
+- `_compute_analytics(trades, results_summary)` on `BacktestEngine` — 7 sections:
+  1. `template_anatomy` — condition count, block names, version per template
+  2. `trade_breakdown` — per-template trades/WR/avg_pnl_pct/total_pnl/avg_bars_held
+  3. `temporal` — by_year / by_quarter / by_month win rate + avg_pnl
+  4. `phase_analysis` — per market-phase deep dive with template breakdown
+  5. `block_stats` — loaded from template JSON statistics.block_stats
+  6. `shadow_ledger_matrix` — per-symbol/template signal counts from shadow_ledger.json
+  7. `winner_loser_profile` — bars-held distribution + top-5/worst-5 trades
+- `_print_analytics(analytics)` — formatted console output for all 7 sections
+- `ANALYTICS_CONFIG` in `system_config.py` — controls include flags, bars_buckets, comparison_metrics
+- `REPORTS_DIR = data/reports` in `system_config.py`; included in makedirs loop
+- Analytics saved to `data/reports/analytics_{timestamp}.json` per run
+- `results["analytics"]` key added to backtest results JSON (backward-compatible)
+- `tests/test_backtest_analytics.py`: 12 unit tests + 3 regression guards (15 total)
+
+### Impact
+- Single run now surfaces template, temporal, phase, and block-level insight
+- Shadow ledger matrix printed after survivability — closes the DDR #1 observability loop
+- Analytics JSON in `data/reports/` enables run-over-run comparison
+
+---
+
 ## [2026-03-29] feat(templates): block-level statistics (P1 #7A)
 
 ### Added

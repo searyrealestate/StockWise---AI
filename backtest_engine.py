@@ -33,7 +33,7 @@ import os
 import random
 import sys
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 
 import numpy as np
@@ -225,6 +225,22 @@ class BacktestEngine:
             "date_range":       f"{timeline[0].date()} to {timeline[-1].date()}",
             "risk_gates_enabled": self.use_risk_gates,
         }
+
+        results["analytics"] = self._compute_analytics(
+            self.closed_trades, results.get("summary", {})
+        )
+
+        # Save analytics report to reports_dir
+        try:
+            reports_dir = getattr(cfg, "REPORTS_DIR",
+                                  os.path.join(os.path.dirname(BACKTEST_RESULTS_PATH), "reports"))
+            os.makedirs(reports_dir, exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            report_path = os.path.join(reports_dir, f"analytics_{ts}.json")
+            safe_json_write(report_path, results["analytics"])
+            logger.info(f"Analytics report saved to {report_path}")
+        except Exception as exc:
+            logger.warning(f"Could not save analytics report: {exc}")
 
         try:
             safe_json_write(BACKTEST_RESULTS_PATH, results)
@@ -776,6 +792,343 @@ class BacktestEngine:
             f"{total_signals_fed} signals merged into {ledger_path}"
         )
 
+    # ───────────────────────────────────────────────────────────────────────
+    # Analytics (SPEC v13.4 §5)
+    # ───────────────────────────────────────────────────────────────────────
+
+    def _compute_analytics(self, trades: list, results_summary: dict) -> dict:
+        """
+        7-section analytics over closed trades.
+        Returns a dict added to results["analytics"].
+        """
+        analytics: dict = {}
+
+        if not trades:
+            return analytics
+
+        # ── Section 1: template_anatomy ──────────────────────────────────────
+        template_anatomy: dict = {}
+        templates_dir = getattr(cfg, "TEMPLATES_DIR", "data/templates")
+        try:
+            if os.path.isdir(templates_dir):
+                for fname in os.listdir(templates_dir):
+                    if not fname.endswith(".json"):
+                        continue
+                    fpath = os.path.join(templates_dir, fname)
+                    try:
+                        tdata = safe_json_read(fpath, default={})
+                        tid = tdata.get("id", fname.replace(".json", ""))
+                        conditions = tdata.get("conditions", [])
+                        template_anatomy[tid] = {
+                            "condition_count": len(conditions),
+                            "block_names": [c.get("block", "?") for c in conditions],
+                            "version":     tdata.get("version", 1),
+                            "source":      tdata.get("source", ""),
+                        }
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        analytics["template_anatomy"] = template_anatomy
+
+        # ── Section 2: trade_breakdown ────────────────────────────────────────
+        per_tmpl: dict = defaultdict(lambda: {"trades": 0, "wins": 0, "pnl_pct_sum": 0.0,
+                                               "pnl_sum": 0.0, "bars_sum": 0.0})
+        for t in trades:
+            tid   = t.get("template_id", "UNKNOWN")
+            won   = t.get("pnl", 0) > 0
+            entry = per_tmpl[tid]
+            entry["trades"]      += 1
+            entry["wins"]        += int(won)
+            entry["pnl_pct_sum"] += t.get("pnl_pct", 0.0)
+            entry["pnl_sum"]     += t.get("pnl", 0.0)
+            entry["bars_sum"]    += t.get("bars_held", 0)
+
+        trade_breakdown: dict = {}
+        for tid, d in per_tmpl.items():
+            n = d["trades"]
+            wr = round(d["wins"] / n * 100, 1) if n else 0.0
+            trade_breakdown[tid] = {
+                "total_trades":   n,
+                "wins":           d["wins"],
+                "losses":         n - d["wins"],
+                "win_rate":       wr,
+                "avg_pnl_pct":    round(d["pnl_pct_sum"] / n, 2) if n else 0.0,
+                "total_pnl":      round(d["pnl_sum"], 2),
+                "avg_bars_held":  round(d["bars_sum"] / n, 1) if n else 0.0,
+            }
+        analytics["trade_breakdown"] = trade_breakdown
+
+        # ── Section 3: temporal ───────────────────────────────────────────────
+        if getattr(cfg.ANALYTICS_CONFIG, "__class__", None) or isinstance(
+                getattr(cfg, "ANALYTICS_CONFIG", None), dict):
+            include_temporal = cfg.ANALYTICS_CONFIG.get("include_temporal", True)
+        else:
+            include_temporal = True
+
+        temporal: dict = {"by_year": {}, "by_quarter": {}, "by_month": {}}
+        if include_temporal:
+            for t in trades:
+                entry_date = t.get("entry_date", "")[:10]
+                if not entry_date:
+                    continue
+                try:
+                    yr  = entry_date[:4]
+                    mo  = entry_date[:7]
+                    q   = f"{yr}Q{(int(entry_date[5:7]) - 1) // 3 + 1}"
+                    won = t.get("pnl", 0) > 0
+                    pnl = t.get("pnl_pct", 0.0)
+                    for bucket, key in [(temporal["by_year"], yr),
+                                        (temporal["by_quarter"], q),
+                                        (temporal["by_month"], mo)]:
+                        if key not in bucket:
+                            bucket[key] = {"trades": 0, "wins": 0, "pnl_pct_sum": 0.0}
+                        bucket[key]["trades"]      += 1
+                        bucket[key]["wins"]        += int(won)
+                        bucket[key]["pnl_pct_sum"] += pnl
+                except (ValueError, IndexError):
+                    pass
+
+            for bucket in temporal.values():
+                for key, d in bucket.items():
+                    n = d["trades"]
+                    d["win_rate"]    = round(d["wins"] / n * 100, 1) if n else 0.0
+                    d["avg_pnl_pct"] = round(d["pnl_pct_sum"] / n, 2) if n else 0.0
+                    del d["pnl_pct_sum"]
+
+        analytics["temporal"] = temporal
+
+        # ── Section 4: phase_analysis ─────────────────────────────────────────
+        phase_analysis: dict = {}
+        for t in trades:
+            phase = t.get("final_phase", "UNKNOWN")
+            if phase not in phase_analysis:
+                phase_analysis[phase] = {
+                    "trades": 0, "wins": 0, "pnl_pct_sum": 0.0,
+                    "template_counts": Counter(),
+                }
+            entry = phase_analysis[phase]
+            entry["trades"]      += 1
+            entry["wins"]        += int(t.get("pnl", 0) > 0)
+            entry["pnl_pct_sum"] += t.get("pnl_pct", 0.0)
+            tid = t.get("template_id", "UNKNOWN")
+            entry["template_counts"][tid] += 1
+
+        for ph, d in phase_analysis.items():
+            n = d["trades"]
+            d["win_rate"]    = round(d["wins"] / n * 100, 1) if n else 0.0
+            d["avg_pnl_pct"] = round(d["pnl_pct_sum"] / n, 2) if n else 0.0
+            d["template_counts"] = dict(d["template_counts"])
+            del d["pnl_pct_sum"]
+        analytics["phase_analysis"] = phase_analysis
+
+        # ── Section 5: block_stats ────────────────────────────────────────────
+        block_stats: dict = {}
+        include_bs = True
+        ac = getattr(cfg, "ANALYTICS_CONFIG", {})
+        if isinstance(ac, dict):
+            include_bs = ac.get("include_block_stats", True)
+
+        if include_bs and os.path.isdir(templates_dir):
+            for fname in os.listdir(templates_dir):
+                if not fname.endswith(".json"):
+                    continue
+                fpath = os.path.join(templates_dir, fname)
+                try:
+                    tdata = safe_json_read(fpath, default={})
+                    tid   = tdata.get("id", fname.replace(".json", ""))
+                    stats = tdata.get("statistics", {}).get("block_stats", {})
+                    if stats:
+                        block_stats[tid] = stats
+                except Exception:
+                    pass
+        analytics["block_stats"] = block_stats
+
+        # ── Section 6: shadow_ledger_matrix ───────────────────────────────────
+        shadow_matrix: dict = {}
+        include_sm = True
+        if isinstance(ac, dict):
+            include_sm = ac.get("include_shadow_matrix", True)
+
+        if include_sm:
+            sl_config = getattr(cfg, "SHADOW_LEDGER_CONFIG", {})
+            ledger_path = sl_config.get("ledger_path", "data/shadow_ledger.json")
+            try:
+                ledger = safe_json_read(ledger_path, default={})
+                shadow_matrix = ledger.get("template_stats", {})
+            except Exception:
+                pass
+        analytics["shadow_ledger_matrix"] = shadow_matrix
+
+        # ── Section 7: winner_loser_profile ───────────────────────────────────
+        wins_list   = [t for t in trades if t.get("pnl", 0) > 0]
+        losses_list = [t for t in trades if t.get("pnl", 0) <= 0]
+
+        bars_buckets = [2, 5, 10, 20]
+        if isinstance(ac, dict) and "bars_buckets" in ac:
+            bars_buckets = ac["bars_buckets"]
+
+        def _bars_dist(tlist):
+            dist = Counter()
+            for t in tlist:
+                bh = t.get("bars_held", 0)
+                label = None
+                prev = 0
+                for b in bars_buckets:
+                    if bh <= b:
+                        label = f"{prev+1}-{b}"
+                        break
+                    prev = b
+                if label is None:
+                    label = f"{bars_buckets[-1]+1}+"
+                dist[label] += 1
+            return dict(dist)
+
+        top_n = sorted(wins_list,   key=lambda t: t.get("pnl_pct", 0), reverse=True)[:5]
+        bot_n = sorted(losses_list, key=lambda t: t.get("pnl_pct", 0))[:5]
+
+        def _trade_summary(tlist):
+            return [
+                {
+                    "symbol":      t.get("symbol", ""),
+                    "template_id": t.get("template_id", ""),
+                    "entry_date":  t.get("entry_date", ""),
+                    "pnl_pct":     t.get("pnl_pct", 0.0),
+                    "bars_held":   t.get("bars_held", 0),
+                }
+                for t in tlist
+            ]
+
+        analytics["winner_loser_profile"] = {
+            "bars_distribution_wins":   _bars_dist(wins_list),
+            "bars_distribution_losses": _bars_dist(losses_list),
+            "top_5_trades":             _trade_summary(top_n),
+            "worst_5_trades":           _trade_summary(bot_n),
+        }
+
+        return analytics
+
+    def _print_analytics(self, analytics: dict) -> None:
+        """Print analytics to console in formatted sections."""
+        if not analytics:
+            return
+
+        W = 55
+
+        # ── template_anatomy ─────────────────────────────────────────────────
+        anatomy = analytics.get("template_anatomy", {})
+        if anatomy:
+            print("\n" + "=" * W)
+            print("TEMPLATE ANATOMY")
+            print("=" * W)
+            for tid, a in anatomy.items():
+                print(f"  {tid}  v{a.get('version', 1)}  ({a.get('condition_count', 0)} conditions)")
+                blocks = ", ".join(a.get("block_names", []))
+                if blocks:
+                    print(f"    Blocks: {blocks}")
+
+        # ── trade_breakdown ──────────────────────────────────────────────────
+        breakdown = analytics.get("trade_breakdown", {})
+        if breakdown:
+            print("\n" + "=" * W)
+            print("TRADE BREAKDOWN BY TEMPLATE")
+            print("=" * W)
+            hdr = f"  {'Template':<28} {'Trades':>6} {'WR%':>6} {'AvgPnL%':>8} {'TotalPnL':>10}"
+            print(hdr)
+            print("  " + "-" * (W - 2))
+            for tid, d in sorted(breakdown.items(), key=lambda x: -x[1]["total_trades"]):
+                print(f"  {tid:<28} {d['total_trades']:>6} {d['win_rate']:>6.1f} "
+                      f"{d['avg_pnl_pct']:>+8.2f} {d['total_pnl']:>+10.2f}")
+
+        # ── temporal ─────────────────────────────────────────────────────────
+        temporal = analytics.get("temporal", {})
+        by_year = temporal.get("by_year", {})
+        if by_year:
+            print("\n" + "=" * W)
+            print("TEMPORAL BREAKDOWN (by year)")
+            print("=" * W)
+            hdr = f"  {'Year':<8} {'Trades':>6} {'WR%':>6} {'AvgPnL%':>8}"
+            print(hdr)
+            print("  " + "-" * 30)
+            for yr in sorted(by_year):
+                d = by_year[yr]
+                print(f"  {yr:<8} {d['trades']:>6} {d['win_rate']:>6.1f} {d['avg_pnl_pct']:>+8.2f}")
+
+        # ── phase_analysis ────────────────────────────────────────────────────
+        phase = analytics.get("phase_analysis", {})
+        if phase:
+            print("\n" + "=" * W)
+            print("PHASE ANALYSIS")
+            print("=" * W)
+            hdr = f"  {'Phase':<20} {'Trades':>6} {'WR%':>6} {'AvgPnL%':>8}"
+            print(hdr)
+            print("  " + "-" * 42)
+            for ph, d in sorted(phase.items(), key=lambda x: -x[1]["trades"]):
+                print(f"  {ph:<20} {d['trades']:>6} {d['win_rate']:>6.1f} {d['avg_pnl_pct']:>+8.2f}")
+
+        # ── block_stats ───────────────────────────────────────────────────────
+        block_stats = analytics.get("block_stats", {})
+        if block_stats:
+            print("\n" + "=" * W)
+            print("BLOCK STATISTICS")
+            print("=" * W)
+            for tid, bstats in block_stats.items():
+                print(f"  [{tid}]")
+                hdr = f"    {'Block':<25} {'Eval':>5} {'Pass%':>6} {'Blocker':>7}"
+                print(hdr)
+                print("    " + "-" * 42)
+                for bname, bd in sorted(bstats.items()):
+                    ev  = bd.get("evaluated", 0)
+                    pr  = bd.get("pass_rate",  0.0)
+                    blk = bd.get("was_the_blocker", 0)
+                    print(f"    {bname:<25} {ev:>5} {pr:>6.1f} {blk:>7}")
+
+        # ── shadow_ledger_matrix ──────────────────────────────────────────────
+        shadow = analytics.get("shadow_ledger_matrix", {})
+        if shadow:
+            print("\n" + "=" * W)
+            print("SHADOW LEDGER MATRIX")
+            print("=" * W)
+            for sym, templates in sorted(shadow.items()):
+                if isinstance(templates, dict):
+                    for tid, sd in templates.items():
+                        sc  = sd.get("signal_count", 0)
+                        wr  = sd.get("win_rate", 0.0)
+                        apnl = sd.get("avg_pnl_pct", 0.0)
+                        print(f"  {sym:<6} {tid:<28} sig={sc:>4}  WR={wr:>5.1f}%  "
+                              f"avgPnL={apnl:>+6.2f}%")
+
+        # ── winner_loser_profile ──────────────────────────────────────────────
+        wlp = analytics.get("winner_loser_profile", {})
+        if wlp:
+            print("\n" + "=" * W)
+            print("WINNER / LOSER PROFILE")
+            print("=" * W)
+            win_dist  = wlp.get("bars_distribution_wins", {})
+            loss_dist = wlp.get("bars_distribution_losses", {})
+            if win_dist or loss_dist:
+                all_keys = sorted(set(list(win_dist) + list(loss_dist)))
+                print(f"  Bars-held distribution (wins / losses):")
+                for k in all_keys:
+                    w_cnt = win_dist.get(k, 0)
+                    l_cnt = loss_dist.get(k, 0)
+                    print(f"    {k:>8} bars:  wins={w_cnt:>4}  losses={l_cnt:>4}")
+
+            top5 = wlp.get("top_5_trades", [])
+            if top5:
+                print(f"\n  Top 5 trades:")
+                for t in top5:
+                    print(f"    {t['symbol']:<6} {t['template_id']:<25} "
+                          f"{t['entry_date'][:10]}  {t['pnl_pct']:>+.2f}%  "
+                          f"{t['bars_held']} bars")
+            worst5 = wlp.get("worst_5_trades", [])
+            if worst5:
+                print(f"\n  Worst 5 trades:")
+                for t in worst5:
+                    print(f"    {t['symbol']:<6} {t['template_id']:<25} "
+                          f"{t['entry_date'][:10]}  {t['pnl_pct']:>+.2f}%  "
+                          f"{t['bars_held']} bars")
+
     def _compute_monthly(self) -> list:
         if not self.equity_curve:
             return []
@@ -1020,6 +1373,11 @@ def main():
                       f"({wc[pct_k]:.1f}% remaining)")
 
     print(f"\nSURVIVAL VERDICT: {sv.get('survival_verdict', 'N/A')}")
+
+    analytics = results.get("analytics", {})
+    if analytics:
+        engine._print_analytics(analytics)
+
     print(f"\nResults -> {args.output}")
     print("=" * 55)
 
