@@ -343,6 +343,10 @@ class ShadowLedger:
 
                 self.evaluate_history(symbol, df)
                 evaluated += 1
+                # Log per-symbol summary
+                sym_stats = self.ledger.get("template_stats", {}).get(symbol, {})
+                sym_total = sum(s.get("signal_count", 0) for s in sym_stats.values())
+                logger.info(f"[{symbol}] Evaluation complete: {sym_total} total signals")
 
             except Exception as e:
                 logger.error(f"[{symbol}] Shadow evaluation failed: {e}")
@@ -352,8 +356,171 @@ class ShadowLedger:
         # Apply vectorized decay before saving (SPEC v13.4 §4)
         self.apply_decay()
 
+        # Log per-symbol per-template detail for simulator compatibility
+        for symbol in symbols:
+            sym_stats = self.ledger.get("template_stats", {}).get(symbol, {})
+            for tid, stats in sym_stats.items():
+                sc = stats.get("signal_count", 0)
+                if sc > 0:
+                    wr = stats.get("win_rate", 0.0)
+                    avg_pnl = stats.get("avg_pnl_pct", 0.0)
+                    logger.debug(
+                        f"[{symbol}] {tid}: {sc} signals, "
+                        f"WR={wr:.1f}%, AvgPnL={avg_pnl:+.2f}%"
+                    )
+
         self._save_ledger()
         logger.info(
             f"Shadow Ledger: Complete. Evaluated: {evaluated}, Skipped: {skipped}. "
             f"Saved to {self.ledger_path}"
         )
+
+
+# ════════════════════════════════════════════════════════════════
+# CLI ENTRY POINT
+# ════════════════════════════════════════════════════════════════
+# Usage:
+#   python shadow_ledger.py
+#   python shadow_ledger.py --symbols AAPL MSFT NVDA
+#   python shadow_ledger.py --symbols AAPL --days-back 365
+#
+# Default: runs on DEFAULT_TRAINING_SYMBOLS from system_config.py
+# Intended for offline/weekend execution (DDR Part C).
+# Output: data/shadow_ledger.json (used by template_matcher for
+#         DDR #1 Asset-Specific win rates)
+# ════════════════════════════════════════════════════════════════
+
+def _print_summary(sl):
+    """Print human-readable summary of evaluation results to stdout."""
+    all_stats = sl.ledger.get("template_stats", {})
+    if not all_stats:
+        print("\n[ShadowLedger] No evaluation results to summarize.")
+        return
+
+    # Aggregate across all symbols
+    global_stats = {}
+    symbols_evaluated = list(all_stats.keys())
+
+    for sym_stats in all_stats.values():
+        for tid, stats in sym_stats.items():
+            if tid not in global_stats:
+                global_stats[tid] = {
+                    "signal_count": 0, "wins": 0, "losses": 0,
+                    "total_pnl_pct": 0.0,
+                }
+            global_stats[tid]["signal_count"] += stats.get("signal_count", 0)
+            global_stats[tid]["wins"] += stats.get("wins", 0)
+            global_stats[tid]["losses"] += stats.get("losses", 0)
+            global_stats[tid]["total_pnl_pct"] += stats.get("total_pnl_pct", 0.0)
+
+    total_signals = sum(s["signal_count"] for s in global_stats.values())
+
+    print(f"\n{'=' * 55}")
+    print(f" Shadow Ledger Evaluation Complete")
+    print(f"{'=' * 55}")
+    print(f" Symbols evaluated: {len(symbols_evaluated)}")
+    print(f" Total signals:     {total_signals}")
+    print(f"{'-' * 55}")
+    print(f" {'Template':<25} {'Signals':>8} {'Wins':>6} {'WR%':>7} {'AvgPnL':>8}")
+    print(f"{'-' * 55}")
+
+    for tid in sorted(global_stats.keys()):
+        s = global_stats[tid]
+        sc = s["signal_count"]
+        wr = round(s["wins"] / sc * 100, 1) if sc > 0 else 0.0
+        avg_pnl = round(s["total_pnl_pct"] / sc, 2) if sc > 0 else 0.0
+        print(f" {tid:<25} {sc:>8} {s['wins']:>6} {wr:>6.1f}% {avg_pnl:>+7.2f}%")
+
+    print(f"{'-' * 55}")
+
+    # Per-symbol breakdown (top 10 by signal count)
+    print(f"\n Per-symbol signal counts (top contributors):")
+    sym_signals = []
+    for sym, sym_stats in all_stats.items():
+        sym_total = sum(s.get("signal_count", 0) for s in sym_stats.values())
+        sym_signals.append((sym, sym_total))
+    sym_signals.sort(key=lambda x: x[1], reverse=True)
+
+    for sym, count in sym_signals[:10]:
+        print(f"   {sym:<8} {count:>5} signals")
+
+    print(f"{'=' * 55}\n")
+
+
+if __name__ == "__main__":
+    import argparse
+    import sys
+    import time
+
+    # ── Parse CLI arguments ──────────────────────────────────
+    parser = argparse.ArgumentParser(
+        description="StockWise Shadow Ledger — offline candle-by-candle template evaluation",
+        epilog="Output: data/shadow_ledger.json (feeds DDR #1 Asset-Specific win rates)"
+    )
+    parser.add_argument(
+        "--symbols", nargs="+", default=None,
+        help="Symbols to evaluate (default: DEFAULT_TRAINING_SYMBOLS from config)"
+    )
+    parser.add_argument(
+        "--days-back", type=int, default=None,
+        help="Days of history to evaluate (default: from SHADOW_LEDGER_CONFIG.eval_days_back)"
+    )
+    args = parser.parse_args()
+
+    # ── Setup logging to console ─────────────────────────────
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        datefmt="%H:%M:%S"
+    )
+
+    # ── Resolve symbols ──────────────────────────────────────
+    symbols = args.symbols
+    if symbols is None:
+        symbols = list(getattr(cfg, 'DEFAULT_TRAINING_SYMBOLS', []))
+    if not symbols:
+        print("[ShadowLedger] ERROR: No symbols provided and DEFAULT_TRAINING_SYMBOLS is empty.")
+        print("Usage: python shadow_ledger.py --symbols AAPL MSFT NVDA")
+        sys.exit(1)
+
+    # ── Override days_back if provided ───────────────────────
+    sl = ShadowLedger()
+    if args.days_back is not None:
+        sl.config['eval_days_back'] = args.days_back
+
+    days_back = sl.config.get('eval_days_back', 1095)
+
+    print(f"[ShadowLedger] Starting evaluation:")
+    print(f"  Symbols:   {len(symbols)} ({', '.join(symbols[:5])}{'...' if len(symbols) > 5 else ''})")
+    print(f"  Days back: {days_back}")
+    print(f"  Output:    {sl.ledger_path}")
+    print()
+
+    # ── Initialize dependencies ──────────────────────────────
+    try:
+        from data_source_manager import DataSourceManager
+        from feature_engine import FeatureEngine
+        dsm = DataSourceManager()
+        fe = FeatureEngine()
+    except Exception as e:
+        print(f"[ShadowLedger] ERROR: Failed to initialize dependencies: {e}")
+        sys.exit(1)
+
+    # ── Run evaluation ───────────────────────────────────────
+    start_time = time.time()
+
+    sl.run_full_evaluation(
+        data_source_manager=dsm,
+        symbols=symbols,
+        feature_engine=fe
+    )
+
+    elapsed = time.time() - start_time
+
+    # ── Print summary ────────────────────────────────────────
+    _print_summary(sl)
+
+    print(f"[ShadowLedger] Duration: {elapsed:.1f}s")
+    print(f"[ShadowLedger] Results saved to: {sl.ledger_path}")
+    print(f"[ShadowLedger] template_matcher will now use per-stock win rates (DDR #1)")

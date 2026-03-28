@@ -1,5 +1,23 @@
 # Changelog
 
+## [2026-03-29] feat(shadow_ledger): CLI entry point for offline evaluation
+
+### Added
+- `__main__` block in `shadow_ledger.py` — can now run standalone:
+  `python shadow_ledger.py --symbols AAPL MSFT NVDA --days-back 365`
+- `_print_summary()` — human-readable evaluation report to stdout
+- Per-symbol per-template `DEBUG` logging for simulator compatibility
+- Per-symbol `INFO` logging showing total signals after evaluation
+- `tests/test_shadow_ledger_cli.py`: 7 unit tests + 2 regression guards
+
+### Impact
+- `shadow_ledger.json` will now be populated with per-stock template stats
+- `template_matcher.get_template_win_rate()` will use real data instead of
+  fallback 50% — DDR #1 (Asset-Specific) comes alive
+- Intended for weekend offline execution per DDR Part C
+
+---
+
 ## [2026-03-29] feat(templates): enforce max 5 conditions per template
 
 ### Added
