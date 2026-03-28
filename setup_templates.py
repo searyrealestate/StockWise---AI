@@ -440,6 +440,18 @@ class SetupTemplate:
         if self.take_profit.get('method') not in ['atr', 'resistance', 'fixed_pct']:
             errors.append(f"Invalid take_profit method: {self.take_profit.get('method')}")
 
+        # Condition count ceiling (SPEC v13.4 §4)
+        max_cond = getattr(cfg, 'TEMPLATE_CONFIG', {}).get('max_conditions_per_template', 5)
+        if len(self.conditions) > max_cond:
+            errors.append(
+                f"Too many conditions: {len(self.conditions)} > max {max_cond} "
+                f"(SPEC v13.4 §4 — overfitting prevention)"
+            )
+            logger.warning(
+                f"[{self.id}] Template rejected: {len(self.conditions)} conditions "
+                f"exceeds ceiling of {max_cond}"
+            )
+
         return len(errors) == 0, errors
 
     def get_win_rate(self):
@@ -789,7 +801,10 @@ class TemplateManager:
                 is_valid, errors = template.validate()
                 if is_valid:
                     self.templates[template.id] = template
-                    logger.debug(f"Loaded template: {template.id} ({template.name})")
+                    logger.debug(
+                        f"Loaded template: {template.id} ({template.name}), "
+                        f"{len(template.conditions)} conditions"
+                    )
                 else:
                     logger.warning(f"Invalid template {filename}: {errors}")
             except Exception as e:
@@ -852,7 +867,10 @@ class TemplateManager:
             return False
         self.templates[template.id] = template
         self.save_template(template)
-        logger.info(f"Added new template: {template.id} ({template.name})")
+        logger.info(
+            f"Added new template: {template.id} ({template.name}) "
+            f"with {len(template.conditions)} conditions"
+        )
         return True
 
     def get_statistics_summary(self):

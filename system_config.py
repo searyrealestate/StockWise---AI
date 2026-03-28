@@ -725,6 +725,15 @@ ML_FEATURES = [
     'volatility_20d'
 ]
 
+# ════════════════════════════════════════════════════════════════
+# TEMPLATE ENGINE CONFIG
+# SPEC v13.4 §4: Max 5 condition blocks per template to prevent
+# overfitting. No limit on total number of templates.
+# ════════════════════════════════════════════════════════════════
+TEMPLATE_CONFIG = {
+    "max_conditions_per_template": 5,   # SPEC v13.4 §4 ceiling
+}
+
 class EmojiFilter(logging.Filter):
     """
     Log Filter to remove emojis and non-ascii characters.

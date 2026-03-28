@@ -1,5 +1,21 @@
 # Changelog
 
+## [2026-03-29] feat(templates): enforce max 5 conditions per template
+
+### Added
+- `TEMPLATE_CONFIG` in `system_config.py` with `max_conditions_per_template=5`
+- Validation in `SetupTemplate.validate()` rejects templates with >5 conditions
+- `WARNING` log when template is rejected for too many conditions
+- `DEBUG` log in `load_all()` and `INFO` log in `add_template()` showing condition count
+- `tests/test_template_conditions_ceiling.py`: 7 unit tests + 2 regression guards
+
+### Clarification
+- SPEC v13.4 §4 ceiling is on CONDITIONS PER TEMPLATE (max 5 indicators)
+- There is NO ceiling on total number of templates
+- This guard prevents overfitting when Template Discovery Engine is built
+
+---
+
 ## [2026-03-28] P0 #1 — _classify_volatility_state uses bb_width_pct not bb_width
 
 ### Fix — stock_hunter.py `_classify_volatility_state` (P0)
