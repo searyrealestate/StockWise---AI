@@ -21,6 +21,11 @@ sys.path.insert(0, PROJECT_ROOT)
 from safe_json_io import safe_json_read
 
 try:
+    from versioned_save import save_versioned_copy
+except ImportError:
+    save_versioned_copy = None
+
+try:
     from docx import Document
     from docx.shared import Inches, Pt, RGBColor
     from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -136,6 +141,9 @@ class ValidationReport:
 
         doc.save(self.docx_path)
         print(f"Report saved: {self.docx_path}")
+        # Save versioned copy
+        if save_versioned_copy:
+            save_versioned_copy(self.docx_path, "report_history")
         return self.docx_path
 
     # ── DOCX table helper ────────────────────────────────────────────────────
@@ -556,6 +564,9 @@ class ValidationReport:
         with open(self.txt_path, "w", encoding="utf-8") as f:
             f.write(text)
         print(f"Text report saved: {self.txt_path}")
+        # Save versioned copy
+        if save_versioned_copy:
+            save_versioned_copy(self.txt_path, "report_history")
         return self.txt_path
 
 

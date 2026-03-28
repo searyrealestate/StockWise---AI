@@ -32,6 +32,11 @@ import time
 import traceback
 from datetime import datetime, timezone
 
+try:
+    from versioned_save import save_versioned_copy
+except ImportError:
+    save_versioned_copy = None
+
 # ── Project root on sys.path ────────────────────────────────────────────────
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_ROOT)
@@ -706,6 +711,10 @@ def main():
     clean = _strip_internal(results)
     with open(args.output, "w", encoding="utf-8") as f:
         json.dump(clean, f, indent=2, default=str)
+
+    # Save versioned copy for comparison across runs
+    if save_versioned_copy:
+        save_versioned_copy(args.output, "validation_history")
 
     log.info("=" * 60)
     s = results["summary"]

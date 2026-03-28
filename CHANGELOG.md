@@ -1,5 +1,25 @@
 # Changelog
 
+## [2026-03-29] feat(infra): versioned output saves for backtest/validation
+
+### Added
+- `versioned_save.py` — utility module for timestamped output copies
+  - `save_versioned_copy(path, history_folder, label=None)`
+  - `list_history(history_dir, limit=10)` for listing recent versions
+  - Filename format: `{name}_{YYYYMMDD_HHMMSS}_{git_hash}[_{label}].{ext}`
+- Wired into `backtest_engine.py` → `data/backtest_history/`
+- Wired into `validation_runner.py` → `data/validation_history/`
+- Wired into `validation_report.py` → `data/report_history/` (DOCX + TXT)
+- `tests/test_versioned_save.py`: 11 unit tests + 2 regression guards
+
+### Impact
+- Every backtest/validation run creates a versioned copy alongside
+  the "latest" file — enables before/after comparison across fixes
+- Existing behavior unchanged — "latest" files still overwritten as before
+- `shadow_ledger.json` is NOT versioned (accumulative by design)
+
+---
+
 ## [2026-03-29] feat(backtest): feed results into shadow_ledger.json
 
 ### Added

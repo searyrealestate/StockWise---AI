@@ -44,6 +44,10 @@ sys.path.insert(0, PROJECT_ROOT)
 
 import system_config as cfg
 from safe_json_io import safe_json_read, safe_json_write
+try:
+    from versioned_save import save_versioned_copy
+except ImportError:
+    save_versioned_copy = None
 from feature_engine import FeatureEngine
 from setup_templates import TemplateManager
 from template_matcher import TemplateMatcher
@@ -225,6 +229,9 @@ class BacktestEngine:
         try:
             safe_json_write(BACKTEST_RESULTS_PATH, results)
             logger.info(f"Results saved to {BACKTEST_RESULTS_PATH}")
+            # Save versioned copy for comparison across runs
+            if save_versioned_copy:
+                save_versioned_copy(BACKTEST_RESULTS_PATH, "backtest_history")
         except Exception as exc:
             logger.warning(f"Could not save results: {exc}")
 
