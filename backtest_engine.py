@@ -107,6 +107,7 @@ class Position:
         "phase", "highest_high", "current_stop",
         "exit_price", "exit_date", "exit_reason",
         "pnl", "pnl_pct", "bars_held",
+        "indicator_snapshot",
     ]
 
     def __init__(self, symbol, template_id, template_name,
@@ -131,6 +132,7 @@ class Position:
         self.pnl           = 0.0
         self.pnl_pct       = 0.0
         self.bars_held     = 0
+        self.indicator_snapshot = {}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -492,6 +494,23 @@ class BacktestEngine:
                 shares=shares, stop_loss=stop_loss, take_profit=take_profit,
                 initial_stop=stop_loss,
             )
+            # Capture indicator snapshot at entry for profiler analysis
+            try:
+                last_row = df_slice.iloc[-1]
+                snapshot = {}
+                for col in df_slice.columns:
+                    val = last_row.get(col, None)
+                    if val is None:
+                        continue
+                    if isinstance(val, (bool, np.bool_)):
+                        snapshot[col] = bool(val)
+                    elif isinstance(val, (int, float, np.integer, np.floating)):
+                        if not (isinstance(val, float) and math.isnan(val)):
+                            snapshot[col] = round(float(val), 6)
+                pos.indicator_snapshot = snapshot
+            except Exception:
+                pos.indicator_snapshot = {}
+
             self.open_positions.append(pos)
             logger.debug(f"  OPEN {sym} @{actual_px:.2f} x{shares} stop={stop_loss:.2f} "
                          f"tmpl={template_id}")
@@ -535,8 +554,9 @@ class BacktestEngine:
             "pnl":           pos.pnl,
             "pnl_pct":       pos.pnl_pct,
             "exit_reason":   pos.exit_reason,
-            "bars_held":     pos.bars_held,
-            "final_phase":   pos.phase,
+            "bars_held":          pos.bars_held,
+            "final_phase":        pos.phase,
+            "indicators_at_entry": getattr(pos, "indicator_snapshot", {}),
         })
 
     def _close_remaining(self, last_day):
@@ -1018,6 +1038,113 @@ class BacktestEngine:
         _bes = getattr(self, "block_eval_stats", {})
         analytics["block_evaluations"] = _bes if _bes else {}
 
+        # ── Per-Symbol Summary ────────────────────────────────────────────────
+        per_symbol_summary: dict = {}
+        sym_groups: dict = defaultdict(list)
+        for t in trades:
+            sym_groups[t["symbol"]].append(t)
+        for sym, slist in sym_groups.items():
+            sw = sum(1 for t in slist if t["pnl"] > 0)
+            per_symbol_summary[sym] = {
+                "trades":       len(slist),
+                "wins":         sw,
+                "wr":           round(sw / len(slist) * 100, 1) if slist else 0.0,
+                "total_pnl":    round(sum(t["pnl"] for t in slist), 2),
+                "avg_pnl_pct":  round(sum(t["pnl_pct"] for t in slist) / len(slist), 2)
+                                if slist else 0.0,
+            }
+        analytics["per_symbol_summary"] = per_symbol_summary
+
+        # ── Section 10: Indicator Profiler (WIN vs LOSS) ──────────────────────
+        indicator_profiler: dict = {}
+        win_trades  = [t for t in trades
+                       if t.get("pnl", 0) > 0 and t.get("indicators_at_entry")]
+        loss_trades = [t for t in trades
+                       if t.get("pnl", 0) <= 0 and t.get("indicators_at_entry")]
+
+        if win_trades and loss_trades:
+            skip_cols = {"open", "high", "low", "close", "volume", "date", "Date",
+                         "dynamic_stop_loss"}
+
+            all_indicators: set = set()
+            for t in win_trades + loss_trades:
+                snap = t.get("indicators_at_entry", {})
+                for k, v in snap.items():
+                    if isinstance(v, (int, float)) and not isinstance(v, bool):
+                        all_indicators.add(k)
+
+            discriminators: list = []
+            for ind in sorted(all_indicators - skip_cols):
+                win_vals  = [t["indicators_at_entry"][ind] for t in win_trades
+                             if ind in t["indicators_at_entry"]
+                             and t["indicators_at_entry"][ind] is not None]
+                loss_vals = [t["indicators_at_entry"][ind] for t in loss_trades
+                             if ind in t["indicators_at_entry"]
+                             and t["indicators_at_entry"][ind] is not None]
+
+                if len(win_vals) < 3 or len(loss_vals) < 3:
+                    continue
+
+                win_avg  = sum(win_vals)  / len(win_vals)
+                loss_avg = sum(loss_vals) / len(loss_vals)
+                delta    = win_avg - loss_avg
+                all_vals = win_vals + loss_vals
+                val_range = max(all_vals) - min(all_vals)
+                normalized_delta = abs(delta) / val_range if val_range > 0 else 0.0
+
+                discriminators.append({
+                    "indicator":        ind,
+                    "win_avg":          round(win_avg,  4),
+                    "loss_avg":         round(loss_avg, 4),
+                    "delta":            round(delta,    4),
+                    "normalized_score": round(normalized_delta, 4),
+                    "win_samples":      len(win_vals),
+                    "loss_samples":     len(loss_vals),
+                })
+
+            discriminators.sort(key=lambda x: -x["normalized_score"])
+
+            # Per-symbol profile (top 10 per symbol)
+            per_symbol_profile: dict = {}
+            for sym in set(t["symbol"] for t in win_trades + loss_trades):
+                sym_wins   = [t for t in win_trades   if t["symbol"] == sym]
+                sym_losses = [t for t in loss_trades  if t["symbol"] == sym]
+                if len(sym_wins) < 2 or len(sym_losses) < 2:
+                    continue
+                sym_disc: list = []
+                for ind in all_indicators - skip_cols:
+                    sw = [t["indicators_at_entry"][ind] for t in sym_wins
+                          if ind in t["indicators_at_entry"]
+                          and t["indicators_at_entry"][ind] is not None]
+                    sl = [t["indicators_at_entry"][ind] for t in sym_losses
+                          if ind in t["indicators_at_entry"]
+                          and t["indicators_at_entry"][ind] is not None]
+                    if len(sw) < 2 or len(sl) < 2:
+                        continue
+                    sw_avg = sum(sw) / len(sw)
+                    sl_avg = sum(sl) / len(sl)
+                    d      = sw_avg - sl_avg
+                    ar     = max(sw + sl) - min(sw + sl)
+                    ns     = abs(d) / ar if ar > 0 else 0.0
+                    sym_disc.append({
+                        "indicator":        ind,
+                        "win_avg":          round(sw_avg, 4),
+                        "loss_avg":         round(sl_avg, 4),
+                        "delta":            round(d,      4),
+                        "normalized_score": round(ns,     4),
+                    })
+                sym_disc.sort(key=lambda x: -x["normalized_score"])
+                per_symbol_profile[sym] = sym_disc[:10]
+
+            indicator_profiler = {
+                "total_wins_with_snapshot":   len(win_trades),
+                "total_losses_with_snapshot": len(loss_trades),
+                "top_discriminators":         discriminators[:30],
+                "per_symbol_profile":         per_symbol_profile,
+            }
+
+        analytics["indicator_profiler"] = indicator_profiler
+
         return analytics
 
     def _print_analytics(self, analytics: dict) -> None:
@@ -1051,6 +1178,17 @@ class BacktestEngine:
             for tid, d in sorted(breakdown.items(), key=lambda x: -x[1]["total_trades"]):
                 print(f"  {tid:<28} {d['total_trades']:>6} {d['win_rate']:>6.1f} "
                       f"{d['avg_pnl_pct']:>+8.2f} {d['total_pnl']:>+10.2f}")
+
+        # ── per_symbol_summary ───────────────────────────────────────────────
+        pss = analytics.get("per_symbol_summary", {})
+        if pss:
+            print("\n" + "─" * 22 + " PER-SYMBOL SUMMARY " + "─" * 22)
+            print(f"  {'Symbol':<8} {'Trades':>7} {'Wins':>6} {'WR%':>7} "
+                  f"{'AvgPnL%':>9} {'TotalPnL':>12}")
+            print(f"  {'─' * 55}")
+            for sym, d in sorted(pss.items(), key=lambda x: -x[1]["total_pnl"]):
+                print(f"  {sym:<8} {d['trades']:>7} {d['wins']:>6} {d['wr']:>6.1f}% "
+                      f"{d['avg_pnl_pct']:>+8.2f}% ${d['total_pnl']:>+10,.0f}")
 
         # ── temporal ─────────────────────────────────────────────────────────
         temporal = analytics.get("temporal", {})
@@ -1194,6 +1332,33 @@ class BacktestEngine:
                         print(f"    Lowest per-symbol pass rates:")
                         for sym, bn, pr in all_sym_rates[:5]:
                             print(f"      {sym} -> {bn}: {pr:.1f}%")
+
+        # ── Section 10: Indicator Profiler ────────────────────────────────────
+        ip = analytics.get("indicator_profiler", {})
+        if ip and ip.get("top_discriminators"):
+            print("\n" + "─" * 17 + " SECTION 10: INDICATOR PROFILER (WIN vs LOSS) " + "─" * 17)
+            print(f"  Wins with snapshot: {ip.get('total_wins_with_snapshot', 0)}, "
+                  f"Losses with snapshot: {ip.get('total_losses_with_snapshot', 0)}")
+            discs = ip["top_discriminators"]
+            print(f"\n  Top Discriminators (highest WIN-LOSS separation):")
+            print(f"  {'Indicator':<24} {'WIN avg':>10} {'LOSS avg':>10} "
+                  f"{'Delta':>10} {'Score':>7}")
+            print(f"  {'─' * 65}")
+            for d in discs[:20]:
+                print(f"  {d['indicator']:<24} {d['win_avg']:>10.4f} "
+                      f"{d['loss_avg']:>10.4f} {d['delta']:>+10.4f} "
+                      f"{d['normalized_score']:>6.3f}")
+            psp = ip.get("per_symbol_profile", {})
+            if psp:
+                print(f"\n  Per-Symbol Top 5 Discriminators:")
+                for sym in sorted(psp.keys()):
+                    disc_list = psp[sym]
+                    if not disc_list:
+                        continue
+                    top5 = ", ".join(
+                        f"{d['indicator']}({d['delta']:+.3f})" for d in disc_list[:5]
+                    )
+                    print(f"    {sym}: {top5}")
 
     def _collect_block_evaluations(self):
         """

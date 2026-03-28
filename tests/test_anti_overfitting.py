@@ -210,18 +210,14 @@ class TestNewBlocksBehavior:
 # ═══════════════════════════════════════════════════════════
 
 class TestPullbackFix:
-    """Verify the updated TREND_PULLBACK_EMA template."""
+    """Verify the updated TREND_PULLBACK_EMA template (v3)."""
 
-    def test_pullback_has_5_conditions(self):
+    def test_pullback_version_gte_3(self):
+        """Version must be >= 3 (v3 relaxed er_slow threshold)."""
         tm = TemplateManager()
         t  = tm.get_template_by_id("TREND_PULLBACK_EMA")
         assert t is not None
-        assert len(t.conditions) == 5
-
-    def test_pullback_version_2(self):
-        tm = TemplateManager()
-        t  = tm.get_template_by_id("TREND_PULLBACK_EMA")
-        assert t.data.get("version") == 2
+        assert t.data.get("version") >= 3
 
     def test_pullback_has_er_slow(self):
         tm = TemplateManager()
@@ -229,11 +225,13 @@ class TestPullbackFix:
         blocks = [c["block"] for c in t.conditions]
         assert "er_slow_above" in blocks
 
-    def test_pullback_has_volume_surge(self):
+    def test_pullback_er_slow_relaxed(self):
+        """er_slow threshold must be <= 0.35 (was 0.45, too strict)."""
         tm = TemplateManager()
         t  = tm.get_template_by_id("TREND_PULLBACK_EMA")
-        blocks = [c["block"] for c in t.conditions]
-        assert "volume_surge" in blocks
+        er = next((c for c in t.conditions if c["block"] == "er_slow_above"), None)
+        assert er is not None
+        assert er["params"][0] <= 0.35, f"er_slow threshold too strict: {er['params'][0]}"
 
     def test_pullback_no_redundant_sma200(self):
         tm = TemplateManager()
@@ -251,16 +249,16 @@ class TestPullbackFix:
         tm = TemplateManager()
         t  = tm.get_template_by_id("TREND_PULLBACK_EMA")
         valid, errors = t.validate()
-        assert valid, f"PULLBACK v2 failed validation: {errors}"
+        assert valid, f"PULLBACK validation failed: {errors}"
 
-    def test_pullback_category_diversity(self):
-        """PULLBACK v2 should use blocks from 4+ categories."""
+    def test_pullback_uses_multiple_categories(self):
+        """PULLBACK should span 3+ categories (TREND + MOMENTUM + PRICE minimum)."""
         tm   = TemplateManager()
         t    = tm.get_template_by_id("TREND_PULLBACK_EMA")
         cats = cfg.TEMPLATE_CONFIG.get("block_categories", {})
         block_to_cat = {b: cat for cat, blocks in cats.items() for b in blocks}
         used_cats = {block_to_cat.get(c["block"], "unknown") for c in t.conditions}
-        assert len(used_cats) >= 4, f"Only {len(used_cats)} categories: {used_cats}"
+        assert len(used_cats) >= 3, f"Only {len(used_cats)} categories: {used_cats}"
 
     def test_pullback_statistics_reset(self):
         """Statistics should be reset after conditions changed."""

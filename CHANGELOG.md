@@ -1,5 +1,38 @@
 # Changelog
 
+## [2026-03-28] feat(analytics): indicator snapshot + profiler + per-symbol table + PULLBACK v3
+
+### Change 1: Indicator Snapshot (backtest_engine.py)
+- `Position.__slots__` + `__init__`: added `indicator_snapshot = {}` field
+- `_scan_for_signals()`: captures all numeric/bool columns from `df_slice.iloc[-1]`
+  at entry — NaN values excluded, rounded to 6dp
+- `_close_position()`: adds `indicators_at_entry` key to every closed trade dict
+
+### Change 2: Per-Symbol Summary Table
+- `_compute_analytics()`: added `per_symbol_summary` dict (trades/wins/WR/total_pnl/avg_pnl_pct)
+- `_print_analytics()`: prints per-symbol table sorted by total_pnl after template breakdown
+
+### Change 3: Indicator Profiler — Section 10
+- `_compute_analytics()`: Section 10 computes WIN vs LOSS indicator separation:
+  - Collects all numeric indicators with >=3 samples per side
+  - Skips OHLCV columns (open/high/low/close/volume)
+  - Normalizes delta by value range for fair cross-indicator comparison
+  - Per-symbol top-10 discriminators for stock-specific insight
+- `_print_analytics()`: Section 10 prints top-20 discriminators table + per-symbol top-5
+
+### Change 4: PULLBACK v3 template
+- `er_slow_above`: 0.45 → 0.30 (was 10.8% pass rate, now ~35%)
+- `volume_surge(1.2)` removed (state filter already requires HEALTHY/SURGING)
+- RSI widened: [42,62] → [40,65]
+- 4 conditions, version 3, stats reset
+- `tests/test_anti_overfitting.py` PULLBACK section updated for v3 semantics
+
+### Tests
+- `tests/test_indicator_snapshot.py`: 22 tests (Position, trade snapshot, profiler, per-symbol, PULLBACK v3, regression)
+- 391 tests passing; 27 pre-existing failures unchanged
+
+---
+
 ## [2026-03-28] feat(templates): anti-overfitting rules + block registry expansion + PULLBACK fix
 
 ### Change 1: Anti-Overfitting Rules (system_config.py + setup_templates.py)

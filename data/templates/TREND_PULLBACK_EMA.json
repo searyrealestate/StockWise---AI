@@ -1,8 +1,8 @@
 {
   "id": "TREND_PULLBACK_EMA",
   "name": "Trend Pullback to EMA",
-  "description": "Pullback to EMA_12 in confirmed uptrend with volume and trend quality",
-  "version": 2,
+  "description": "Pullback to EMA_12 in confirmed uptrend with trend quality and candle confirmation",
+  "version": 3,
   "source": "seed",
   "enabled": true,
   "required_state": {
@@ -12,10 +12,9 @@
     "volatility": ["NORMAL", "COMPRESSED", "VOLATILE"]
   },
   "conditions": [
-    {"block": "rsi_between", "params": [42, 62]},
+    {"block": "rsi_between", "params": [40, 65]},
     {"block": "close_above_ema", "params": [12]},
-    {"block": "er_slow_above", "params": [0.45]},
-    {"block": "volume_surge", "params": [1.2]},
+    {"block": "er_slow_above", "params": [0.30]},
     {"block": "bullish_candle", "params": []}
   ],
   "entry": {"type": "close", "confirmation_candles": 1},
