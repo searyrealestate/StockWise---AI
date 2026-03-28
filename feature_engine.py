@@ -300,12 +300,17 @@ class FeatureEngine:
                 df['bb_lower'] = bb.iloc[:, 0]
                 df['bb_mid'] = bb.iloc[:, 1]
                 df['bb_upper'] = bb.iloc[:, 2]
-                df['bb_width'] = bb.iloc[:, 3] 
+                df['bb_width'] = bb.iloc[:, 3]
+                # Normalised width: fraction of mid-band (SQUEEZE_BREAKOUT fix — bb_width is in
+                # dollar units; bb_width_pct ≈ 0.04–0.30 is the scale bb_width_below expects)
+                mid = df['bb_mid'].replace(0, float('nan'))
+                df['bb_width_pct'] = df['bb_width'] / mid
             else:
                 df['bb_lower'] = 0.0
                 df['bb_mid'] = 0.0
                 df['bb_upper'] = 0.0
                 df['bb_width'] = 0.0
+                df['bb_width_pct'] = 0.0
                 logger.warning("Bollinger Bands calculation failed. Check data history.")
 
             # [29] Keltner Upper

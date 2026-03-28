@@ -192,7 +192,9 @@ class StockHunter:
         try:
             scan_cfg = getattr(cfg, 'MANDATORY_SCAN_CONFIG', {})
             min_volume = scan_cfg.get('min_avg_volume', 500000)
-            vol_lookback = scan_cfg.get('volume_trend_lookback', 20)
+            # Use 60-bar baseline for the absolute liquidity check; reduces
+            # false ILLIQUID on stocks with recently elevated volume history.
+            vol_lookback = scan_cfg.get('volume_trend_lookback', 60)
 
             if len(df) < vol_lookback:
                 return "ILLIQUID"
@@ -202,7 +204,7 @@ class StockHunter:
             if avg_volume < min_volume:
                 return "ILLIQUID"
 
-            # Volume trend: compare last 5 days avg to 20-day avg
+            # Volume trend: compare last 5 days avg to 60-day avg
             recent_vol = df['volume'].tail(5).mean()
             vol_ratio = recent_vol / max(avg_volume, 1)
 

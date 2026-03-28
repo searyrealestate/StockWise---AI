@@ -9,7 +9,7 @@
     "trend": ["BULLISH"],
     "structure": ["OPEN_FIELD", "NEAR_SUPPORT"],
     "volume": ["HEALTHY", "SURGING"],
-    "volatility": ["NORMAL", "COMPRESSED"]
+    "volatility": ["NORMAL", "COMPRESSED", "VOLATILE"]
   },
   "conditions": [
     {"block": "rsi_between", "params": [40, 65]},

@@ -126,8 +126,13 @@ def block_squeeze_momentum_positive(row, params):
     return _safe_get(row, 'mom_sqz') > 0
 
 def block_bb_width_below(row, params):
-    """BB width below threshold (narrow bands). params: [threshold]  e.g. [0.15]"""
-    return _safe_get(row, 'bb_width', 1.0) < params[0]
+    """BB width below threshold (narrow bands). params: [threshold]  e.g. [0.15]
+    Uses bb_width_pct (bb_width / bb_mid) so threshold is a fraction of price,
+    not raw dollars. Falls back to bb_width if bb_width_pct is absent."""
+    width = _safe_get(row, 'bb_width_pct', None)
+    if width is None or (isinstance(width, float) and width != width):  # None or NaN
+        width = _safe_get(row, 'bb_width', 1.0)
+    return width < params[0]
 
 def block_atr_percent_above(row, params):
     """ATR as % of price above threshold (enough volatility for profit). params: [min_pct]  e.g. [0.01]"""

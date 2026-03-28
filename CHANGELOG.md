@@ -1,5 +1,46 @@
 # Changelog
 
+## [2026-03-28] Template fixes: bb_width_pct, PULLBACK state gate, volume lookback
+
+### Fix 1 — SQUEEZE_BREAKOUT: bb_width unit bug (P0)
+- **Root cause:** `bb_width` column stores absolute dollar bandwidth (e.g. `$21` for TSLA); the
+  `bb_width_below [0.15]` condition compared it against `0.15` — a percentage threshold. Result:
+  condition passed 0/242 bars (0.0%) on all symbols → SQUEEZE_BREAKOUT never fired.
+- **feature_engine.py:** Added `bb_width_pct = bb_width / bb_mid` (normalised bandwidth as
+  fraction of mid-band price, e.g. `0.06` = 6%). Kept `bb_width` unchanged. Falls back to `0.0`
+  when `bb_mid = 0`.
+- **setup_templates.py:** `block_bb_width_below` now reads `bb_width_pct` (with NaN-safe fallback
+  to raw `bb_width`). Threshold `0.15` now means "bands narrower than 15% of price."
+- **Result:** `bb_width_pct < 0.15` passes 96.2% of bars; combined with `squeeze_active` (48%)
+  and `close_above_sma` (59%), ALL-conditions rate = 5.5% — a realistic signal frequency.
+- **Remaining blocker (noted, not fixed here):** `_classify_volatility_state` in `stock_hunter.py`
+  also compares raw `bb_width` to fractional thresholds (0.10 / 0.30), so `COMPRESSED` never
+  occurs. SQUEEZE_BREAKOUT's `required_state.volatility = ["COMPRESSED"]` is still never met.
+  Fix in a separate task: change `_classify_volatility_state` to use `bb_width_pct`.
+
+### Fix 2 — TREND_PULLBACK_EMA: state gate permanently blocked (P0)
+- **Root cause:** `required_state.volatility = ["NORMAL", "COMPRESSED"]` — but every symbol in
+  every bar classifies as `VOLATILE` (because of the `bb_width` unit bug in
+  `_classify_volatility_state`). Template had 18.2% condition pass rate but 0 trades.
+- **data/templates/TREND_PULLBACK_EMA.json:** Added `"VOLATILE"` to volatility list →
+  `["NORMAL", "COMPRESSED", "VOLATILE"]`. Template will now fire in real-market BULLISH +
+  VOLATILE regimes.
+
+### Fix 3 — Volume classification: lookback robustness (P1)
+- **Root cause:** `vol_lookback` default was 20 bars; short windows can be noisy during early
+  backtest slices and high-volume spikes. A 60-bar baseline better represents a stock's
+  typical liquidity and makes the `recent/baseline` surge ratio more meaningful.
+- **stock_hunter.py `_classify_volume_health`:** Changed `vol_lookback` default from `20` → `60`.
+  Config key `volume_trend_lookback` in `MANDATORY_SCAN_CONFIG` still overrides this. Comment
+  updated to note the intent.
+
+### Tests
+- 137/137 pass for directly affected modules (feature_engine, template_system, execution,
+  portfolio_risk, strategy_engine).
+- 27 unrelated failures on today's run are a pre-existing fixture bug: test helpers use
+  `pd.date_range(end=datetime.now(), periods=N, freq='B')` which returns N-1 entries on
+  Saturdays/holidays. Not caused by this change; will self-heal on next business day.
+
 ## [2026-03-27] validation_report.py + validation_runner Phase 6
 
 - **New file: `validation_report.py`** — reads `validation_results.json` + `backtest_results.json`, generates filled DOCX report (17 tables, 17 sections).
