@@ -1,5 +1,35 @@
 # Changelog
 
+## [2026-03-28] P0 #1 — _classify_volatility_state uses bb_width_pct not bb_width
+
+### Fix — stock_hunter.py `_classify_volatility_state` (P0)
+- **Root cause:** Same unit bug as SQUEEZE template (fixed in cbd264d) but in the state classifier.
+  `bb_width` stores absolute dollar bandwidth (e.g. `$21` for TSLA); thresholds in
+  `MANDATORY_SCAN_CONFIG` are percentage fractions (`squeeze=0.10`, `volatile=0.30`).
+  `$21 > 0.30` → every stock classified as `VOLATILE` → SQUEEZE_BREAKOUT (needs `COMPRESSED`)
+  got 0 trades even after the template-level fix.
+- **stock_hunter.py:** `_classify_volatility_state` now reads `bb_width_pct` (computed in
+  `feature_engine.py`). NaN-safe fallback to raw `bb_width` when column is absent/NaN, same
+  pattern as `block_bb_width_below` in `setup_templates.py`. Added `DEBUG` logging to record
+  the value and classification on each call.
+- **Result (smoke test):** TSLA, NVDA, GOOGL now classify as `COMPRESSED` →
+  `SQUEEZE_BREAKOUT` state-gate passes → template fires for first time in backtest.
+
+### Tests — tests/test_volatility_classification.py (new)
+- 8 unit tests (`TestClassifyVolatilityState`):
+  - T1–T3: COMPRESSED / NORMAL / VOLATILE happy paths via `bb_width_pct`
+  - T4: NaN `bb_width_pct` → falls back to `bb_width` → safe result
+  - T5: Missing `bb_width_pct` column → fallback
+  - T6–T7: Exact boundary values (`0.10`, `0.30`) → NORMAL (strict `<` / `>`)
+  - T8: Custom `MANDATORY_SCAN_CONFIG` thresholds respected
+- 3 regression guards (`TestVolatilityClassificationRegression`):
+  - R1: Source inspection confirms `bb_width_pct` in method body
+  - R2: `bb_width_pct=0.12, bb_width=$21` → `NORMAL` (not VOLATILE as old bug produced)
+  - R3: `COMPRESSED` state end-to-end → `SQUEEZE_BREAKOUT` template matches
+- All 11 tests pass; 27 unrelated Saturday-fixture failures are pre-existing (see cbd264d notes).
+
+---
+
 ## [2026-03-28] Template fixes: bb_width_pct, PULLBACK state gate, volume lookback
 
 ### Fix 1 — SQUEEZE_BREAKOUT: bb_width unit bug (P0)

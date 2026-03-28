@@ -222,7 +222,12 @@ class StockHunter:
     def _classify_volatility_state(self, df):
         """
         Mandatory Template 4: VOLATILITY STATE
-        Uses Bollinger Band width to determine if the stock is compressed, normal, or volatile.
+        Uses Bollinger Band width as percentage of mid-band (bb_width_pct)
+        to determine if the stock is compressed, normal, or volatile.
+
+        bb_width_pct = bb_width / bb_mid (computed in feature_engine.py)
+        Typical range: 0.03 (very tight) to 0.50+ (very wide)
+
         Returns: 'COMPRESSED', 'NORMAL', 'VOLATILE'
         """
         try:
@@ -231,14 +236,29 @@ class StockHunter:
             volatile_threshold = scan_cfg.get('volatile_bb_width_threshold', 0.30)
 
             last = df.iloc[-1]
-            bb_width = last.get('bb_width', 0.15)
+
+            # Use bb_width_pct (percentage), NOT bb_width (dollars)
+            # Same pattern as block_bb_width_below in setup_templates.py
+            bb_width = last.get('bb_width_pct', None)
+            if bb_width is None or (isinstance(bb_width, float) and bb_width != bb_width):
+                # Fallback: if bb_width_pct not available, use raw bb_width
+                # This path should only fire on legacy data without bb_width_pct
+                bb_width = last.get('bb_width', 0.15)
+                logger.debug(f"bb_width_pct not available, falling back to raw bb_width={bb_width:.4f}")
 
             if bb_width < squeeze_threshold:
-                return "COMPRESSED"
+                result = "COMPRESSED"
             elif bb_width > volatile_threshold:
-                return "VOLATILE"
+                result = "VOLATILE"
             else:
-                return "NORMAL"
+                result = "NORMAL"
+
+            logger.debug(
+                f"Volatility classification: bb_width_pct={bb_width:.4f}, "
+                f"thresholds=[<{squeeze_threshold}=COMPRESSED, >{volatile_threshold}=VOLATILE] "
+                f"-> {result}"
+            )
+            return result
 
         except Exception as e:
             logger.debug(f"Volatility classification error: {e}")
