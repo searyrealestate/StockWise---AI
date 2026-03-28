@@ -43,7 +43,7 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_ROOT)
 
 import system_config as cfg
-from safe_json_io import safe_json_write
+from safe_json_io import safe_json_read, safe_json_write
 from feature_engine import FeatureEngine
 from setup_templates import TemplateManager
 from template_matcher import TemplateMatcher
@@ -154,6 +154,7 @@ class BacktestEngine:
             self.config["initial_capital"] = initial_capital
 
         self.use_risk_gates = use_risk_gates
+        self.feed_shadow_ledger = True
         self.data_cache = data_cache or {}   # symbol → DataFrame (with features)
 
         # Components
@@ -226,6 +227,19 @@ class BacktestEngine:
             logger.info(f"Results saved to {BACKTEST_RESULTS_PATH}")
         except Exception as exc:
             logger.warning(f"Could not save results: {exc}")
+
+        # Feed results into Shadow Ledger for DDR #1 Asset-Specific
+        if self.feed_shadow_ledger:
+            backtest_trades = []
+            for trade in self.closed_trades:
+                pnl = trade.get("pnl_pct", 0.0)
+                backtest_trades.append({
+                    "symbol":      trade.get("symbol", ""),
+                    "template_id": trade.get("template_id", ""),
+                    "pnl_pct":     pnl,
+                    "won":         pnl > 0,
+                })
+            self._feed_shadow_ledger(backtest_trades)
 
         return results
 
@@ -646,6 +660,115 @@ class BacktestEngine:
             }
         return result
 
+    def _feed_shadow_ledger(self, trades):
+        """
+        Feed backtest results into shadow_ledger.json for DDR #1 Asset-Specific.
+
+        Performs ADDITIVE merge: signal_count, wins, losses, total_pnl_pct
+        are accumulated (not overwritten). Derived fields (win_rate, avg_pnl_pct)
+        are recalculated after merge.
+
+        Args:
+            trades: list of trade dicts from backtest, each containing:
+                    symbol, template_id, pnl_pct, and won (bool)
+        """
+        if not trades:
+            logger.info("Shadow ledger feed: no trades to feed")
+            return
+
+        # Resolve shadow ledger path from config
+        sl_config = getattr(cfg, 'SHADOW_LEDGER_CONFIG', {})
+        ledger_path = sl_config.get('ledger_path', 'data/shadow_ledger.json')
+
+        # Load existing ledger (or create empty)
+        ledger = safe_json_read(ledger_path, default={
+            "metadata": {"last_run": None, "version": "13.4"},
+            "template_stats": {},
+        })
+
+        if "template_stats" not in ledger:
+            ledger["template_stats"] = {}
+
+        stats = ledger["template_stats"]
+
+        # Build per-symbol per-template deltas from backtest trades
+        deltas = {}  # {symbol: {template_id: {signal_count, wins, losses, total_pnl_pct}}}
+        for trade in trades:
+            sym = trade.get("symbol", "")
+            tid = trade.get("template_id", "")
+            pnl = trade.get("pnl_pct", 0.0)
+            won = trade.get("won", False)
+
+            if not sym or not tid:
+                continue
+
+            if sym not in deltas:
+                deltas[sym] = {}
+            if tid not in deltas[sym]:
+                deltas[sym][tid] = {
+                    "signal_count": 0, "wins": 0, "losses": 0,
+                    "total_pnl_pct": 0.0,
+                }
+
+            deltas[sym][tid]["signal_count"] += 1
+            if won:
+                deltas[sym][tid]["wins"] += 1
+            else:
+                deltas[sym][tid]["losses"] += 1
+            deltas[sym][tid]["total_pnl_pct"] += pnl
+
+        # Additive merge into existing ledger
+        symbols_fed = 0
+        total_signals_fed = 0
+
+        for sym, sym_deltas in deltas.items():
+            if sym not in stats:
+                stats[sym] = {}
+            symbols_fed += 1
+
+            for tid, delta in sym_deltas.items():
+                if tid not in stats[sym]:
+                    stats[sym][tid] = {
+                        "signal_count": 0, "wins": 0, "losses": 0,
+                        "total_pnl_pct": 0.0, "win_rate": 0.0, "avg_pnl_pct": 0.0,
+                    }
+
+                existing = stats[sym][tid]
+                existing["signal_count"] += delta["signal_count"]
+                existing["wins"]         += delta["wins"]
+                existing["losses"]       += delta["losses"]
+                existing["total_pnl_pct"] += delta["total_pnl_pct"]
+
+                # Recalculate derived fields
+                sc = existing["signal_count"]
+                if sc > 0:
+                    existing["win_rate"]    = round(existing["wins"] / sc * 100, 1)
+                    existing["avg_pnl_pct"] = round(existing["total_pnl_pct"] / sc, 2)
+                else:
+                    existing["win_rate"]    = 0.0
+                    existing["avg_pnl_pct"] = 0.0
+
+                total_signals_fed += delta["signal_count"]
+
+                logger.debug(
+                    f"[{sym}] {tid}: +{delta['signal_count']} signals, "
+                    f"+{delta['wins']} wins -> "
+                    f"total {existing['signal_count']}, "
+                    f"WR={existing['win_rate']:.1f}%"
+                )
+
+        # Update metadata
+        ledger["metadata"]["last_run"] = datetime.now(timezone.utc).isoformat()
+        ledger["metadata"]["last_feed_source"] = "backtest"
+
+        # Save
+        safe_json_write(ledger_path, ledger)
+
+        logger.info(
+            f"Shadow ledger fed: {symbols_fed} symbols, "
+            f"{total_signals_fed} signals merged into {ledger_path}"
+        )
+
     def _compute_monthly(self) -> list:
         if not self.equity_curve:
             return []
@@ -818,6 +941,8 @@ def main():
     parser.add_argument("--max-positions", type=int,   default=5)
     parser.add_argument("--no-risk-gates", action="store_true",
                         help="Disable portfolio risk gates (more trades, faster)")
+    parser.add_argument("--no-feed-shadow-ledger", action="store_true", default=False,
+                        help="Skip feeding results into shadow_ledger.json")
     parser.add_argument("--output",        default=BACKTEST_RESULTS_PATH)
     args = parser.parse_args()
 
@@ -830,6 +955,9 @@ def main():
             "max_positions":     args.max_positions,
         },
     )
+    if args.no_feed_shadow_ledger:
+        engine.feed_shadow_ledger = False
+        logger.info("Shadow ledger feed disabled via --no-feed-shadow-ledger")
     results = engine.run()
     s  = results.get("summary", {})
     sv = results.get("survivability", {})

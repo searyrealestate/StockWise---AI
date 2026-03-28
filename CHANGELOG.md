@@ -1,5 +1,27 @@
 # Changelog
 
+## [2026-03-29] feat(backtest): feed results into shadow_ledger.json
+
+### Added
+- `_feed_shadow_ledger()` in `backtest_engine.py` — additive merge of
+  backtest trade results into `shadow_ledger.json`
+- Merge is accumulative: `signal_count`, `wins`, `losses` summed;
+  `win_rate` and `avg_pnl_pct` recalculated from totals
+- `--no-feed-shadow-ledger` CLI flag to disable (default: enabled)
+- `self.feed_shadow_ledger = True` flag on `BacktestEngine`
+- `safe_json_read` added to imports (only `safe_json_write` was present)
+- Per-symbol per-template `DEBUG` logging showing merge details
+- `INFO` log: `Shadow ledger fed: N symbols, M signals merged`
+- `tests/test_backtest_shadow_feed.py`: 7 unit tests + 3 regression guards
+
+### Impact
+- After backtest, `template_matcher.get_template_win_rate()` returns
+  real per-stock data instead of fallback 50%
+- DDR #1 (Asset-Specific optimization) is now fully operational
+- Existing `shadow_ledger.json` data preserved — merge is additive
+
+---
+
 ## [2026-03-29] feat(shadow_ledger): CLI entry point for offline evaluation
 
 ### Added
