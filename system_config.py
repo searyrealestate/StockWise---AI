@@ -423,7 +423,7 @@ VOLUMETRIC_LIMITS = {
 
 KINETIC_STOP_CONFIG = {
     # The rules for Agent 4 (The Lifecycle Manager). The stop-loss accelerates as profit grows.
-    "phase1_atr_mult": 2.0,                  # When we enter, we give the stock a wide 2.0 ATR breathing room.
+    "phase1_atr_mult": 1.5,                  # Tighter initial stop: 1.5 ATR breathing room (reduced from 2.0 — backtest: 32 trades WR=0% avg=-4.29%).
     "phase2_breakeven_trigger_pct": 0.015,   # Once we hit 1.5% net profit, we instantly snap the stop to breakeven.
     "phase3_parabolic_trigger_pct": 0.03,    # At 3.0% net profit, the stock is flying. We activate the choke mechanism.
     "phase3_atr_mult": 1.0,                  # The choke mechanism tightens the stop to just 1.0 ATR from the highest high.

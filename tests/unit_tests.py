@@ -1126,6 +1126,40 @@ class TestPhase3_7_ExtendedStats:
         assert t.statistics['max_consecutive_wins'] == 3  # Max preserved
 
 
+class TestPhase1AtrMult:
+    """Tests for KINETIC_STOP_CONFIG phase1_atr_mult — STOA-5."""
+
+    def test_phase1_atr_mult_value(self):
+        """Assert phase1_atr_mult is exactly 1.5 per SPEC §5 optimization."""
+        import system_config as cfg
+        assert cfg.KINETIC_STOP_CONFIG["phase1_atr_mult"] == 1.5, (
+            f"Expected 1.5, got {cfg.KINETIC_STOP_CONFIG['phase1_atr_mult']}"
+        )
+
+    def test_phase1_atr_mult_range(self):
+        """Assert phase1_atr_mult is within valid operational range [1.0, 3.0]."""
+        import system_config as cfg
+        val = cfg.KINETIC_STOP_CONFIG["phase1_atr_mult"]
+        assert 1.0 <= val <= 3.0, (
+            f"phase1_atr_mult={val} is outside valid range [1.0, 3.0]"
+        )
+
+    def test_phase1_stop_calculation(self):
+        """Assert Phase 1 stop price is correct with new 1.5 multiplier.
+
+        Given entry_price=100, ATR=2.0:
+          expected_stop = 100 - (2.0 * 1.5) = 97.0  (not 96.0 which was old 2.0×ATR)
+        """
+        import system_config as cfg
+        entry_price = 100.0
+        atr = 2.0
+        phase1_atr_mult = cfg.KINETIC_STOP_CONFIG["phase1_atr_mult"]
+        calculated_stop = entry_price - (atr * phase1_atr_mult)
+        assert calculated_stop == 97.0, (
+            f"Expected stop=97.0, got {calculated_stop} (phase1_atr_mult={phase1_atr_mult})"
+        )
+
+
 # ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
@@ -1134,7 +1168,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

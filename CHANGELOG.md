@@ -1,5 +1,17 @@
 # Changelog
 
+## [2026-03-31] fix(kinetic-stop): phase1_atr_mult 2.0→1.5 — reduce initial stop distance
+
+### Fixed
+- `system_config.py`: Reduced `KINETIC_STOP_CONFIG["phase1_atr_mult"]` from 2.0 to 1.5
+- **Problem:** Phase 1 initial stop too wide at 2.0×ATR — 32 trades WR=0%, avg=-4.29%
+- **Impact:** Tighter initial stop reduces max loss per trade while maintaining breathing room
+
+### Tests
+- Added `TestPhase1AtrMult.test_phase1_atr_mult_value` — asserts value == 1.5
+- Added `TestPhase1AtrMult.test_phase1_atr_mult_range` — asserts 1.0 <= value <= 3.0
+- Added `TestPhase1AtrMult.test_phase1_stop_calculation` — asserts entry=100, ATR=2.0 → stop=97.0
+
 ## [2026-03-30] fix(templates): disable VSA_INSTITUTIONAL due to poor backtest performance
 
 ### Fixed
