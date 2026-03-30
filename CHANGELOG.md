@@ -1,5 +1,17 @@
 # Changelog
 
+## [2026-03-30] fix(templates): disable VSA_INSTITUTIONAL due to poor backtest performance
+
+### Fixed
+- `data/templates/VSA_INSTITUTIONAL.json`: Set `"enabled": false`
+- Performance remediation: VSA_INSTITUTIONAL had only 3 trades in backtest with -2.21% avg PnL; AMD and GOOGL showed WR=0%, avgPnL between -5.8% and -7.5%
+- Template definition preserved for future re-tuning by simply setting `"enabled": true`
+
+### Tests
+- JSON validity confirmed: `python -c "import json; json.load(open('data/templates/VSA_INSTITUTIONAL.json'))"`
+- `python -m py_compile setup_templates.py` — OK
+- `python -m py_compile template_matcher.py` — OK
+
 ## [2026-03-28] feat(analytics): indicator snapshot + profiler + per-symbol table + PULLBACK v3
 
 ### Change 1: Indicator Snapshot (backtest_engine.py)
