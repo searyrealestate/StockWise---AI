@@ -1,8 +1,8 @@
 {
   "id": "SQUEEZE_BREAKOUT",
   "name": "Volatility Squeeze Breakout",
-  "description": "BB inside KC + momentum firing = breakout imminent",
-  "version": 1,
+  "description": "BB inside KC + momentum firing = breakout imminent with volume confirmation",
+  "version": 2,
   "source": "seed",
   "enabled": true,
   "required_state": {
@@ -13,11 +13,11 @@
   "conditions": [
     {"block": "squeeze_active", "params": []},
     {"block": "squeeze_momentum_positive", "params": []},
-    {"block": "bb_width_below", "params": [0.15]},
-    {"block": "close_above_sma", "params": [50]}
+    {"block": "close_above_sma", "params": [50]},
+    {"block": "rvol_above", "params": [1.2]}
   ],
   "entry": {"type": "close", "confirmation_candles": 0},
   "stop_loss": {"method": "atr", "atr_multiplier": 2.0, "fallback_pct": 0.025},
   "take_profit": {"method": "atr", "atr_multiplier": 4.0, "use_runner_mode": true},
-  "statistics": {"total_activations": 0, "wins": 0, "losses": 0, "avg_profit_pct": 0.0, "avg_loss_pct": 0.0, "win_rate": 0.0, "last_activated": null, "best_tickers": {}, "worst_tickers": {}, "best_conditions": [], "created_at": "2026-03-10T00:00:00", "updated_at": "2026-03-10T00:00:00"}
+  "statistics": {"total_activations": 0, "wins": 0, "losses": 0, "avg_profit_pct": 0.0, "avg_loss_pct": 0.0, "win_rate": 0.0, "last_activated": null, "best_tickers": {}, "worst_tickers": {}, "best_conditions": [], "created_at": "2026-03-10T00:00:00", "updated_at": "2026-03-29T00:00:00"}
 }

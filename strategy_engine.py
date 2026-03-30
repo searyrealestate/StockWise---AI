@@ -28,6 +28,12 @@ from feature_engine import FeatureEngine
 # Initialize Logger (Rule 2 Compliance: Uses the custom format from system_config)
 logger = cfg.LoggerSetup.setup_logger("StrategyEngine")
 
+try:
+    from decision_logger import DecisionLogger as _DecisionLogger
+    _dl = _DecisionLogger()
+except Exception:
+    _dl = None
+
 class RegimeRouter:
     """
     AGENT 1: The Gatekeeper.
@@ -124,12 +130,7 @@ class TacticalSniper:
     def _load_json(self, path):
         """Safely loads a .json file."""
         if os.path.exists(path):
-            try:
-                with open(path, 'r') as f:
-                    return json.load(f)
-            except Exception as e:
-                logger.error(f"Failed to load JSON {path}: {e}")
-                return {}
+            return safe_json_read(path, default={})
         return []
 
     def get_ai_probability(self, df, regime):
@@ -208,11 +209,17 @@ class TacticalSniper:
         # If the trade makes less than 1.5% profit after everything, we walk away.
         if net_profit_pct < alpha["min_net_profit_pct"]:
             logger.debug(f"Alpha VETO: Net Profit {net_profit_pct:.2%} < Threshold {alpha['min_net_profit_pct']:.2%}")
+            if _dl:
+                try: _dl.log_risk(symbol="", gate="alpha_net_profit", passed=False, reason=f"net_profit_pct={net_profit_pct:.4f}")
+                except Exception: pass
             return False
-            
+
         # If the reward isn't at least 1.5x the risk, we walk away.
         if net_rr < alpha["min_net_rr"]:
             logger.debug(f"Alpha VETO: Net R:R {net_rr:.2f} < Threshold {alpha['min_net_rr']}")
+            if _dl:
+                try: _dl.log_risk(symbol="", gate="alpha_net_rr", passed=False, reason=f"net_rr={net_rr:.4f}")
+                except Exception: pass
             return False
             
         return True
@@ -630,8 +637,7 @@ class StrategyEngine:
         try:
             strategy_file = getattr(cfg, 'STRATEGY_MAP_FILE', 'ticker_strategies.json')
             if os.path.exists(strategy_file):
-                with open(strategy_file, 'r', encoding='utf-8') as f:
-                    strategies = json.load(f)
+                strategies = safe_json_read(strategy_file, default={})
                 return strategies.get(ticker, strategies.get("DEFAULT"))
         except Exception as e:
             logger.warning(f"Failed to load strategy map: {str(e)}")

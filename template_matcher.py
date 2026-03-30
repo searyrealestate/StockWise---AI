@@ -21,8 +21,15 @@ import time
 from datetime import datetime
 import system_config as cfg
 from setup_templates import TemplateManager, CONDITION_BLOCKS, STOP_BLOCKS, TARGET_BLOCKS
+from safe_json_io import safe_json_read
 
 logger = logging.getLogger("TemplateMatcher")
+
+try:
+    from decision_logger import DecisionLogger as _DecisionLogger
+    _dl = _DecisionLogger()
+except Exception:
+    _dl = None
 
 
 class TemplateMatcher:
@@ -110,6 +117,9 @@ class TemplateMatcher:
                 signal = self._build_signal(symbol, template, last_row, details, stock_state)
                 if signal:
                     signals.append(signal)
+                    if _dl:
+                        try: _dl.log_signal(symbol=symbol, template_id=template.id, confidence=float(signal.get('confidence_score', 0)), regime=str(stock_state.get('trend', '') if stock_state else ''))
+                        except Exception: pass
                     logger.info(f"[{symbol}] SIGNAL: {template.name} | "
                                 f"Entry: ${signal['entry_price']:.2f} | "
                                 f"Stop: ${signal['stop_loss']:.2f} | "
@@ -172,7 +182,12 @@ class TemplateMatcher:
                 return None
 
             # Confidence score: combination of template win rate + conditions passed + R:R quality
-            win_rate = template.get_win_rate()
+            # Asset-specific win rate (DDR #1): per-symbol from Shadow Ledger, cold start fallback
+            asset_cfg = getattr(cfg, 'ASSET_SPECIFIC_CONFIG', {})
+            if asset_cfg.get('enabled', False):
+                win_rate = self.get_template_win_rate(template.id, symbol)
+            else:
+                win_rate = template.get_win_rate()
             total_trades = template.statistics.get('total_activations', 0)
 
             # New templates (< 10 trades) get a neutral confidence, not 0%
@@ -262,3 +277,100 @@ class TemplateMatcher:
             "idle_tickers": len([t for t in self.idle_tracker.values()
                                  if t["scans_without_signal"] > 10])
         }
+
+    # ========================================
+    # ASSET-SPECIFIC WIN RATE (DDR #1)
+    # ========================================
+    def get_template_win_rate(self, template_id, symbol):
+        """
+        DDR #1: Asset-specific template win rate with cold start fallback.
+
+        Priority:
+        1. If per-stock signals >= cold_start_min → blended (70% per-stock + 30% global)
+        2. If per-stock signals < cold_start_min → global average only
+        3. If no shadow ledger data at all → fall back to template.get_win_rate()
+
+        Args:
+            template_id: Template ID string
+            symbol: Stock ticker symbol
+        Returns:
+            float: Win rate percentage (0-100)
+        """
+        asset_config = getattr(cfg, 'ASSET_SPECIFIC_CONFIG', {})
+        if not asset_config.get('enabled', False):
+            template = self._get_template_by_id(template_id)
+            return template.get_win_rate() if template else 50.0
+
+        shadow_stats = self._load_shadow_stats()
+        if not shadow_stats:
+            template = self._get_template_by_id(template_id)
+            return template.get_win_rate() if template else 50.0
+
+        cold_start_min = asset_config.get('cold_start_min_signals', 5)
+        per_weight = asset_config.get('per_stock_weight', 0.7)
+        global_weight = asset_config.get('global_weight', 0.3)
+
+        per_stock = shadow_stats.get(symbol, {}).get(template_id, {})
+        per_stock_signals = per_stock.get('signal_count', 0)
+
+        global_stat = self._aggregate_global_stats(shadow_stats, template_id)
+
+        if per_stock_signals < cold_start_min:
+            # Cold start — not enough per-symbol history, use global only
+            return global_stat.get('win_rate', 50.0)
+
+        # Prefer decayed_win_rate if available (W4-5), fall back to raw win_rate
+        per_wr = per_stock.get('decayed_win_rate', per_stock.get('win_rate', 50.0))
+        global_wr = global_stat.get('decayed_win_rate', global_stat.get('win_rate', 50.0))
+        blended = (per_wr * per_weight) + (global_wr * global_weight)
+        return round(blended, 1)
+
+    def _load_shadow_stats(self):
+        """Load shadow ledger template_stats section. Returns {} if file missing or unreadable."""
+        asset_config = getattr(cfg, 'ASSET_SPECIFIC_CONFIG', {})
+        path = asset_config.get('shadow_ledger_path', 'data/shadow_ledger.json')
+        try:
+            data = safe_json_read(path, default={})
+            return data.get('template_stats', {})
+        except Exception:
+            return {}
+
+    def _aggregate_global_stats(self, shadow_stats, template_id):
+        """Aggregate template stats across all symbols for the global average."""
+        total_signals = 0
+        total_wins = 0
+        total_pnl = 0.0
+
+        for sym_stats in shadow_stats.values():
+            t_stats = sym_stats.get(template_id, {})
+            total_signals += t_stats.get('signal_count', 0)
+            total_wins += t_stats.get('wins', 0)
+            total_pnl += t_stats.get('total_pnl_pct', 0.0)
+
+        if total_signals == 0:
+            return {"win_rate": 50.0, "avg_pnl_pct": 0.0, "signal_count": 0}
+
+        result = {
+            "win_rate": round(total_wins / total_signals * 100, 1),
+            "avg_pnl_pct": round(total_pnl / total_signals, 2),
+            "signal_count": total_signals,
+        }
+
+        # Weighted average of decayed_win_rate across symbols (W4-5)
+        total_decayed_wr = 0.0
+        decayed_count = 0
+        for sym_stats in shadow_stats.values():
+            t_stats = sym_stats.get(template_id, {})
+            sc = t_stats.get('signal_count', 0)
+            if 'decayed_win_rate' in t_stats and sc > 0:
+                total_decayed_wr += t_stats['decayed_win_rate'] * sc
+                decayed_count += sc
+
+        if decayed_count > 0:
+            result["decayed_win_rate"] = round(total_decayed_wr / decayed_count, 1)
+
+        return result
+
+    def _get_template_by_id(self, template_id):
+        """Find template by ID. Delegates to TemplateManager's registry."""
+        return self.tm.get_template_by_id(template_id)

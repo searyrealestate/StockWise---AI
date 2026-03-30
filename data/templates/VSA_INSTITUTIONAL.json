@@ -4,7 +4,7 @@
   "description": "High volume bullish candle = institutional accumulation",
   "version": 1,
   "source": "seed",
-  "enabled": true,
+  "enabled": false,
   "required_state": {
     "trend": ["BULLISH", "SIDEWAYS"],
     "volume": ["SURGING"],

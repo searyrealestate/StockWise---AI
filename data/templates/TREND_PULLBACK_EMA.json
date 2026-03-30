@@ -1,24 +1,24 @@
 {
   "id": "TREND_PULLBACK_EMA",
   "name": "Trend Pullback to EMA",
-  "description": "Pullback to EMA_12 in confirmed uptrend with volume",
-  "version": 1,
+  "description": "Pullback to EMA_12 in confirmed uptrend with trend quality and candle confirmation",
+  "version": 3,
   "source": "seed",
   "enabled": true,
   "required_state": {
     "trend": ["BULLISH"],
     "structure": ["OPEN_FIELD", "NEAR_SUPPORT"],
     "volume": ["HEALTHY", "SURGING"],
-    "volatility": ["NORMAL", "COMPRESSED"]
+    "volatility": ["NORMAL", "COMPRESSED", "VOLATILE"]
   },
   "conditions": [
     {"block": "rsi_between", "params": [40, 65]},
     {"block": "close_above_ema", "params": [12]},
-    {"block": "close_above_sma", "params": [200]},
-    {"block": "sma_above_sma", "params": [50, 200]}
+    {"block": "er_slow_above", "params": [0.30]},
+    {"block": "bullish_candle", "params": []}
   ],
   "entry": {"type": "close", "confirmation_candles": 1},
   "stop_loss": {"method": "swing_low", "atr_multiplier": 0.5, "fallback_pct": 0.02},
   "take_profit": {"method": "atr", "atr_multiplier": 2.5, "use_runner_mode": true},
-  "statistics": {"total_activations": 0, "wins": 0, "losses": 0, "avg_profit_pct": 0.0, "avg_loss_pct": 0.0, "win_rate": 0.0, "last_activated": null, "best_tickers": {}, "worst_tickers": {}, "best_conditions": [], "created_at": "2026-03-10T00:00:00", "updated_at": "2026-03-10T00:00:00"}
+  "statistics": {"total_activations": 0, "wins": 0, "losses": 0, "avg_profit_pct": 0.0, "avg_loss_pct": 0.0, "win_rate": 0.0, "last_activated": null, "best_tickers": {}, "worst_tickers": {}, "best_conditions": [], "created_at": "2026-03-10T00:00:00", "updated_at": "2026-03-29T00:00:00"}
 }

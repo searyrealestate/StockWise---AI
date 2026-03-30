@@ -107,9 +107,13 @@ LOGS_DIR = os.path.join(PROJECT_ROOT, 'logs')
 MODELS_DIR = os.path.join(PROJECT_ROOT, 'models')
 DB_DIR = os.path.join(PROJECT_ROOT, 'data')
 TEMPLATES_DIR = os.path.join(DB_DIR, "templates")
+REPORTS_DIR = os.path.join(DB_DIR, "reports")
+
+# Maximum number of active trading templates (SPEC v13.4 §4 — ceiling, not floor)
+MAX_TEMPLATES = 5
 
 # Ensure that the necessary directories exist; create them if they do not
-for d in [LOGS_DIR, MODELS_DIR, DB_DIR, TEMPLATES_DIR]:
+for d in [LOGS_DIR, MODELS_DIR, DB_DIR, TEMPLATES_DIR, REPORTS_DIR]:
     os.makedirs(d, exist_ok=True)
 
 # --- 2. API CREDENTIALS ---
@@ -147,13 +151,15 @@ PROVIDER_DELAY = {
     "MASSIVE_TIMEOUT": 10
 }
 
-# ═══ DATA PROVIDER SETTING (2026-03-20) ═══════════════════════════════
-# DO NOT DELETE: Explicitly sets the primary data provider.
-# Without this, DSM relies on getattr default which can be overridden
-# accidentally, causing Alpaca to be disabled in live engine.
-# Valid values: "ALPACA", "MASSIVE", "IBKR", "YFINANCE"
-# ═════════════════════════════════════════════════════════════════════
-DATA_PROVIDER = "ALPACA"
+# ═══ WATERFALL ROUTING (2026-03-24 — DDR #2) ════════════════════════════
+# ARCHITECTURAL CHANGE: DATA_PROVIDER = "ALPACA" was removed here.
+# Previous comment said "DO NOT DELETE" — reason was to prevent DSM from
+# silently disabling Alpaca. That concern is now resolved differently:
+# DSM uses EN_ALPACA / EN_MASSIVE / EN_IBKR / EN_YFINANCE flags directly.
+# The system no longer depends on a single provider. Waterfall routing
+# (Massive → Alpaca → IBKR → YFinance) is the standard per SPEC v13.4 §2.
+# See: data_source_manager.py get_stock_data() priority_list.
+# ═════════════════════════════════════════════════════════════════════════
 
 # Validation (Optional sanity check)
 if not any([EN_MASSIVE, EN_ALPACA, EN_IBKR, EN_YFINANCE]):
@@ -230,19 +236,13 @@ DEFAULT_TRAINING_SYMBOLS = [
 
 # Dynamic Loading Wrapper for the Watchlist
 def load_dynamic_watchlist():
-    """Loads the active watchlist from JSON, falls back to seed list."""
-    import json
-    # Use absolute path to avoid current working directory issues
+    """Loads the active watchlist from JSON, falls back to seed list (atomic read via safe_json_io)."""
+    from safe_json_io import safe_json_read
     path = os.path.join(DB_DIR, "dynamic_watchlist.json")
-    # Check if the dynamic watchlist file exists
-    if os.path.exists(path):
-        try:
-            with open(path, 'r') as f:
-                # Load the JSON and return the 'tickers' list, defaulting to empty list on failure
-                return json.load(f).get("tickers", [])
-        except:
-            # If read fails, fail silently and proceed to fallback
-            pass
+    data = safe_json_read(path, default={})
+    tickers = data.get("tickers", [])
+    if tickers:
+        return tickers
     # Fallback: use DEFAULT_TRAINING_SYMBOLS as the seed list
     return list(DEFAULT_TRAINING_SYMBOLS)
 
@@ -263,6 +263,10 @@ TRADE_TYPE_CONFIG = {
     "MID":   {"interval": "1h",  "days_back": 60},  # For swing trading
     "LONG":  {"interval": "1d",  "days_back": 730}  # For long-term investing
 }
+
+# Data Guard: minimum candles required for statistical validity (SPEC v13.4 §2)
+# Prevents processing stocks with insufficient history for VSA and moving averages.
+MIN_CANDLES_FOR_PROCESSING = 200
 
 # --- 4. STRATEGY CONFIGURATION (SRS 2.A) ---
 # Configuration parameters for different trading strategies (Agents)
@@ -388,7 +392,7 @@ COSTS_CONFIG = {
     "slippage_pct": 0.001,          # 0.1% artificial slippage penalty for realism
     "tax_rate": 0.25,               # 25% Capital Gains Tax rate for net profit calc
     # Friction-Adjusted Alpha Thresholds (The Hurdle Rate)
-    "min_net_profit_pct": 0.013,   # Trade must yield > 1.5% net profit
+    "min_net_profit_pct": 0.005,   # Trade must yield > 0.5% net profit (SPEC v13.4 DDR #3)
     "min_net_rr": 1.2              # Reward must be > 1.5x the Risk AFTER fees
 }
 
@@ -407,7 +411,7 @@ DSP_CONFIG = {
 
 FRICTION_AND_ALPHA = {
     # This is our mathematical 'Hurdle Rate'. The system will refuse to trade if the broker/government takes too much.
-    "min_net_profit_pct": 0.013,      # A trade MUST yield > 1.5% in pure, take-home cash.
+    "min_net_profit_pct": 0.005,      # A trade MUST yield > 0.5% net profit (SPEC v13.4 DDR #3 — unified threshold)
     "min_net_rr": 1.2,                # The net reward must be at least 1.5 times the net risk.
     "max_spread_pct": 0.0005          # Microstructure Veto: We reject the stock if the Bid-Ask spread is > 0.05%.
 }
@@ -422,7 +426,9 @@ KINETIC_STOP_CONFIG = {
     "phase1_atr_mult": 2.0,                  # When we enter, we give the stock a wide 2.0 ATR breathing room.
     "phase2_breakeven_trigger_pct": 0.015,   # Once we hit 1.5% net profit, we instantly snap the stop to breakeven.
     "phase3_parabolic_trigger_pct": 0.03,    # At 3.0% net profit, the stock is flying. We activate the choke mechanism.
-    "phase3_atr_mult": 1.0                   # The choke mechanism tightens the stop to just 1.0 ATR from the highest high.
+    "phase3_atr_mult": 1.0,                  # The choke mechanism tightens the stop to just 1.0 ATR from the highest high.
+    "runner_atr_mult": 0.5,               # Phase 4 Runner: ultra-tight trailing (DDR #4)
+    "runner_min_distance_pct": 0.008,      # Phase 4 Runner: floor distance from high (DDR #4)
 }
 
 MILESTONE_ALERT_CONFIG = {
@@ -435,9 +441,9 @@ MILESTONE_ALERT_CONFIG = {
     "min_alert_interval_minutes": 15,    # Minimum 15 min between alerts per ticker
 
     # Phase 4 Runner Mode: replaces hard take_profit with ultra-tight trailing
-    "runner_atr_mult": 0.5,              # Runner stop = highest_high - (ATR * 0.5)
-    "runner_min_distance_pct": 0.008,    # Floor: stop never closer than 0.8% from high
-                                          # Prevents noise exit when ATR is tiny
+    "runner_atr_mult": 0.5,              # DEPRECATED — canonical source is now KINETIC_STOP_CONFIG
+    "runner_min_distance_pct": 0.008,    # DEPRECATED — canonical source is now KINETIC_STOP_CONFIG
+                                          # Kept for backward compatibility with live_trading_engine.py
 }
 
 # Position Management Configuration
@@ -451,6 +457,61 @@ POSITION_MANAGEMENT_CONFIG = {
     "re_entry_enabled": True,
     "re_entry_min_wait_candles": 3,      # Wait at least 3 candles after exit
     "re_entry_requires_new_signal": True, # Must get a fresh template signal
+}
+
+# Pre-Market Gap Validator (SPEC v13.4 §5)
+PRE_MARKET_CONFIG = {
+    "enabled": True,
+    "check_time": "09:25",           # ET — window: check_time-5m to check_time+10m
+    "max_gap_pct": 0.05,             # Veto if overnight gap > 5%
+    "min_gap_pct": 0.001,            # Ignore gaps < 0.1% (noise floor)
+    "use_ibkr_for_premarket": True,  # Prefer IBKR real pre-market price
+    "fallback_to_last_close": True,  # Use last daily close if IBKR unavailable
+    "veto_cooldown_minutes": 60,     # Suppress repeat vetoes for 60 min
+}
+
+# Shadow Ledger: Candle-by-Candle Learning Engine (SPEC v13.4 §4)
+# Runs OFFLINE (weekends) — evaluates all templates across historical data bar-by-bar.
+# Output: per-symbol, per-template win rates used by template_matcher (W4-4).
+# Phase 2 planned: MTFA (Multi-Timeframe Analysis) — daily only for now.
+SHADOW_LEDGER_CONFIG = {
+    "enabled": True,
+    "ledger_path": "data/shadow_ledger.json",
+    "eval_days_back": 1095,              # 3 years — enough for ~26 signals per template with cooldown
+    "max_templates": 5,                  # Matches MAX_TEMPLATES ceiling
+    "lookahead_candles": 20,             # How many candles forward to check target/stop
+    "min_candles_for_eval": 200,         # Matches MIN_CANDLES_FOR_PROCESSING — indicator warmup
+    "min_bars_between_signals": 20,      # Cooldown: prevent correlated signals from same template
+    "run_mode": "offline",               # "offline" = weekend batch only
+}
+
+# Asset-Specific Optimization (DDR #1)
+# Uses per-symbol template win rates from Shadow Ledger instead of global averages.
+# Cold start: symbols with < cold_start_min_signals fall back to global average.
+# Blended: per_stock_weight% per-stock + global_weight% global for established symbols.
+ASSET_SPECIFIC_CONFIG = {
+    "enabled": True,
+    "cold_start_min_signals": 5,                    # Below this → use global average only
+    "per_stock_weight": 0.7,                        # 70% weight to per-stock stats
+    "global_weight": 0.3,                           # 30% weight to global stats
+    "shadow_ledger_path": "data/shadow_ledger.json",  # Must match SHADOW_LEDGER_CONFIG.ledger_path
+}
+
+# Vectorized Decay: per-template-category aging rates (SPEC v13.4 §4)
+# Momentum signals lose relevance quickly. VSA/institutional patterns persist.
+# Applied by Shadow Ledger after each full evaluation run.
+# Phase 2: MTFA will introduce per-timeframe decay rates.
+VECTORIZED_DECAY_CONFIG = {
+    "enabled": True,
+    "decay_rates": {
+        "momentum": 0.90,           # Fast decay — momentum signals lose relevance quickly
+        "breakout": 0.92,           # Medium-fast decay
+        "mean_reversion": 0.93,     # Medium decay
+        "vsa_institutional": 0.99,  # Slow decay — institutional accumulation patterns persist
+        "default": 0.95,            # Default for uncategorized templates
+    },
+    "decay_period_days": 7,         # Decay applied per this many days of age
+    "min_weight": 0.05,             # Floor — signals never fully forgotten
 }
 
 # Portfolio Risk Management (Phase 5)
@@ -585,6 +646,20 @@ PARAM_RANGES = {
     "bullish_candle": [[]],
     "close_above_ref": [["bb_upper"], ["sma_50"], ["ema_12"]],
     "close_below_ref": [["bb_lower"], ["sma_50"]],
+
+    # New blocks (added with registry expansion)
+    "adx_above": [[20], [22], [25], [30]],
+    "supertrend_bullish": [[]],
+    "golden_cross_active": [[]],
+    "stoch_oversold": [[15], [20], [25], [30]],
+    "cci_between": [[-100, 100], [-50, 50], [0, 100], [-100, 0]],
+    "roc_positive": [[]],
+    "obv_rising": [[20]],
+    "cmf_positive": [[]],
+    "vwap_above": [[]],
+    "gap_up_today": [[]],
+    "fib_near_support": [[0.015], [0.02], [0.03]],
+    "double_bottom_active": [[]],
 }
 
 # Relative Strength Configuration
@@ -630,6 +705,28 @@ STRATEGY_PARAMS = {
     'wavelet_noise_max': 1.5
 }
 
+OBSERVABILITY_CONFIG = {
+    # ── Storage ──────────────────────────────────────────────────────────────
+    "log_dir": "data/decision_logs",          # Directory for JSONL decision logs
+    "log_filename": "decisions.jsonl",        # Append-only JSONL file
+    "max_log_size_mb": 50,                    # Rotate when file exceeds this size
+    "max_rotated_files": 5,                   # How many rotated files to keep
+
+    # ── What to capture ──────────────────────────────────────────────────────
+    "log_signal_events": True,                # Log every template signal generated
+    "log_veto_events": True,                  # Log every veto-gate decision (pass/block)
+    "log_risk_events": True,                  # Log every risk-gate decision
+    "log_execution_events": True,             # Log every execute_ticket call
+    "log_exit_events": True,                  # Log every position exit
+
+    # ── Async / performance ───────────────────────────────────────────────────
+    "async_write": False,                     # False = synchronous (safe default)
+    "flush_every_n_events": 1,               # Flush to disk after every N events (1 = immediate)
+
+    # ── Schema version ────────────────────────────────────────────────────────
+    "schema_version": "1.0",
+}
+
 # --- 11. AI FEATURE CONTRACT (Gen-12) ---
 ML_FEATURES = [
     # 1. Base Price Action
@@ -642,6 +739,63 @@ ML_FEATURES = [
     # 4. Context (Gen-13 Additions)
     'volatility_20d'
 ]
+
+# ════════════════════════════════════════════════════════════════
+# TEMPLATE ENGINE CONFIG
+# TEMPLATE ENGINE CONFIG
+# Anti-overfitting rules replace the hard "max 5 conditions" ceiling.
+# A template is valid if it passes ALL these checks:
+#   1. Max 2 blocks from same category (diversity)
+#   2. Min activations in historical data (not a fluke)
+#   3. Works on multiple symbols (not stock-specific)
+#   4. Survives out-of-sample validation (not curve-fit)
+#   5. Hard ceiling as safety net (not the primary limit)
+# ════════════════════════════════════════════════════════════════
+TEMPLATE_CONFIG = {
+    # ── Anti-Overfitting Rules ────────────────────────────────────
+    "max_conditions_per_category": 2,        # Max blocks from same category
+    "min_activations": 10,                   # Must fire 10+ times in history
+    "min_profitable_symbols": 3,             # Must work on 3+ different stocks
+    "max_wr_degradation_pct": 15.0,          # Train->Test WR drop < 15%
+    "max_conditions_hard_limit": 7,          # Absolute ceiling (safety net)
+
+    # ── Legacy (backward compat) ────────────────────────────────
+    "max_conditions_per_template": 7,        # Updated from 5 to match hard_limit
+
+    # ── Block Category Definitions ────────────────────────────────
+    # Used by validate() to enforce category diversity.
+    "block_categories": {
+        "trend":      ["close_above_sma", "sma_above_sma", "close_above_ema",
+                       "er_slow_above", "trend_alignment", "adx_above",
+                       "supertrend_bullish", "golden_cross_active"],
+        "momentum":   ["rsi_between", "rsi_below", "rsi_above",
+                       "macd_above_signal", "macd_histogram_positive",
+                       "stoch_oversold", "cci_between", "roc_positive"],
+        "volume":     ["volume_surge", "rvol_above", "obv_rising",
+                       "cmf_positive", "vwap_above"],
+        "volatility": ["squeeze_active", "squeeze_momentum_positive",
+                       "bb_width_below", "atr_percent_above"],
+        "price":      ["bullish_candle", "close_above_ref", "close_below_ref",
+                       "gap_up_today", "fib_near_support", "double_bottom_active"],
+    },
+}
+
+# ════════════════════════════════════════════════════════════════
+# ANALYTICS CONFIG — backtest_engine comprehensive reporting
+# SPEC v13.4 §5 — post-run analytics for template/block insight
+# ════════════════════════════════════════════════════════════════
+ANALYTICS_CONFIG = {
+    "reports_dir":            "data/reports",
+    "include_block_stats":    True,
+    "include_shadow_matrix":  True,
+    "include_temporal":       True,
+    "bars_buckets":           [2, 5, 10, 20],
+    "comparison_metrics":     [
+        "total_trades", "win_rate", "profit_factor",
+        "avg_win_pct", "avg_loss_pct", "avg_bars_held",
+    ],
+    "include_block_evaluations": True,     # Section 8: per-block pass/fail/blocker stats (second pass)
+}
 
 class EmojiFilter(logging.Filter):
     """
@@ -859,6 +1013,7 @@ def snapshot_configuration(logger_instance=None):
         filename = f"config_snapshot_{run_id}.json"
         filepath = os.path.join(LOGS_DIR, filename)
 
+        # TODO: migrate to safe_json_io (needs ensure_ascii=False support not in safe_json_write)
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(snapshot, f, indent=2, ensure_ascii=False)
 

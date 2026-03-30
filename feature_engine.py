@@ -17,6 +17,12 @@ warnings.filterwarnings("ignore", category=UserWarning, module="pandas_ta")
 # Initialize Logger
 logger = cfg.LoggerSetup.setup_logger("FeatureEngine")
 
+try:
+    from decision_logger import DecisionLogger as _DecisionLogger
+    _dl = _DecisionLogger()
+except Exception:
+    _dl = None
+
 
 class FeatureEngine:
     """
@@ -294,12 +300,17 @@ class FeatureEngine:
                 df['bb_lower'] = bb.iloc[:, 0]
                 df['bb_mid'] = bb.iloc[:, 1]
                 df['bb_upper'] = bb.iloc[:, 2]
-                df['bb_width'] = bb.iloc[:, 3] 
+                df['bb_width'] = bb.iloc[:, 3]
+                # Normalised width: fraction of mid-band (SQUEEZE_BREAKOUT fix — bb_width is in
+                # dollar units; bb_width_pct ≈ 0.04–0.30 is the scale bb_width_below expects)
+                mid = df['bb_mid'].replace(0, float('nan'))
+                df['bb_width_pct'] = df['bb_width'] / mid
             else:
                 df['bb_lower'] = 0.0
                 df['bb_mid'] = 0.0
                 df['bb_upper'] = 0.0
                 df['bb_width'] = 0.0
+                df['bb_width_pct'] = 0.0
                 logger.warning("Bollinger Bands calculation failed. Check data history.")
 
             # [29] Keltner Upper
@@ -642,3 +653,44 @@ class FeatureEngine:
             import logging
             logging.getLogger("FeatureEngine").error(f"Dynamic Stop Loss calculation failed: {e}")
             return df
+
+    def check_veto_gates(self, df, symbol=""):
+        """
+        SPEC v13.4 §3: Stocks are rejected entirely before processing if:
+        1. Volume < 1 (no liquidity)
+        2. Death Cross (SMA50 < SMA200 crossover)
+        3. VSA Squat Bars (institutional manipulation signal)
+        Returns: (bool vetoed, str reason)
+        NOTE: This method is defined here but wired into the pipeline in a separate prompt.
+        """
+        if df is None or df.empty:
+            return True, "Empty DataFrame"
+
+        last = df.iloc[-1]
+
+        # Gate 1: Volume
+        vol = last.get('volume', 0)
+        if pd.isna(vol) or vol < 1:
+            logger.info(f"[{symbol}] VETO: Volume={vol} < 1")
+            if _dl:
+                try: _dl.log_veto(symbol=symbol, gate="volume", passed=False, reason=f"Volume={vol} < 1")
+                except Exception: pass
+            return True, f"Volume={vol} < 1"
+
+        # Gate 2: Death Cross
+        if last.get('death_cross', False) == True:
+            logger.info(f"[{symbol}] VETO: Death Cross active")
+            if _dl:
+                try: _dl.log_veto(symbol=symbol, gate="death_cross", passed=False, reason="Death Cross active")
+                except Exception: pass
+            return True, "Death Cross active"
+
+        # Gate 3: VSA Squat Bar
+        if last.get('vsa_squat_bar', False) == True:
+            logger.info(f"[{symbol}] VETO: VSA Squat Bar detected")
+            if _dl:
+                try: _dl.log_veto(symbol=symbol, gate="vsa_squat_bar", passed=False, reason="VSA Squat Bar detected")
+                except Exception: pass
+            return True, "VSA Squat Bar detected"
+
+        return False, ""

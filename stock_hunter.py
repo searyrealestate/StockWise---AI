@@ -192,7 +192,9 @@ class StockHunter:
         try:
             scan_cfg = getattr(cfg, 'MANDATORY_SCAN_CONFIG', {})
             min_volume = scan_cfg.get('min_avg_volume', 500000)
-            vol_lookback = scan_cfg.get('volume_trend_lookback', 20)
+            # Use 60-bar baseline for the absolute liquidity check; reduces
+            # false ILLIQUID on stocks with recently elevated volume history.
+            vol_lookback = scan_cfg.get('volume_trend_lookback', 60)
 
             if len(df) < vol_lookback:
                 return "ILLIQUID"
@@ -202,7 +204,7 @@ class StockHunter:
             if avg_volume < min_volume:
                 return "ILLIQUID"
 
-            # Volume trend: compare last 5 days avg to 20-day avg
+            # Volume trend: compare last 5 days avg to 60-day avg
             recent_vol = df['volume'].tail(5).mean()
             vol_ratio = recent_vol / max(avg_volume, 1)
 
@@ -220,7 +222,12 @@ class StockHunter:
     def _classify_volatility_state(self, df):
         """
         Mandatory Template 4: VOLATILITY STATE
-        Uses Bollinger Band width to determine if the stock is compressed, normal, or volatile.
+        Uses Bollinger Band width as percentage of mid-band (bb_width_pct)
+        to determine if the stock is compressed, normal, or volatile.
+
+        bb_width_pct = bb_width / bb_mid (computed in feature_engine.py)
+        Typical range: 0.03 (very tight) to 0.50+ (very wide)
+
         Returns: 'COMPRESSED', 'NORMAL', 'VOLATILE'
         """
         try:
@@ -229,14 +236,29 @@ class StockHunter:
             volatile_threshold = scan_cfg.get('volatile_bb_width_threshold', 0.30)
 
             last = df.iloc[-1]
-            bb_width = last.get('bb_width', 0.15)
+
+            # Use bb_width_pct (percentage), NOT bb_width (dollars)
+            # Same pattern as block_bb_width_below in setup_templates.py
+            bb_width = last.get('bb_width_pct', None)
+            if bb_width is None or (isinstance(bb_width, float) and bb_width != bb_width):
+                # Fallback: if bb_width_pct not available, use raw bb_width
+                # This path should only fire on legacy data without bb_width_pct
+                bb_width = last.get('bb_width', 0.15)
+                logger.debug(f"bb_width_pct not available, falling back to raw bb_width={bb_width:.4f}")
 
             if bb_width < squeeze_threshold:
-                return "COMPRESSED"
+                result = "COMPRESSED"
             elif bb_width > volatile_threshold:
-                return "VOLATILE"
+                result = "VOLATILE"
             else:
-                return "NORMAL"
+                result = "NORMAL"
+
+            logger.debug(
+                f"Volatility classification: bb_width_pct={bb_width:.4f}, "
+                f"thresholds=[<{squeeze_threshold}=COMPRESSED, >{volatile_threshold}=VOLATILE] "
+                f"-> {result}"
+            )
+            return result
 
         except Exception as e:
             logger.debug(f"Volatility classification error: {e}")
@@ -354,7 +376,14 @@ class StockHunter:
                 
                 if 'er_slow' not in df_features.columns:
                     continue
-                
+
+                # ═══ VETO GATE (SPEC v13.4 §3) ═══
+                vetoed, veto_reason = self.fe.check_veto_gates(df_features, symbol)
+                if vetoed:
+                    logger.info(f"[{symbol}] VETO GATE: {veto_reason} — skipping")
+                    continue
+                # ═══════════════════════════════════
+
                 # 2. Identify Regime and extract Fast Math metrics
                 regime = self.orchestra.router.classify_regime(df_features)
                 latest = df_features.iloc[-1]
@@ -380,7 +409,14 @@ class StockHunter:
                     # Stock has a heartbeat! Now we calculate the heavy candlestick features 
                     # and ask the Sniper to grade it.
                     df_full = self.fe.calculate_features(df, strategy_config={"active_indicators": ["all"]})
-                    
+
+                    # ═══ VETO GATE (SPEC v13.4 §3) ═══
+                    vetoed, veto_reason = self.fe.check_veto_gates(df_full, symbol)
+                    if vetoed:
+                        logger.info(f"[{symbol}] VETO GATE: {veto_reason} — skipping")
+                        continue
+                    # ═══════════════════════════════════
+
                     # RUN FULL STRATEGY (Agent 2 - The Sniper)
                     verdict = self.orchestra.sniper.analyze(symbol, df_full, regime)
                     

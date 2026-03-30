@@ -10,6 +10,7 @@ applies Feature Masking (Orthogonality), and trains Universal Master Models.
 """
 
 import json
+from safe_json_io import safe_json_read, safe_json_write
 import os
 import numpy as np
 import pandas as pd
@@ -45,8 +46,7 @@ class RegimeModelTrainer:
         and Execution Vector (real-world fill probability).
         """
         try:
-            with open(getattr(cfg, 'TRADE_JOURNAL_PATH', 'data/trade_journal.json'), 'r', encoding='utf-8') as f:
-                journal_data = json.load(f)
+            journal_data = safe_json_read(getattr(cfg, 'TRADE_JOURNAL_PATH', 'data/trade_journal.json'), default={})
                 
             prediction_vector = []
             execution_vector = []
@@ -322,8 +322,7 @@ class RegimeModelTrainer:
         # [CRITICAL FIX] Save the ACTUAL feature columns used during training
         feature_list = list(X.columns) if hasattr(X, 'columns') else [f"f{i}" for i in range(X.shape[1])]
         feature_list_path = model_path.replace(".pkl", "_features.json")
-        with open(feature_list_path, 'w') as f:
-            json.dump(feature_list, f, indent=2)
+        safe_json_write(feature_list_path, feature_list)
 
         logger.info(f"[{regime_name}] Saved model + {len(feature_list)} features to {model_path}")
 
@@ -338,8 +337,7 @@ class RegimeModelTrainer:
         if symbols is None:
             scanner_path = getattr(cfg, 'SCANNER_OUTPUT_PATH', 'data/vip_scanner_results.json')
             try:
-                with open(scanner_path, 'r') as f:
-                    scanner_data = json.load(f)
+                scanner_data = safe_json_read(scanner_path, default={})
                 symbols = list(scanner_data.keys()) if isinstance(scanner_data, dict) else scanner_data
             except Exception:
                 symbols = getattr(cfg, 'DEFAULT_TRAINING_SYMBOLS', ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD', 'NFLX', 'SPY'])

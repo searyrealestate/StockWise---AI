@@ -19,6 +19,7 @@ They can be:
 
 import os
 import json
+from safe_json_io import safe_json_read, safe_json_write
 import logging
 from datetime import datetime
 import system_config as cfg
@@ -125,8 +126,13 @@ def block_squeeze_momentum_positive(row, params):
     return _safe_get(row, 'mom_sqz') > 0
 
 def block_bb_width_below(row, params):
-    """BB width below threshold (narrow bands). params: [threshold]  e.g. [0.15]"""
-    return _safe_get(row, 'bb_width', 1.0) < params[0]
+    """BB width below threshold (narrow bands). params: [threshold]  e.g. [0.15]
+    Uses bb_width_pct (bb_width / bb_mid) so threshold is a fraction of price,
+    not raw dollars. Falls back to bb_width if bb_width_pct is absent."""
+    width = _safe_get(row, 'bb_width_pct', None)
+    if width is None or (isinstance(width, float) and width != width):  # None or NaN
+        width = _safe_get(row, 'bb_width', 1.0)
+    return width < params[0]
 
 def block_atr_percent_above(row, params):
     """ATR as % of price above threshold (enough volatility for profit). params: [min_pct]  e.g. [0.01]"""
@@ -148,6 +154,77 @@ def block_close_above_ref(row, params):
 def block_close_below_ref(row, params):
     """Close below a named reference column. params: [column_name]  e.g. ['bb_lower']"""
     return _safe_get(row, 'close') < _safe_get(row, params[0])
+
+
+# --- NEW BLOCKS: TREND (expanded) ---
+
+def block_adx_above(row, params):
+    """ADX above threshold (strong trend). params: [threshold]  e.g. [25]"""
+    return _safe_get(row, 'adx') > params[0]
+
+def block_supertrend_bullish(row, params):
+    """SuperTrend direction is bullish (+1). params: []"""
+    return _safe_get(row, 'supertrend_direction', 0) > 0
+
+def block_golden_cross_active(row, params):
+    """Golden Cross detected (SMA50 crossed above SMA200). params: []"""
+    return bool(_safe_get(row, 'golden_cross', False))
+
+
+# --- NEW BLOCKS: MOMENTUM (expanded) ---
+
+def block_stoch_oversold(row, params):
+    """Stochastic %K below threshold (oversold). params: [threshold]  e.g. [20]"""
+    return _safe_get(row, 'stoch_k', 50) < params[0]
+
+def block_cci_between(row, params):
+    """CCI is in range. params: [min, max]  e.g. [-100, 100]"""
+    cci = _safe_get(row, 'cci', 0)
+    return params[0] <= cci <= params[1]
+
+def block_roc_positive(row, params):
+    """Rate of Change is positive (upward momentum). params: []"""
+    return _safe_get(row, 'roc', 0) > 0
+
+
+# --- NEW BLOCKS: VOLUME (expanded) ---
+
+def block_obv_rising(row, params):
+    """OBV is rising (net accumulation proxy). params: [sma_period]  e.g. [20]
+    Uses OBV > 0 combined with volume >= 80% of average as accumulation signal."""
+    obv = _safe_get(row, 'obv', 0)
+    vol = _safe_get(row, 'volume', 0)
+    avg = _safe_get(row, 'vol_avg_20', 1)
+    return obv > 0 and vol > avg * 0.8
+
+def block_cmf_positive(row, params):
+    """Chaikin Money Flow is positive (buying pressure). params: []"""
+    return _safe_get(row, 'cmf', 0) > 0
+
+def block_vwap_above(row, params):
+    """Close is above VWAP (trading above fair value). params: []"""
+    close = _safe_get(row, 'close', 0)
+    vwap  = _safe_get(row, 'vwap', 0)
+    return close > vwap > 0
+
+
+# --- NEW BLOCKS: PRICE ACTION (expanded) ---
+
+def block_gap_up_today(row, params):
+    """Gap up detected. params: []"""
+    return bool(_safe_get(row, 'gap_up', False))
+
+def block_fib_near_support(row, params):
+    """Price within tolerance_pct of Fibonacci 61.8% level. params: [tolerance_pct]  e.g. [0.02]"""
+    close  = _safe_get(row, 'close', 0)
+    fib618 = _safe_get(row, 'fib_618', 0)
+    if close <= 0 or fib618 <= 0:
+        return False
+    return abs(close - fib618) / close <= params[0]
+
+def block_double_bottom_active(row, params):
+    """Double bottom pattern detected. params: []"""
+    return bool(_safe_get(row, 'double_bottom', False))
 
 
 # --- STOP-LOSS METHOD BLOCKS ---
@@ -201,33 +278,45 @@ def target_fixed_pct(row, params):
 
 CONDITION_BLOCKS = {
     # Trend
-    "close_above_sma": block_close_above_sma,
-    "sma_above_sma": block_sma_above_sma,
-    "close_above_ema": block_close_above_ema,
-    "er_slow_above": block_er_slow_above,
-    "trend_alignment": block_trend_alignment,
+    "close_above_sma":        block_close_above_sma,
+    "sma_above_sma":          block_sma_above_sma,
+    "close_above_ema":        block_close_above_ema,
+    "er_slow_above":          block_er_slow_above,
+    "trend_alignment":        block_trend_alignment,
+    "adx_above":              block_adx_above,              # NEW
+    "supertrend_bullish":     block_supertrend_bullish,     # NEW
+    "golden_cross_active":    block_golden_cross_active,    # NEW
 
     # Momentum
-    "rsi_between": block_rsi_between,
-    "rsi_below": block_rsi_below,
-    "rsi_above": block_rsi_above,
-    "macd_above_signal": block_macd_above_signal,
+    "rsi_between":            block_rsi_between,
+    "rsi_below":              block_rsi_below,
+    "rsi_above":              block_rsi_above,
+    "macd_above_signal":      block_macd_above_signal,
     "macd_histogram_positive": block_macd_histogram_positive,
+    "stoch_oversold":         block_stoch_oversold,         # NEW
+    "cci_between":            block_cci_between,            # NEW
+    "roc_positive":           block_roc_positive,           # NEW
 
     # Volume
-    "volume_surge": block_volume_surge,
-    "rvol_above": block_rvol_above,
+    "volume_surge":           block_volume_surge,
+    "rvol_above":             block_rvol_above,
+    "obv_rising":             block_obv_rising,             # NEW
+    "cmf_positive":           block_cmf_positive,           # NEW
+    "vwap_above":             block_vwap_above,             # NEW
 
     # Volatility
-    "squeeze_active": block_squeeze_active,
+    "squeeze_active":         block_squeeze_active,
     "squeeze_momentum_positive": block_squeeze_momentum_positive,
-    "bb_width_below": block_bb_width_below,
-    "atr_percent_above": block_atr_percent_above,
+    "bb_width_below":         block_bb_width_below,
+    "atr_percent_above":      block_atr_percent_above,
 
     # Price Action
-    "bullish_candle": block_bullish_candle,
-    "close_above_ref": block_close_above_ref,
-    "close_below_ref": block_close_below_ref,
+    "bullish_candle":         block_bullish_candle,
+    "close_above_ref":        block_close_above_ref,
+    "close_below_ref":        block_close_below_ref,
+    "gap_up_today":           block_gap_up_today,           # NEW
+    "fib_near_support":       block_fib_near_support,       # NEW
+    "double_bottom_active":   block_double_bottom_active,   # NEW
 }
 
 STOP_BLOCKS = {
@@ -376,8 +465,43 @@ class SetupTemplate:
             "last_win_ticker": None,
             "last_loss_ticker": None,
             "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat()
+            "updated_at": datetime.now().isoformat(),
+
+            # --- Per-Block Performance (P1 #7A) ---
+            "block_stats": {},
+            # Structure per block:
+            # "rsi_between": {
+            #     "evaluated": 0, "passed": 0, "failed": 0, "pass_rate": 0.0,
+            #     "was_the_blocker": 0, "blocker_rate": 0.0,
+            #     "when_passed": {"total_trades": 0, "wins": 0, "losses": 0,
+            #                     "wr": 0.0, "avg_pnl": 0.0, "total_pnl": 0.0},
+            #     "per_symbol": {}
+            # }
         }
+
+    def get_category(self):
+        """
+        Return template category for vectorized decay (SPEC v13.4 §4).
+
+        If template data contains a 'category' field, use it.
+        Otherwise infer from template ID naming conventions so existing seed
+        templates get correct decay rates without modifying JSON files.
+        """
+        # Explicit category field takes priority
+        explicit = self.data.get('category', None)
+        if explicit:
+            return explicit
+        # Infer from ID — covers all current seed templates
+        tid = self.id.upper()
+        if 'VSA' in tid or 'INSTITUTIONAL' in tid:
+            return 'vsa_institutional'
+        if 'BREAKOUT' in tid:
+            return 'breakout'
+        if 'BOUNCE' in tid or 'REVERSION' in tid or 'OVERSOLD' in tid:
+            return 'mean_reversion'
+        if 'MOMENTUM' in tid or 'TREND' in tid or 'PULLBACK' in tid:
+            return 'momentum'
+        return 'default'
 
     def validate(self):
         """
@@ -409,6 +533,47 @@ class SetupTemplate:
         # Validate take_profit
         if self.take_profit.get('method') not in ['atr', 'resistance', 'fixed_pct']:
             errors.append(f"Invalid take_profit method: {self.take_profit.get('method')}")
+
+        # ── Anti-Overfitting Validation ──────────────────────────────
+        tmpl_cfg = getattr(cfg, 'TEMPLATE_CONFIG', {})
+
+        # Rule 1: Hard ceiling (safety net)
+        hard_limit = tmpl_cfg.get('max_conditions_hard_limit',
+                                  tmpl_cfg.get('max_conditions_per_template', 7))
+        if len(self.conditions) > hard_limit:
+            errors.append(
+                f"Too many conditions: {len(self.conditions)} > hard limit {hard_limit}"
+            )
+            logger.warning(
+                f"[{self.id}] Template rejected: {len(self.conditions)} conditions "
+                f"exceeds hard limit of {hard_limit}"
+            )
+
+        # Rule 2: Category diversity — max N blocks from same category
+        max_per_cat = tmpl_cfg.get('max_conditions_per_category', 2)
+        categories  = tmpl_cfg.get('block_categories', {})
+        if categories and self.conditions:
+            block_to_cat = {}
+            for cat, blocks in categories.items():
+                for b in blocks:
+                    block_to_cat[b] = cat
+
+            cat_counts = {}
+            for cond in self.conditions:
+                bn  = cond.get('block', '')
+                cat = block_to_cat.get(bn, 'unknown')
+                cat_counts[cat] = cat_counts.get(cat, 0) + 1
+
+            for cat, count in cat_counts.items():
+                if cat != 'unknown' and count > max_per_cat:
+                    errors.append(
+                        f"Category '{cat}' has {count} blocks (max {max_per_cat}) — "
+                        f"reduces diversity, risk of redundancy"
+                    )
+                    logger.warning(
+                        f"[{self.id}] Category diversity violation: "
+                        f"'{cat}' has {count} blocks (max {max_per_cat})"
+                    )
 
         return len(errors) == 0, errors
 
@@ -711,6 +876,147 @@ class SetupTemplate:
         day_stats[day_key]["wins" if won else "losses"] += 1
         stats['day_of_week_stats'] = day_stats
 
+    def record_block_results(self, details, symbol="", all_passed=False,
+                             outcome=None):
+        """
+        Record per-block pass/fail statistics from evaluate_conditions.
+
+        Called by shadow_ledger during candle-by-candle evaluation.
+
+        Args:
+            details: list of dicts from evaluate_conditions(), each:
+                     {"block": "rsi_between", "params": [40,65], "passed": True}
+            symbol: ticker symbol for per-symbol tracking
+            all_passed: whether ALL conditions passed (signal generated)
+            outcome: dict with trade outcome if all_passed, e.g.:
+                     {"hit": "target", "pnl_pct": 2.5} or
+                     {"hit": "stop", "pnl_pct": -1.2} or None
+        """
+        if not details:
+            return
+
+        stats = self.statistics
+        if "block_stats" not in stats:
+            stats["block_stats"] = {}
+
+        block_stats = stats["block_stats"]
+
+        # Determine if there's exactly one blocker
+        passed_blocks = [d for d in details if d.get("passed", False)]
+        failed_blocks = [d for d in details if not d.get("passed", False)]
+        single_blocker = None
+        if len(failed_blocks) == 1 and len(passed_blocks) == len(details) - 1:
+            single_blocker = failed_blocks[0].get("block", "")
+
+        for detail in details:
+            block_name = detail.get("block", "")
+            if not block_name:
+                continue
+            passed = detail.get("passed", False)
+
+            # Initialize block entry if new
+            if block_name not in block_stats:
+                block_stats[block_name] = {
+                    "evaluated": 0,
+                    "passed": 0,
+                    "failed": 0,
+                    "pass_rate": 0.0,
+                    "was_the_blocker": 0,
+                    "blocker_rate": 0.0,
+                    "when_passed": {
+                        "total_trades": 0,
+                        "wins": 0,
+                        "losses": 0,
+                        "wr": 0.0,
+                        "avg_pnl": 0.0,
+                        "total_pnl": 0.0,
+                    },
+                    "per_symbol": {},
+                }
+
+            bs = block_stats[block_name]
+
+            # Level 1: basic counts
+            bs["evaluated"] += 1
+            if passed:
+                bs["passed"] += 1
+            else:
+                bs["failed"] += 1
+
+            # Blocker detection
+            if block_name == single_blocker:
+                bs["was_the_blocker"] += 1
+
+            # Recalculate rates
+            if bs["evaluated"] > 0:
+                bs["pass_rate"] = round(bs["passed"] / bs["evaluated"] * 100, 1)
+            if bs["failed"] > 0:
+                bs["blocker_rate"] = round(
+                    bs["was_the_blocker"] / bs["failed"] * 100, 1
+                )
+
+            # Level 2: outcome correlation (only when all conditions passed)
+            if all_passed and passed and outcome is not None:
+                wp = bs["when_passed"]
+                hit = outcome.get("hit", "neither")
+                pnl = outcome.get("pnl_pct", 0.0)
+
+                if hit in ("target", "stop"):
+                    wp["total_trades"] += 1
+                    wp["total_pnl"] += pnl
+                    if hit == "target":
+                        wp["wins"] += 1
+                    else:
+                        wp["losses"] += 1
+
+                    if wp["total_trades"] > 0:
+                        wp["wr"] = round(
+                            wp["wins"] / wp["total_trades"] * 100, 1
+                        )
+                        wp["avg_pnl"] = round(
+                            wp["total_pnl"] / wp["total_trades"], 2
+                        )
+
+            # Level 3: per-symbol
+            if symbol:
+                if symbol not in bs["per_symbol"]:
+                    bs["per_symbol"][symbol] = {
+                        "evaluated": 0,
+                        "passed": 0,
+                        "pass_rate": 0.0,
+                        "trades_when_passed": 0,
+                        "wins_when_passed": 0,
+                        "wr_when_passed": 0.0,
+                    }
+
+                ps = bs["per_symbol"][symbol]
+                ps["evaluated"] += 1
+                if passed:
+                    ps["passed"] += 1
+
+                if ps["evaluated"] > 0:
+                    ps["pass_rate"] = round(
+                        ps["passed"] / ps["evaluated"] * 100, 1
+                    )
+
+                # Per-symbol outcome
+                if all_passed and passed and outcome is not None:
+                    hit = outcome.get("hit", "neither")
+                    if hit in ("target", "stop"):
+                        ps["trades_when_passed"] += 1
+                        if hit == "target":
+                            ps["wins_when_passed"] += 1
+                        if ps["trades_when_passed"] > 0:
+                            ps["wr_when_passed"] = round(
+                                ps["wins_when_passed"] / ps["trades_when_passed"] * 100, 1
+                            )
+
+        logger.debug(
+            f"[{self.id}] Block stats updated: "
+            f"{len(passed_blocks)} passed, {len(failed_blocks)} failed"
+            f"{f', blocker={single_blocker}' if single_blocker else ''}"
+        )
+
     def to_dict(self):
         """Serialize back to dictionary for JSON storage."""
         return {
@@ -754,13 +1060,15 @@ class TemplateManager:
                 continue
             filepath = os.path.join(self.templates_dir, filename)
             try:
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
+                data = safe_json_read(filepath, default={})
                 template = SetupTemplate(data)
                 is_valid, errors = template.validate()
                 if is_valid:
                     self.templates[template.id] = template
-                    logger.debug(f"Loaded template: {template.id} ({template.name})")
+                    logger.debug(
+                        f"Loaded template: {template.id} ({template.name}), "
+                        f"{len(template.conditions)} conditions"
+                    )
                 else:
                     logger.warning(f"Invalid template {filename}: {errors}")
             except Exception as e:
@@ -772,8 +1080,7 @@ class TemplateManager:
         """Save a single template to disk."""
         filepath = os.path.join(self.templates_dir, f"{template.id}.json")
         try:
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump(template.to_dict(), f, indent=2)
+            safe_json_write(filepath, template.to_dict())
             logger.debug(f"Saved template: {template.id}")
         except Exception as e:
             logger.error(f"Failed to save template {template.id}: {e}")
@@ -824,7 +1131,10 @@ class TemplateManager:
             return False
         self.templates[template.id] = template
         self.save_template(template)
-        logger.info(f"Added new template: {template.id} ({template.name})")
+        logger.info(
+            f"Added new template: {template.id} ({template.name}) "
+            f"with {len(template.conditions)} conditions"
+        )
         return True
 
     def get_statistics_summary(self):

@@ -1,9 +1,14 @@
+# portfolio_manager.py
 
 """
-StockWise Portfolio Manager
-===========================
-Manages Real vs. Shadow portfolios.
-Tracks system performance (Shadow) separately from user performance (Real).
+StockWise Gen-12 Portfolio Manager (The Accountant)
+===================================================
+The Heart of Treasury Management.
+Responsible for:
+1. Maintaining the 'Shadow Ledger' (Paper/Live record keeping).
+2. Calculating PnL, Taxes, and Commissions.
+3. Managing Risk (Position Sizing & Stop Loss Tracking).
+4. Ensuring we never trade more than available cash.
 """
 
 import json
@@ -11,270 +16,262 @@ import os
 import logging
 from datetime import datetime
 import system_config as cfg
+import numpy as np
+import pandas as pd
+from safe_json_io import safe_json_read, safe_json_write
 
 logger = logging.getLogger("PortfolioManager")
 
 class PortfolioManager:
+    """
+    Electronic Ledger for tracking the Portfolio State.
+    Handles Cash, Equity, and active Trade History.
+    """
     def __init__(self):
-        self.shadow_file = "shadow_portfolio.json"
-        self.user_file = "user_portfolio.json"
+        self.file_path = os.path.join(cfg.PROJECT_ROOT, "shadow_portfolio.json")
+        self.portfolio = self._load_portfolio()
         
-        # Load Ledgers
-        self.shadow_portfolio = self._load_json(self.shadow_file)
-        self.user_portfolio = self._load_json(self.user_file)
-        
-        # Ensure 'trades' list exists
-        if "trades" not in self.shadow_portfolio: self.shadow_portfolio["trades"] = []
-        if "trades" not in self.user_portfolio: self.user_portfolio["trades"] = []
-
-    def _load_json(self, filepath):
-        """Load JSON file or return empty dict if not found."""
-        if os.path.exists(filepath):
-            try:
-                with open(filepath, 'r') as f:
-                    return json.load(f)
-            except Exception as e:
-                logger.error(f"Failed to load {filepath}: {e}")
-                return {}
-        return {}
-
-    def _save_json(self, filepath, data):
-        """Save data to JSON file."""
-        try:
-            with open(filepath, 'w') as f:
-                json.dump(data, f, indent=4)
-        except Exception as e:
-            logger.error(f"Failed to save {filepath}: {e}")
-
-    def add_shadow_trade(self, ticker, entry_price, stop_loss, target_price, qty, timestamp=None):
-        """
-        Record a virtual trade for system tracking.
-        Called automatically by the engine on signal.
-        """
-        if timestamp is None:
-            timestamp = datetime.now().isoformat()
-            
-        trade = {
-            "id": f"SHADOW_{len(self.shadow_portfolio['trades']) + 1}",
-            "ticker": ticker,
-            "entry_price": float(entry_price),
-            "stop_loss": float(stop_loss),
-            "target_price": float(target_price),
-            "qty": float(qty),
-            "timestamp": str(timestamp),
-            "status": "OPEN",
-            "pnl": 0.0,
-            "exit_price": 0.0,
-            "exit_reason": None,
-            "allocation": 1000.0 # Virtual $1000 per trade
+    def _load_portfolio(self):
+        """Loads the JSON ledger or initializes a new account."""
+        default = {
+            "cash": cfg.RISK_CONFIG["starting_capital"],
+            "equity": cfg.RISK_CONFIG["starting_capital"],
+            "trades": []  # List of active trade dictionary objects
         }
-        
-        self.shadow_portfolio["trades"].append(trade)
-        self._save_json(self.shadow_file, self.shadow_portfolio)
-        logger.info(f"[Shadow] Trade Recorded: {ticker} @ {entry_price}")
+        return safe_json_read(self.file_path, default=default)
 
-    def add_user_trade(self, ticker, entry_price, qty, timestamp=None):
-        """
-        Record a real trade manually entered by user.
-        """
-        if timestamp is None:
-            timestamp = datetime.now().isoformat()
-            
-        trade = {
-            "id": f"USER_{len(self.user_portfolio['trades']) + 1}",
-            "ticker": ticker,
-            "entry_price": float(entry_price),
-            "qty": float(qty),
-            "timestamp": str(timestamp),
-            "status": "OPEN",
-            "pnl": 0.0,
-            "exit_price": 0.0,
-            "exit_reason": None
-        }
-        
-        self.user_portfolio["trades"].append(trade)
-        self._save_json(self.user_file, self.user_portfolio)
-        logger.info(f"[User] Trade Recorded: {ticker} @ {entry_price} x {qty}")
-        return trade["id"]
+    def _save_portfolio(self):
+        """Persists the ledger to disk (atomic write via safe_json_io)."""
+        safe_json_write(self.file_path, self.portfolio)
 
-    def close_user_trade(self, ticker, exit_price, qty, timestamp=None):
+    def calculate_commission(self, qty):
         """
-        Close a real trade manually entered by user.
-        Strategies: FIFO (First In First Out) if multiple open.
+        Calculates brokerage fees based on config.
+        Default: higher of $1.00 or $0.005/share.
         """
-        if timestamp is None:
-            timestamp = datetime.now().isoformat()
-            
-        exit_price = float(exit_price)
-        qty_to_close = float(qty)
-        closed_ids = []
+        costs = cfg.COSTS_CONFIG
+        raw_comm = qty * costs["commission_per_share"]
+        return max(costs["min_commission"], raw_comm)
+
+    def apply_slippage(self, price, is_buy=True):
+        """
+        Simulates Real-World Execution.
+        Paper Mode Only: Adds a penalty (slippage) to the execution price.
+        Buys are executed higher (+0.1%), Sells are executed lower (-0.1%).
+        """
+        if cfg.MODE != "PAPER": return price
         
-        # FIFO : Find oldest OPEN trade for this ticker
-        # We iterate a copy to safely modify list potentially (appending new records)
-        # Actually we iterate direct list but appended items go to end so it's fine for FIFO if we stop when satisfied
-        
-        # We need to index them to update in place
-        for i, trade in enumerate(self.user_portfolio["trades"]):
-            if trade["status"] == "OPEN" and trade["ticker"] == ticker:
-                if qty_to_close <= 0:
-                    break
-                    
-                available_qty = trade["qty"]
-                
-                # --- SCENARIO A: PARTIAL CLOSE ---
-                if qty_to_close < available_qty:
-                    # 1. Update Open Position (Reduce Qty)
-                    trade["qty"] = available_qty - qty_to_close
-                    
-                    # 2. Create New "Closed" Record for the portion sold
-                    closed_part = trade.copy()
-                    closed_part["id"] = f"{trade['id']}_CL_{int(datetime.now().timestamp())}"
-                    closed_part["qty"] = qty_to_close
-                    closed_part["status"] = "CLOSED"
-                    closed_part["exit_price"] = exit_price
-                    closed_part["exit_reason"] = "USER_SELL"
-                    closed_part["exit_timestamp"] = timestamp
-                    closed_part["pnl"] = (exit_price - trade["entry_price"]) * qty_to_close
-                    
-                    # Add to ledger
-                    self.user_portfolio["trades"].append(closed_part)
-                    
-                    closed_ids.append(closed_part["id"])
-                    qty_to_close = 0 # Done
-                    
-                # --- SCENARIO B: FULL CLOSE ---
-                else:         
-                    trade["status"] = "CLOSED"
-                    trade["exit_price"] = exit_price
-                    trade["exit_reason"] = "USER_SELL"
-                    trade["exit_timestamp"] = timestamp
-                    
-                    # PnL
-                    pnl = (exit_price - trade["entry_price"]) * trade["qty"]
-                    trade["pnl"] = pnl
-                    
-                    closed_ids.append(trade["id"])
-                    qty_to_close -= available_qty
-                
-        self._save_json(self.user_file, self.user_portfolio)
-        if closed_ids:
-            logger.info(f"[User] Trade Closed: {ticker} @ {exit_price}. IDs: {closed_ids}")
-            return closed_ids
+        slip_pct = cfg.COSTS_CONFIG["slippage_pct"]
+        if is_buy:
+            return price * (1 + slip_pct)
         else:
-            return None
+            return price * (1 - slip_pct)
 
-    def get_active_position(self, ticker):
+    def record_trade(self, symbol, action, price, qty, strategy, stop_loss, target):
         """
-        Helper: Returns the specific OPEN trade dictionary for a ticker, or None.
+        Executes an ORDER and logs it as an OPEN TRADE.
+        Deducts cash including estimated costs.
         """
-        # Search Shadow Portfolio
-        for trade in self.shadow_portfolio.get("trades", []):
-            if trade["status"] == "OPEN" and trade["ticker"] == ticker:
+        # 1. Simulate Slippage (Worse execution price)
+        exec_price = self.apply_slippage(price, is_buy=True)
+        
+        # 2. Calculate Commission
+        comm = self.calculate_commission(qty)
+        
+        total_cost = (exec_price * qty) + comm
+        
+        # 3. Solvency Check
+        if self.portfolio["cash"] < total_cost:
+            logger.warning(f"Insufficient Funds for {symbol}")
+            return False
+            
+        # 4. Update Ledger
+        self.portfolio["cash"] -= total_cost
+        
+        trade = {
+            "symbol": symbol,
+            "entry_price": exec_price,
+            "qty": qty,
+            "strategy": strategy,
+            "stop_loss": stop_loss,
+            "target": target,
+            "entry_time": datetime.now().isoformat(),
+            "commission_paid": comm,
+            "status": "OPEN"
+        }
+        
+        self.portfolio["trades"].append(trade)
+        self._save_portfolio()
+        logger.info(f"TRADE OPEN: {qty} {symbol} @ {exec_price:.2f} (Comm: ${comm:.2f})")
+        return True
+
+    def close_trade(self, symbol, price, reason):
+        """
+        Closes an active position and realizes Profit/Loss.
+        Handles Tax calculation on gains.
+        """
+        for trade in self.portfolio["trades"]:
+            if trade["symbol"] == symbol and trade["status"] == "OPEN":
+                # 1. Apply Slippage (Sell lower)
+                exit_price = self.apply_slippage(price, is_buy=False)
+                
+                # 2. Calculate Exit Commission
+                comm = self.calculate_commission(trade["qty"])
+                
+                # 3. Gross PnL (Proceeds - Cost Basis)
+                gross_proceeds = (exit_price * trade["qty"])
+                cost_basis = (trade["entry_price"] * trade["qty"])
+                gross_pnl = gross_proceeds - cost_basis
+                
+                # 4. Tax Estimation (Capital Gains)
+                # Tax is only applied on PROFITS.
+                tax = 0.0
+                if gross_pnl > 0:
+                    tax = gross_pnl * cfg.COSTS_CONFIG["tax_rate"]
+                
+                # 5. Net PnL Calculation
+                # Net = Gross - EntryFees - ExitFees - Tax
+                net_pnl = gross_pnl - trade["commission_paid"] - comm - tax
+                
+                # 6. Update Portfolio (Return cash to pool)
+                self.portfolio["cash"] += (gross_proceeds - comm - tax) 
+                
+                # 7. Update Trade Record
+                trade["status"] = "CLOSED"
+                trade["exit_price"] = exit_price
+                trade["exit_time"] = datetime.now().isoformat()
+                trade["reason"] = reason
+                trade["net_pnl"] = net_pnl
+                trade["tax_paid"] = tax
+                trade["exit_commission"] = comm
+                
+                self._save_portfolio()
+                logger.info(f"TRADE CLOSED: {symbol} | Net PnL: ${net_pnl:.2f} (Tax: ${tax:.2f})")
+                return True
+        
+        return False
+
+    def get_active_position(self, symbol):
+        """Helper to find an active trade for a symbol."""
+        for trade in self.portfolio["trades"]:
+            if trade["symbol"] == symbol and trade["status"] == "OPEN":
                 return trade
         return None
-        
-    def get_active_positions(self, type='BOTH'):
-        """Return list of open trades."""
-        active = []
-        
-        if type in ['BOTH', 'SHADOW']:
-            for t in self.shadow_portfolio.get("trades", []):
-                if t["status"] == "OPEN":
-                    t["type"] = "SHADOW"
-                    active.append(t)
-                    
-        if type in ['BOTH', 'USER']:
-            for t in self.user_portfolio.get("trades", []):
-                if t["status"] == "OPEN":
-                    t["type"] = "USER"
-                    active.append(t)
-                    
-        return active
 
-    def get_user_position_summary(self):
-        """Return a string summary of all open user positions."""
-        active = []
-        for t in self.user_portfolio.get("trades", []):
-            if t["status"] == "OPEN":
-                active.append(t)
-        
-        if not active:
-            return "No Active Positions."
-            
-        lines = ["📋 **Active Positions**"]
-        for t in active:
-            lines.append(f"• {t['ticker']}: {t['entry_price']} x {t['qty']} (ID: {t['id']})")
-            
-        return "\n".join(lines)
+class RiskManager:
+    """
+    Sub-system dealing with Risk Math.
+    Calculates Position Sizing (Shares to buy) and validates Stop Losses.
+    """
+    def __init__(self, portfolio_value, global_risk_pct=1.0):
+        """
+        :param portfolio_value: Total value of the trading account (Cash + Equity)
+        :param global_risk_pct: Max % of total portfolio to loose on a single trade (Risk Unit).
+        """
+        self.portfolio_value = portfolio_value
+        self.global_risk_pct = global_risk_pct
+        self.max_risk_dollars_per_trade = self.portfolio_value * (self.global_risk_pct / 100.0)
+        logger.info(f"RiskManager initialized. Max risk per trade: ${self.max_risk_dollars_per_trade:.2f}")
 
-    def calculate_user_pnl(self, timeframe='ALL'):
-        """
-        Calculate Realized PnL for USER portfolio.
-        timeframe: 'TODAY', 'MONTH', 'ALL'
-        """
-        total_pnl = 0.0
-        count = 0
-        now = datetime.now()
-        
-        for t in self.user_portfolio.get("trades", []):
-            if t["status"] == "CLOSED" and t.get("pnl") is not None:
-                # Timestamps check
-                ts_str = t.get("exit_timestamp")
-                if not ts_str: continue
-                
-                # Careful parsing: Isoformat might vary slightly
-                try:
-                    exit_dt = datetime.fromisoformat(ts_str)
-                except:
-                    continue
-                
-                include = False
-                if timeframe == 'ALL':
-                    include = True
-                elif timeframe == 'TODAY':
-                    if exit_dt.date() == now.date():
-                        include = True
-                elif timeframe == 'MONTH':
-                    if exit_dt.year == now.year and exit_dt.month == now.month:
-                        include = True
-                        
-                if include:
-                    total_pnl += t["pnl"]
-                    count += 1
-                    
-        return total_pnl, count
+    def update_portfolio_value(self, new_value):
+        """Re-calibrates risk unit as portfolio grows/shrinks (Auto-Scaling)."""
+        self.portfolio_value = new_value
+        self.max_risk_dollars_per_trade = self.portfolio_value * (self.global_risk_pct / 100.0)
+        logger.info(
+            f"Portfolio value updated to ${new_value:.2f}. New max risk: ${self.max_risk_dollars_per_trade:.2f}")
 
-    def update_position_status(self, ticker, current_price):
+    def calculate_position_size(self, entry_price, stop_loss_price):
         """
-        Check shadow trades for Exit triggers.
-        Returns list of closed trades details.
+        Fixed Fractional Risk Sizing.
+        Determines quantity based on the distance to the Stop Loss.
+        Formula: Qty = (Risk Amount) / (Entry - StopLoss)
         """
-        closed_trades = []
-        
-        for trade in self.shadow_portfolio.get("trades", []):
-            if trade["status"] == "OPEN" and trade["ticker"] == ticker:
-                
-                # Check Target
-                # Assuming LONG only for now
-                if current_price >= trade["target_price"]:
-                    trade["status"] = "CLOSED"
-                    trade["exit_price"] = current_price
-                    trade["exit_reason"] = "TARGET"
-                    # Simple PnL Calc: (Exit - Entry) / Entry * Allocation
-                    pct_change = (current_price - trade["entry_price"]) / trade["entry_price"]
-                    trade["pnl"] = pct_change * trade["allocation"]
-                    closed_trades.append(trade)
-                    
-                # Check Stop
-                elif current_price <= trade["stop_loss"]:
-                    trade["status"] = "CLOSED"
-                    trade["exit_price"] = current_price
-                    trade["exit_reason"] = "STOP"
-                    pct_change = (current_price - trade["entry_price"]) / trade["entry_price"]
-                    trade["pnl"] = pct_change * trade["allocation"]
-                    closed_trades.append(trade)
-                    
-        if closed_trades:
-            self._save_json(self.shadow_file, self.shadow_portfolio)
+        if entry_price <= 0 or stop_loss_price >= entry_price:
+            logger.warning(f"Invalid position size calculation: Entry ${entry_price}, SL ${stop_loss_price}")
+            return 0  # Invalid parameters
+
+        # 1. Expectancy (Risk per share)
+        risk_per_share = entry_price - stop_loss_price
+
+        # 2. Risk Calculation
+        num_shares = self.max_risk_dollars_per_trade / risk_per_share
+
+        # 3. Capital Ceiling Check
+        # Ensure we don't try to buy more than we have (or leverage max)
+        investment_amount = num_shares * entry_price
+        if investment_amount > self.portfolio_value:
+            num_shares = self.portfolio_value / entry_price
+            logger.warning("Position size capped by total portfolio value.")
+
+        logger.info(f"Position size calculated: {np.floor(num_shares)} shares.")
+        return np.floor(num_shares)  # Always round down to whole shares
+
+    def manage_open_position(self, current_day_data: pd.Series, position_data: dict):
+        """
+        Dynamic Exit Management.
+        Called on every bar to check:
+        1. Structural Failures (Price < SMA 150)
+        2. Static Stop Loss
+        3. Trailing Stops (Volatility Based)
+        """
+        try:
+            current_low = current_day_data['low']
+            current_close = current_day_data['close']
+
+            # --- 1. Structural Stop-Loss (Trend Change) ---
+            # If price closes below the 150-day Long Term moving average, exit immediately.
+            if 'sma_150' in current_day_data:
+                current_sma_150 = current_day_data['sma_150']
+                if current_close < current_sma_150:
+                    logger.info(
+                        f"EXIT_SIGNAL: Structural stop hit. Close ({current_close:.2f}) < 150-day SMA ({current_sma_150:.2f}).")
+                    return "EXIT_SIGNAL", position_data
+
+            # --- 2. Stop-Loss Checks ---
+
+            # 2a. Static Stop Check (Initial SL)
+            # If not using trailing stop, just check the fixed level
+            if not position_data.get('use_trailing_stop', False):
+                if current_low <= position_data['current_stop_loss']:
+                    logger.info(f"EXIT_SIGNAL: Static stop-loss hit at ${position_data['current_stop_loss']}.")
+                    return "EXIT_SIGNAL", position_data
+                return "HOLD", position_data
+
+            # 2b. Trailing Stop Logic (ATR Based)
+            # Moves stop loss UP as price rises, locking in profits.
+            current_high = current_day_data['high']
+            atr_value = current_day_data.get('atr_14', 0)
             
-        return closed_trades
+            if atr_value == 0:
+                logger.warning("ATR value is 0, trailing stop will not work correctly.")
+                return "HOLD", position_data 
+
+            atr_mult = position_data.get('atr_multiplier', 2.5)
+
+            # Calculate where the stop SHOULD be based on today's high (Standard Chandelier Exit logic)
+            new_potential_stop = current_high - (atr_value * atr_mult)
+            
+            # Ratchet Logic: Stop can ONLY move UP, never down.
+            new_stop_loss = max(position_data['current_stop_loss'], new_potential_stop)
+
+            # Check for Breach: Did price hit our (potentially updated) stop *today*?
+            # Note: We check against current_low.
+            if current_low <= new_stop_loss:
+                logger.info(f"EXIT_SIGNAL: Trailing stop-loss hit at ${new_stop_loss:.2f}.")
+                position_data['current_stop_loss'] = new_stop_loss  # Log final stop
+                return "EXIT_SIGNAL", position_data
+
+            # Update the stored stop loss if it moved up
+            if new_stop_loss > position_data['current_stop_loss']:
+                logger.debug(f"Trailing stop raised to ${new_stop_loss:.2f}")
+                position_data['current_stop_loss'] = new_stop_loss
+
+            return "HOLD", position_data
+
+        except KeyError as e:
+            logger.error(f"Missing expected data in current_day_data: {e}. Holding position as failsafe.",
+                         exc_info=True)
+            return "HOLD", position_data
+        except Exception as e:
+            logger.error(f"Error in manage_open_position: {e}. Holding position as failsafe.", exc_info=True)
+            return "HOLD", position_data

@@ -18,6 +18,12 @@ import system_config as cfg
 
 logger = logging.getLogger("PortfolioRisk")
 
+try:
+    from decision_logger import DecisionLogger as _DecisionLogger
+    _dl = _DecisionLogger()
+except Exception:
+    _dl = None
+
 # Sector mapping for common stocks (expandable)
 SECTOR_MAP = {
     "AAPL": "Technology", "MSFT": "Technology", "GOOGL": "Technology",
@@ -77,6 +83,9 @@ class PortfolioRiskManager:
         approved = len(reasons) == 0
         if not approved:
             logger.warning(f"[{symbol}] PORTFOLIO RISK VETO: {reasons}")
+            if _dl:
+                try: _dl.log_risk(symbol=symbol, gate="portfolio_risk", passed=False, reason="; ".join(reasons))
+                except Exception: pass
         else:
             logger.debug(f"[{symbol}] All portfolio risk gates passed")
 
@@ -146,9 +155,9 @@ class PortfolioRiskManager:
         - Single position would exceed max_single_position_pct
         """
         if portfolio_value <= 0:
-            # Can't check without portfolio value — let it through with warning
-            logger.debug("Portfolio value unknown, skipping drawdown gate")
-            return True, ""
+            # Zero or negative portfolio = cannot assess risk = block all new entries (SPEC v13.4 §5)
+            logger.warning(f"Portfolio value is {portfolio_value} — blocking new entries")
+            return False, f"Portfolio value is {portfolio_value} — cannot assess risk"
 
         max_dd = self.config.get('max_portfolio_drawdown_pct', 0.10)
         max_exposure = self.config.get('max_total_exposure_pct', 0.60)
