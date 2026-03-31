@@ -1176,6 +1176,36 @@ class TestPauseMinHealthyPullback:
         assert 0 < val < 0.05
 
 
+class TestConfigDedup:
+    """Tests for single-source-of-truth config deduplication (SPEC §6)."""
+
+    def test_min_net_profit_single_source(self):
+        """min_net_profit_pct in COSTS_CONFIG and FRICTION_AND_ALPHA must equal MIN_NET_PROFIT."""
+        import system_config as cfg
+        assert cfg.COSTS_CONFIG["min_net_profit_pct"] == cfg.MIN_NET_PROFIT, \
+            "COSTS_CONFIG['min_net_profit_pct'] must reference MIN_NET_PROFIT"
+        assert cfg.FRICTION_AND_ALPHA["min_net_profit_pct"] == cfg.MIN_NET_PROFIT, \
+            "FRICTION_AND_ALPHA['min_net_profit_pct'] must reference MIN_NET_PROFIT"
+
+    def test_min_net_profit_is_not_zero(self):
+        """MIN_NET_PROFIT must be a positive non-zero value."""
+        import system_config as cfg
+        assert cfg.MIN_NET_PROFIT > 0, "MIN_NET_PROFIT must be > 0"
+        assert cfg.MIN_NET_PROFIT < 1.0, "MIN_NET_PROFIT must be a fraction (< 1.0)"
+
+    def test_runner_atr_mult_single_source(self):
+        """runner_atr_mult in MILESTONE_ALERT_CONFIG must equal KINETIC_STOP_CONFIG value."""
+        import system_config as cfg
+        assert cfg.MILESTONE_ALERT_CONFIG["runner_atr_mult"] == cfg.KINETIC_STOP_CONFIG["runner_atr_mult"], \
+            "MILESTONE_ALERT_CONFIG['runner_atr_mult'] must reference KINETIC_STOP_CONFIG"
+
+    def test_runner_atr_mult_valid_range(self):
+        """runner_atr_mult must be in valid range (0.1 – 2.0)."""
+        import system_config as cfg
+        val = cfg.KINETIC_STOP_CONFIG["runner_atr_mult"]
+        assert 0.1 <= val <= 2.0, f"runner_atr_mult={val} out of expected range [0.1, 2.0]"
+
+
 # ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
@@ -1184,7 +1214,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

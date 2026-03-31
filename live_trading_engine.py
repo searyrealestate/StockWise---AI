@@ -272,9 +272,8 @@ class LifecycleManager:
         # When a position hits its original target, we don't sell.
         # Instead we trail ultra-tight with a minimum distance floor.
         if position.get("runner_mode"):
-            milestone_cfg = getattr(cfg, 'MILESTONE_ALERT_CONFIG', {})
-            runner_atr_mult = milestone_cfg.get('runner_atr_mult', 0.5)
-            runner_min_dist = milestone_cfg.get('runner_min_distance_pct', 0.008)
+            runner_atr_mult = self.stop_cfg.get('runner_atr_mult', 0.5)
+            runner_min_dist = self.stop_cfg.get('runner_min_distance_pct', 0.008)
 
             # ATR-based runner stop
             runner_stop_atr = highest_high - (current_atr * runner_atr_mult)

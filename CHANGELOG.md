@@ -1,5 +1,17 @@
 # Changelog
 
+## [2026-03-31] Config Deduplication — Single Source of Truth
+- **Problem:** `min_net_profit_pct` (0.005) duplicated in COSTS_CONFIG and FRICTION_AND_ALPHA; `runner_atr_mult` (0.5) duplicated in KINETIC_STOP_CONFIG and MILESTONE_ALERT_CONFIG; live_trading_engine.py reading runner_atr_mult from MILESTONE_ALERT_CONFIG instead of KINETIC_STOP_CONFIG
+- **Fix (system_config.py):**
+  - `COSTS_CONFIG["min_net_profit_pct"]` → references `MIN_NET_PROFIT` constant
+  - `FRICTION_AND_ALPHA["min_net_profit_pct"]` → references `MIN_NET_PROFIT` constant
+  - `MILESTONE_ALERT_CONFIG["runner_atr_mult"]` → references `KINETIC_STOP_CONFIG["runner_atr_mult"]`
+- **Fix (live_trading_engine.py):** Phase 4 runner reads `runner_atr_mult` and `runner_min_distance_pct` from `self.stop_cfg` (KINETIC_STOP_CONFIG) instead of `milestone_cfg`
+- **Tests:** Added `TestConfigDedup` — 4 tests: single-source assertions for both values, non-zero check, valid-range check
+- **Impact:** Changing MIN_NET_PROFIT or runner_atr_mult propagates automatically; no risk of drift between config sections
+
+---
+
 ## [2026-03-31] PAUSE Min Pullback De-Hardcode
 - **Problem:** min_healthy_pullback_pct (0.005) hardcoded in live_trading_engine.py line 265
 - **Fix:** Added min_healthy_pullback_pct to POSITION_MANAGEMENT_CONFIG in system_config.py, read via config in live_trading_engine.py

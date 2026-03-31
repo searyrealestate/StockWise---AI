@@ -392,7 +392,7 @@ COSTS_CONFIG = {
     "slippage_pct": 0.001,          # 0.1% artificial slippage penalty for realism
     "tax_rate": 0.25,               # 25% Capital Gains Tax rate for net profit calc
     # Friction-Adjusted Alpha Thresholds (The Hurdle Rate)
-    "min_net_profit_pct": 0.005,   # Trade must yield > 0.5% net profit (SPEC v13.4 DDR #3)
+    "min_net_profit_pct": MIN_NET_PROFIT,   # → source of truth: MIN_NET_PROFIT (line 83)
     "min_net_rr": 1.2              # Reward must be > 1.5x the Risk AFTER fees
 }
 
@@ -411,7 +411,7 @@ DSP_CONFIG = {
 
 FRICTION_AND_ALPHA = {
     # This is our mathematical 'Hurdle Rate'. The system will refuse to trade if the broker/government takes too much.
-    "min_net_profit_pct": 0.005,      # A trade MUST yield > 0.5% net profit (SPEC v13.4 DDR #3 — unified threshold)
+    "min_net_profit_pct": MIN_NET_PROFIT,      # → source of truth: MIN_NET_PROFIT (line 83)
     "min_net_rr": 1.2,                # The net reward must be at least 1.5 times the net risk.
     "max_spread_pct": 0.0005          # Microstructure Veto: We reject the stock if the Bid-Ask spread is > 0.05%.
 }
@@ -441,7 +441,7 @@ MILESTONE_ALERT_CONFIG = {
     "min_alert_interval_minutes": 15,    # Minimum 15 min between alerts per ticker
 
     # Phase 4 Runner Mode: replaces hard take_profit with ultra-tight trailing
-    "runner_atr_mult": 0.5,              # DEPRECATED — canonical source is now KINETIC_STOP_CONFIG
+    "runner_atr_mult": KINETIC_STOP_CONFIG["runner_atr_mult"],   # → source of truth: KINETIC_STOP_CONFIG
     "runner_min_distance_pct": 0.008,    # DEPRECATED — canonical source is now KINETIC_STOP_CONFIG
                                           # Kept for backward compatibility with live_trading_engine.py
 }
