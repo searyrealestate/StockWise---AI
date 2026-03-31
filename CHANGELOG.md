@@ -1,5 +1,15 @@
 # Changelog
 
+## [2026-03-31] Template Filtering Logging with Match/Reject Reasons
+- **Problem:** `get_for_state()` silently filtered templates with no logging — zero visibility into why signals were or weren't generated per symbol
+- **Fix (setup_templates.py):** `get_for_state(stock_state, symbol="")` — added symbol param (default="" for backwards compat); DEBUG log per template (✓ match / ✗ reject + field details); INFO summary line per symbol
+- **Fix (setup_templates.py):** Added `_get_mismatch_reason()` helper — returns per-field detail: key, required values, actual value
+- **Fix (template_matcher.py):** `get_for_state()` call now passes `symbol=symbol`
+- **Zero logic change** — filtering behaviour identical; logging only
+- **Tests:** Added `TestTemplateFilteringLogging` — 3 tests: matching logic, mismatch detail, empty state edge case
+
+---
+
 ## [2026-03-31] HALT Regime Blocks Template Scan (Gap 1b)
 - **Problem:** classify_regime() HALT signal (velocity divergence: er_slow > 0.6, er_fast < 0.2) not wired to template system — collapsing momentum still received template signals
 - **Fix:** Added `enable_halt_template_blocking: True` to REGIME_CONFIG in system_config.py

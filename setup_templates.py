@@ -1095,15 +1095,22 @@ class TemplateManager:
         """Return list of all enabled templates."""
         return [t for t in self.templates.values() if t.enabled]
 
-    def get_for_state(self, stock_state):
+    def get_for_state(self, stock_state, symbol=""):
         """
         Return templates that match the stock's current state.
         Filters enabled templates by required_state compatibility.
+        Logs match/reject reasons per template for analysis.
         """
         matching = []
-        for template in self.get_enabled():
+        enabled = self.get_enabled()
+        for template in enabled:
             if self._state_matches(template.required_state, stock_state):
                 matching.append(template)
+                logger.debug(f"[{symbol}] [REGIME] ✓ {template.name} — state match")
+            else:
+                mismatch = self._get_mismatch_reason(template.required_state, stock_state)
+                logger.debug(f"[{symbol}] [REGIME] ✗ {template.name} — {mismatch}")
+        logger.info(f"[{symbol}] [REGIME] Template filtering: {len(enabled)} enabled → {len(matching)} matched state")
         return matching
 
     def _state_matches(self, required_state, stock_state):
@@ -1117,6 +1124,15 @@ class TemplateManager:
             if actual_value not in acceptable_values:
                 return False
         return True
+
+    def _get_mismatch_reason(self, required_state, stock_state):
+        """Return human-readable string describing which state fields don't match."""
+        reasons = []
+        for key, acceptable in required_state.items():
+            actual = stock_state.get(key, '')
+            if actual not in acceptable:
+                reasons.append(f"{key} mismatch (required: {','.join(acceptable)} | actual: {actual})")
+        return "; ".join(reasons) if reasons else "unknown mismatch"
 
     def get_template_by_id(self, template_id):
         """Get a specific template by ID."""

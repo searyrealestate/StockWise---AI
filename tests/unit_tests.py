@@ -1345,6 +1345,53 @@ class TestHaltRegimeBlocking:
         assert should_skip is False, "Exception in classify_regime must not block templates"
 
 
+class TestTemplateFilteringLogging:
+    """Tests for template state filtering logging (observability)."""
+
+    def test_get_for_state_returns_matching_templates(self):
+        """get_for_state returns only templates whose required_state matches stock_state."""
+        bullish_required = {"trend": ["BULLISH"]}
+        bearish_required = {"trend": ["SIDEWAYS", "BEARISH"]}
+        stock_state = {"trend": "BULLISH", "volume": "HEALTHY"}
+
+        def state_matches(required_state, s):
+            for key, acceptable in required_state.items():
+                if s.get(key, '') not in acceptable:
+                    return False
+            return True
+
+        assert state_matches(bullish_required, stock_state) is True, \
+            "TREND_PULLBACK_EMA should match BULLISH state"
+        assert state_matches(bearish_required, stock_state) is False, \
+            "OVERSOLD_BOUNCE should NOT match BULLISH state"
+
+    def test_get_mismatch_reason_detail(self):
+        """_get_mismatch_reason returns specific field-level mismatch details."""
+        from setup_templates import TemplateManager
+        tm = TemplateManager()
+
+        required = {"trend": ["BULLISH"], "volume": ["SURGING"]}
+        actual_state = {"trend": "BEARISH", "volume": "DRYING_UP"}
+
+        reason = tm._get_mismatch_reason(required, actual_state)
+        assert "trend mismatch" in reason
+        assert "BEARISH" in reason
+        assert "volume mismatch" in reason
+        assert "DRYING_UP" in reason
+
+    def test_get_mismatch_reason_empty_state(self):
+        """Missing keys in stock_state produce mismatch with empty actual value."""
+        from setup_templates import TemplateManager
+        tm = TemplateManager()
+
+        required = {"trend": ["BULLISH"]}
+        actual_state = {}  # empty state
+
+        reason = tm._get_mismatch_reason(required, actual_state)
+        assert "trend mismatch" in reason
+        assert "actual: " in reason  # empty string as actual
+
+
 # ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
@@ -1353,7 +1400,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

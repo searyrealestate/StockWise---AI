@@ -97,7 +97,7 @@ class TemplateMatcher:
             logger.debug(f"[{symbol}] No stock_state provided, matching without state filter")
 
         # Step 1: Filter templates that match this stock's state
-        matching_templates = self.tm.get_for_state(stock_state)
+        matching_templates = self.tm.get_for_state(stock_state, symbol=symbol)
 
         if not matching_templates:
             self._track_idle(symbol, "no_templates_match_state")
