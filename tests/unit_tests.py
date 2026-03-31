@@ -1205,6 +1205,12 @@ class TestConfigDedup:
         val = cfg.KINETIC_STOP_CONFIG["runner_atr_mult"]
         assert 0.1 <= val <= 2.0, f"runner_atr_mult={val} out of expected range [0.1, 2.0]"
 
+    def test_master_scores_removed(self):
+        """Verify MASTER_SCORES dead code has been removed from system_config."""
+        import system_config
+        assert not hasattr(system_config, 'MASTER_SCORES'), \
+            "MASTER_SCORES should be removed — it was dead code"
+
 
 # ============================================================
 # RUNNER (also compatible with pytest)

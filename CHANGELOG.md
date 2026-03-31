@@ -1,5 +1,13 @@
 # Changelog
 
+## [2026-03-31] MASTER_SCORES Dead Code Removal
+- **Problem:** MASTER_SCORES defined in system_config.py but never referenced by any other file
+- **Fix:** Removed MASTER_SCORES dict definition and its reference in config summary dict
+- **Tests:** Added test_master_scores_removed
+- **Note:** STRATEGY_PARAMS is still in use (archave/, master_validator.py) — untouched
+
+---
+
 ## [2026-03-31] Config Deduplication — Single Source of Truth
 - **Problem:** `min_net_profit_pct` (0.005) duplicated in COSTS_CONFIG and FRICTION_AND_ALPHA; `runner_atr_mult` (0.5) duplicated in KINETIC_STOP_CONFIG and MILESTONE_ALERT_CONFIG; live_trading_engine.py reading runner_atr_mult from MILESTONE_ALERT_CONFIG instead of KINETIC_STOP_CONFIG
 - **Fix (system_config.py):**

@@ -316,42 +316,6 @@ SCAN_SCHEDULE = {
     }
 }
 
-# --- NEW: MASTER PATTERN SCORING MATRIX (63 Functions) ---
-# Scores assigned to identified chart patterns.
-# Positive Scores (>0) imply Bullish sentiment.
-# Negative Scores (<0) imply Bearish sentiment.
-MASTER_SCORES = {
-    # Group 1: Trend Indicators
-    "GOLDEN_CROSS": 25,             # 50 SMA crosses above 200 SMA
-    "DEATH_CROSS": -25,             # 50 SMA crosses below 200 SMA
-    "FIB_TREND_5_8_13": 20,         # Fibonacci EMA Alignment
-    
-    # Group 2: Geometric Patterns (High Confidence)
-    "TRIANGLE_ASCENDING": 30,       # Bullish continuation
-    "TRIANGLE_DESCENDING": -30,     # Bearish continuation
-    "HEAD_AND_SHOULDERS_TOP": -40,  # Strong Bearish Reversal
-    "HEAD_AND_SHOULDERS_BOTTOM": 40,# Strong Bullish Reversal
-    "DOUBLE_TOP": -35,              # Bearish Reversal
-    "DOUBLE_BOTTOM": 35,            # Bullish Reversal
-    "CUP_AND_HANDLE": 35,           # Bullish Continuation
-    "RISING_WEDGE_RSI_DIV": -45,    # Strong Bearish Reversal (Wedge + Divergence)
-    
-    # Group 3: Candlestick Patterns (Context Aware)
-    "TWEEZER_BOTTOM": 15,           # Bullish Reversal
-    "TWEEZER_TOP": -15,             # Bearish Reversal
-    "SMART_HAMMER": 10,             # Bullish Reversal (requires context)
-    "SMART_SHOOTING_STAR": -10,     # Bearish Reversal (requires context)
-    
-    # Group 4: Volatility & Levels
-    "BOLLINGER_SQUEEZE": 10,        # Volatility contraction (Potential Breakout Setup)
-    "FIB_618_BOUNCE": 25,           # Bounce off 61.8% Retracement (Bullish)
-    "CONSOLIDATION_COIL": 0,        # Neutral (Signal to wait for breakout)
-    
-    # Group 5: Fundamental (Strategic)
-    "GRAHAM_VALUE_BUY": 50,         # Fundamental Value Signal
-    "NCAV_BARGAIN": 60              # Deep Value (Net Current Asset Value)
-}
-
 # --- 6. RISK CONFIGURATION (SRS 2.A) ---
 # Global risk parameters for the trading system
 RISK_CONFIG = {
@@ -946,8 +910,6 @@ def snapshot_configuration(logger_instance=None):
             "min_master_score_approval": MIN_MASTER_SCORE_APPROVAL,
             "premium_trade_threshold": PREMIUM_TRADE_THRESHOLD,
             "strategy_config": STRATEGY_CONFIG,
-            "master_scores": MASTER_SCORES,
-
             # Risk Management
             "risk_config": RISK_CONFIG,
             "costs_config": COSTS_CONFIG,
