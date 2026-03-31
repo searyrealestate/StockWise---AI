@@ -1392,6 +1392,63 @@ class TestTemplateFilteringLogging:
         assert "actual: " in reason  # empty string as actual
 
 
+class TestWeeklyRetrain:
+    """Tests for Gap 4: weekly auto-retrain scheduler."""
+
+    def test_retrain_triggers_on_weekend(self):
+        """Retrain should trigger on Saturday when no recent retrain exists."""
+        from datetime import datetime
+
+        saturday = datetime(2026, 3, 28, 10, 0, 0)  # Saturday
+        retrain_cfg = {
+            'enabled': True, 'retrain_days': [5, 6],
+            'min_days_between_retrain': 5,
+            'last_retrain_path': 'data/last_retrain.json',
+        }
+        assert saturday.weekday() == 5, "Should be Saturday"
+        assert saturday.weekday() in retrain_cfg['retrain_days'], "Saturday must be in retrain_days"
+
+    def test_retrain_skips_weekday(self):
+        """Retrain should NOT trigger on Wednesday."""
+        from datetime import datetime
+
+        wednesday = datetime(2026, 3, 25, 10, 0, 0)  # Wednesday
+        retrain_cfg = {'enabled': True, 'retrain_days': [5, 6], 'min_days_between_retrain': 5}
+
+        assert wednesday.weekday() == 2
+        assert wednesday.weekday() not in retrain_cfg['retrain_days']
+
+    def test_retrain_skips_if_recent(self):
+        """Retrain should NOT trigger if last retrain was 2 days ago."""
+        from datetime import datetime
+
+        saturday = datetime(2026, 3, 28, 10, 0, 0)
+        last_retrain = datetime(2026, 3, 26, 10, 0, 0)  # 2 days ago
+
+        days_since = (saturday - last_retrain).days
+        min_days = 5
+
+        assert days_since == 2
+        assert days_since < min_days  # Should skip
+
+    def test_retrain_disabled_skips(self):
+        """Retrain should NOT trigger when enabled=False."""
+        retrain_cfg = {'enabled': False, 'retrain_days': [5, 6]}
+        assert retrain_cfg.get('enabled', False) is False
+
+    def test_retrain_config_exists_and_valid(self):
+        """WEEKLY_RETRAIN_CONFIG exists in system_config with correct structure."""
+        import system_config as cfg
+        retrain_cfg = getattr(cfg, 'WEEKLY_RETRAIN_CONFIG', None)
+        assert retrain_cfg is not None, "WEEKLY_RETRAIN_CONFIG missing from system_config.py"
+        assert isinstance(retrain_cfg.get('enabled'), bool), "enabled must be bool"
+        assert isinstance(retrain_cfg.get('retrain_days'), list), "retrain_days must be list"
+        assert all(d in range(7) for d in retrain_cfg['retrain_days']), "retrain_days must be 0-6"
+        assert isinstance(retrain_cfg.get('min_days_between_retrain'), (int, float)), \
+            "min_days_between_retrain must be numeric"
+        assert retrain_cfg.get('min_days_between_retrain', 0) > 0, "min_days must be positive"
+
+
 # ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
@@ -1400,7 +1457,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

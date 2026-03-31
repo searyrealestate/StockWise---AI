@@ -484,6 +484,13 @@ VECTORIZED_DECAY_CONFIG = {
     "min_weight": 0.05,             # Floor — signals never fully forgotten
 }
 
+WEEKLY_RETRAIN_CONFIG = {
+    "enabled": True,
+    "retrain_days": [5, 6],          # Saturday=5, Sunday=6 (datetime.weekday())
+    "last_retrain_path": "data/last_retrain.json",
+    "min_days_between_retrain": 5,   # Don't retrain more than once per 5 days
+}
+
 # Portfolio Risk Management (Phase 5)
 PORTFOLIO_RISK_CONFIG = {
     # --- Correlation Check ---

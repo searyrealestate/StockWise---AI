@@ -770,6 +770,55 @@ class LiveTradingEngine:
             self._save_json(self.positions, self.positions_file)
 
 
+def _check_weekly_retrain(logger):
+    """
+    Weekly Retrain Scheduler (SPEC §4 — Gap 4).
+    Runs execute_training_pipeline() if:
+    1. enabled in config
+    2. Today is a retrain day (Saturday/Sunday)
+    3. Last retrain was more than min_days ago
+    """
+    retrain_cfg = getattr(cfg, 'WEEKLY_RETRAIN_CONFIG', {})
+    if not retrain_cfg.get('enabled', False):
+        return
+
+    today = datetime.now()
+    retrain_days = retrain_cfg.get('retrain_days', [5, 6])
+
+    if today.weekday() not in retrain_days:
+        logger.debug(f"[RETRAIN] Not a retrain day (today={today.weekday()}, retrain_days={retrain_days}), skipping")
+        return
+
+    # Check last retrain timestamp
+    last_path = retrain_cfg.get('last_retrain_path', 'data/last_retrain.json')
+    last_data = safe_json_read(last_path, default={})
+    last_run = last_data.get('last_retrain')
+    min_days = retrain_cfg.get('min_days_between_retrain', 5)
+
+    if last_run:
+        try:
+            days_since = (today - datetime.fromisoformat(last_run)).days
+            if days_since < min_days:
+                logger.info(f"[RETRAIN] Last retrain {days_since}d ago (min={min_days}d), skipping")
+                return
+        except (ValueError, TypeError) as e:
+            logger.warning(f"[RETRAIN] Could not parse last_retrain timestamp: {e}, proceeding with retrain")
+
+    # Execute retrain
+    logger.info("[RETRAIN] === WEEKLY RETRAIN TRIGGERED ===")
+    try:
+        from train_model import RegimeModelTrainer
+        trainer = RegimeModelTrainer()
+        trainer.execute_training_pipeline()
+        safe_json_write(last_path, {
+            "last_retrain": today.isoformat(),
+            "trigger": "weekly_auto"
+        })
+        logger.info("[RETRAIN] === WEEKLY RETRAIN COMPLETE ===")
+    except Exception as e:
+        logger.error(f"[RETRAIN] Weekly retrain failed: {e}")
+
+
 if __name__ == "__main__":
     from data_source_manager import DataSourceManager
     from strategy_engine import StrategyEngine, RiskActuary
@@ -817,6 +866,10 @@ if __name__ == "__main__":
     fe = FeatureEngine()
 
     logger.info("ENGINE START: Dynamic Heartbeat Protocol Initiated.")
+
+    # ═══ WEEKLY RETRAIN CHECK (SPEC §4 — Gap 4) ═══
+    _check_weekly_retrain(logger)
+    # ════════════════════════════════════════════════
 
     # EOD Tracker Initialization
     last_eod_date = None

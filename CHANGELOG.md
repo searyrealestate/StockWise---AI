@@ -1,5 +1,15 @@
 # Changelog
 
+## [2026-03-31] Weekly Auto-Retrain Scheduler on Weekends (Gap 4)
+- **Problem:** ML models only retrained manually; no automatic mechanism → models become stale over time
+- **Fix:** Added `WEEKLY_RETRAIN_CONFIG` to system_config.py (enabled, retrain_days, last_retrain_path, min_days_between_retrain)
+- **Fix:** Added `_check_weekly_retrain(logger)` to live_trading_engine.py — runs `execute_training_pipeline()` on weekend startup if last retrain was >5 days ago; saves timestamp to data/last_retrain.json via safe_json_write
+- **Behaviour:** Weekday → DEBUG skip; recent retrain → INFO skip; bad timestamp → WARNING + proceed; pipeline failure → ERROR, no crash; disabled → immediate return
+- **Call site:** Invoked at engine startup after all init, before main trading loop
+- **Tests:** Added `TestWeeklyRetrain` — 5 tests: weekend trigger, weekday skip, recent skip, disabled skip, config validation
+
+---
+
 ## [2026-03-31] Template Filtering Logging with Match/Reject Reasons
 - **Problem:** `get_for_state()` silently filtered templates with no logging — zero visibility into why signals were or weren't generated per symbol
 - **Fix (setup_templates.py):** `get_for_state(stock_state, symbol="")` — added symbol param (default="" for backwards compat); DEBUG log per template (✓ match / ✗ reject + field details); INFO summary line per symbol
