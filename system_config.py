@@ -436,7 +436,8 @@ PRE_MARKET_CONFIG = {
 }
 
 REGIME_CONFIG = {
-    "enable_realtime_state_refresh": True,  # Gap 1a: run classify_stock_state() in live loop
+    "enable_realtime_state_refresh": True,   # Gap 1a: run classify_stock_state() in live loop
+    "enable_halt_template_blocking": True,   # Gap 1b: HALT regime blocks template scan
 }
 
 # Shadow Ledger: Candle-by-Candle Learning Engine (SPEC v13.4 §4)

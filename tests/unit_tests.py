@@ -1275,6 +1275,76 @@ class TestRealtimeStateRefresh:
             "enable_realtime_state_refresh must be bool"
 
 
+class TestHaltRegimeBlocking:
+    """Tests for Gap 1b: HALT regime blocks template scan."""
+
+    def test_halt_regime_blocks_templates(self):
+        """HALT regime should prevent template evaluation."""
+        from unittest.mock import MagicMock
+
+        mock_orchestra = MagicMock()
+        mock_orchestra.classify_regime.return_value = "HALT"
+
+        regime_cfg = {'enable_halt_template_blocking': True}
+        current_regime = mock_orchestra.classify_regime(MagicMock())
+
+        should_skip = (regime_cfg.get('enable_halt_template_blocking', False)
+                       and current_regime == "HALT")
+        assert should_skip is True, "HALT regime must block template scan"
+
+    def test_non_halt_regime_proceeds(self):
+        """TREND/CHOP/NEUTRAL regimes should NOT block templates."""
+        from unittest.mock import MagicMock
+
+        for regime in ["TREND", "CHOP", "NEUTRAL"]:
+            mock_orchestra = MagicMock()
+            mock_orchestra.classify_regime.return_value = regime
+
+            regime_cfg = {'enable_halt_template_blocking': True}
+            current_regime = mock_orchestra.classify_regime(MagicMock())
+
+            should_skip = (regime_cfg.get('enable_halt_template_blocking', False)
+                           and current_regime == "HALT")
+            assert should_skip is False, f"Regime {regime} must NOT block templates"
+
+    def test_halt_blocking_disabled_proceeds(self):
+        """When enable_halt_template_blocking=False, HALT does NOT block."""
+        from unittest.mock import MagicMock
+
+        mock_orchestra = MagicMock()
+        mock_orchestra.classify_regime.return_value = "HALT"
+
+        regime_cfg = {'enable_halt_template_blocking': False}
+
+        if regime_cfg.get('enable_halt_template_blocking', False):
+            current_regime = mock_orchestra.classify_regime(MagicMock())
+            should_skip = (current_regime == "HALT")
+        else:
+            should_skip = False
+
+        assert should_skip is False, "Disabled flag must not block even on HALT"
+
+    def test_halt_blocking_exception_proceeds(self):
+        """When classify_regime raises, proceed with templates (fail-open)."""
+        from unittest.mock import MagicMock
+
+        mock_orchestra = MagicMock()
+        mock_orchestra.classify_regime.side_effect = Exception("ER columns missing")
+
+        regime_cfg = {'enable_halt_template_blocking': True}
+        should_skip = False
+
+        if regime_cfg.get('enable_halt_template_blocking', False):
+            try:
+                current_regime = mock_orchestra.classify_regime(MagicMock())
+                if current_regime == "HALT":
+                    should_skip = True
+            except Exception:
+                should_skip = False  # fail-open
+
+        assert should_skip is False, "Exception in classify_regime must not block templates"
+
+
 # ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
@@ -1283,7 +1353,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

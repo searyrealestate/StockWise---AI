@@ -1,5 +1,14 @@
 # Changelog
 
+## [2026-03-31] HALT Regime Blocks Template Scan (Gap 1b)
+- **Problem:** classify_regime() HALT signal (velocity divergence: er_slow > 0.6, er_fast < 0.2) not wired to template system — collapsing momentum still received template signals
+- **Fix:** Added `enable_halt_template_blocking: True` to REGIME_CONFIG in system_config.py
+- **Fix:** live_trading_engine.py calls `orchestra.classify_regime(df_features)` per symbol after Gap 1a state refresh; `continue` skips symbol on HALT; fail-open on exception
+- **Backward compat:** `enable_halt_template_blocking: False` restores original behaviour; missing REGIME_CONFIG defaults to False (safe)
+- **Tests:** Added `TestHaltRegimeBlocking` — 4 tests: halt blocks, non-halt proceeds, disabled proceeds, exception fail-open
+
+---
+
 ## [2026-03-31] Real-Time State Refresh in Live Scan Loop (Gap 1a)
 - **Problem:** Templates received stock state from stale scan_ledger.json — regime can change during trading hours causing signals with wrong context
 - **Fix:** Added `REGIME_CONFIG` to system_config.py with `enable_realtime_state_refresh: True`

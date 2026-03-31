@@ -914,6 +914,18 @@ if __name__ == "__main__":
                                 stock_state = full_ledger.get(symbol, {}).get('state', {})
                             # ═══════════════════════════════════════════════════
 
+                            # ═══ HALT REGIME BLOCKING (SPEC §4 — Gap 1b) ═══
+                            if regime_cfg.get('enable_halt_template_blocking', False):
+                                try:
+                                    current_regime = orchestra.classify_regime(df_features)
+                                    if current_regime == "HALT":
+                                        logger.info(f"[{symbol}] [REGIME] HALT detected (velocity divergence) — skipping templates")
+                                        continue
+                                    logger.debug(f"[{symbol}] [REGIME] Regime: {current_regime}")
+                                except Exception as e:
+                                    logger.warning(f"[{symbol}] [REGIME] classify_regime failed, proceeding: {e}")
+                            # ═══════════════════════════════════════════════════
+
                             # ═══ VETO GATE (SPEC v13.4 §3) ═══
                             vetoed, veto_reason = fe.check_veto_gates(df_features, symbol)
                             if vetoed:
