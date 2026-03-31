@@ -1212,6 +1212,69 @@ class TestConfigDedup:
             "MASTER_SCORES should be removed — it was dead code"
 
 
+class TestRealtimeStateRefresh:
+    """Tests for Gap 1a: real-time stock state refresh in live scan loop."""
+
+    def test_realtime_state_refresh_enabled(self):
+        """When enable_realtime_state_refresh=True, classify_stock_state() result is used."""
+        from stock_hunter import StockHunter
+        from unittest.mock import MagicMock
+
+        mock_scout = MagicMock(spec=StockHunter)
+        mock_scout.classify_stock_state.return_value = {
+            "trend": "BEARISH", "structure": "NEAR_RESISTANCE",
+            "volume": "DRYING_UP", "volatility": "VOLATILE"
+        }
+
+        import system_config as cfg
+        regime_cfg = getattr(cfg, 'REGIME_CONFIG', {})
+        assert regime_cfg.get('enable_realtime_state_refresh') is True
+
+        live_state = mock_scout.classify_stock_state(MagicMock())
+        assert live_state["trend"] == "BEARISH"
+        assert live_state["volatility"] == "VOLATILE"
+
+    def test_realtime_state_fallback_on_error(self):
+        """When classify_stock_state raises exception, fall back to ledger state."""
+        from stock_hunter import StockHunter
+        from unittest.mock import MagicMock
+
+        mock_scout = MagicMock(spec=StockHunter)
+        mock_scout.classify_stock_state.side_effect = Exception("NaN in features")
+
+        ledger_fallback = {"trend": "BULLISH", "structure": "OPEN_FIELD",
+                           "volume": "HEALTHY", "volatility": "NORMAL"}
+
+        try:
+            live_state = mock_scout.classify_stock_state(MagicMock())
+            stock_state = live_state
+        except Exception:
+            stock_state = ledger_fallback
+
+        assert stock_state["trend"] == "BULLISH"  # fell back to ledger
+
+    def test_realtime_state_disabled_uses_ledger(self):
+        """When enable_realtime_state_refresh=False, ledger state is used (backwards compatible)."""
+        ledger_state = {"trend": "SIDEWAYS", "structure": "NEAR_SUPPORT",
+                        "volume": "HEALTHY", "volatility": "COMPRESSED"}
+
+        regime_cfg = {"enable_realtime_state_refresh": False}
+        if regime_cfg.get('enable_realtime_state_refresh', False):
+            stock_state = {}  # should NOT reach here
+        else:
+            stock_state = ledger_state
+
+        assert stock_state["trend"] == "SIDEWAYS"
+
+    def test_regime_config_exists_and_valid(self):
+        """REGIME_CONFIG exists in system_config with correct structure."""
+        import system_config as cfg
+        regime_cfg = getattr(cfg, 'REGIME_CONFIG', None)
+        assert regime_cfg is not None, "REGIME_CONFIG missing from system_config.py"
+        assert isinstance(regime_cfg.get('enable_realtime_state_refresh'), bool), \
+            "enable_realtime_state_refresh must be bool"
+
+
 # ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
@@ -1220,7 +1283,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

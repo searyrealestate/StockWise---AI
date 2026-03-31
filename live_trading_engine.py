@@ -896,10 +896,23 @@ if __name__ == "__main__":
 
                         if pipeline_mode in ('templates', 'dual'):
                             # New template-based pipeline
-                            ledger_state = full_ledger.get(symbol, {}).get('state', {})
 
                             # Calculate features for template evaluation
                             df_features = fe.calculate_features(df, strategy_config={"active_indicators": ["all"]})
+
+                            # ═══ REAL-TIME STATE REFRESH (SPEC §4 — Gap 1a) ═══
+                            regime_cfg = getattr(cfg, 'REGIME_CONFIG', {})
+                            if regime_cfg.get('enable_realtime_state_refresh', False):
+                                try:
+                                    live_state = scout.classify_stock_state(df_features)
+                                    stock_state = live_state
+                                    logger.info(f"[{symbol}] [REGIME] Real-time state: {live_state}")
+                                except Exception as e:
+                                    stock_state = full_ledger.get(symbol, {}).get('state', {})
+                                    logger.warning(f"[{symbol}] [REGIME] Real-time state failed, fallback to ledger: {e}")
+                            else:
+                                stock_state = full_ledger.get(symbol, {}).get('state', {})
+                            # ═══════════════════════════════════════════════════
 
                             # ═══ VETO GATE (SPEC v13.4 §3) ═══
                             vetoed, veto_reason = fe.check_veto_gates(df_features, symbol)
@@ -909,7 +922,7 @@ if __name__ == "__main__":
                             # ═══════════════════════════════════
 
                             # Run template matcher
-                            signals = matcher.scan_ticker(symbol, df_features, stock_state=ledger_state)
+                            signals = matcher.scan_ticker(symbol, df_features, stock_state=stock_state)
 
                             if signals:
                                 # Use the best signal (highest confidence)

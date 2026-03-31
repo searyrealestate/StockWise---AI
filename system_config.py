@@ -435,6 +435,10 @@ PRE_MARKET_CONFIG = {
     "veto_cooldown_minutes": 60,     # Suppress repeat vetoes for 60 min
 }
 
+REGIME_CONFIG = {
+    "enable_realtime_state_refresh": True,  # Gap 1a: run classify_stock_state() in live loop
+}
+
 # Shadow Ledger: Candle-by-Candle Learning Engine (SPEC v13.4 §4)
 # Runs OFFLINE (weekends) — evaluates all templates across historical data bar-by-bar.
 # Output: per-symbol, per-template win rates used by template_matcher (W4-4).

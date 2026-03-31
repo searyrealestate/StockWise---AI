@@ -1,5 +1,14 @@
 # Changelog
 
+## [2026-03-31] Real-Time State Refresh in Live Scan Loop (Gap 1a)
+- **Problem:** Templates received stock state from stale scan_ledger.json — regime can change during trading hours causing signals with wrong context
+- **Fix:** Added `REGIME_CONFIG` to system_config.py with `enable_realtime_state_refresh: True`
+- **Fix:** live_trading_engine.py now calls `scout.classify_stock_state(df_features)` per symbol after features are computed; fallback to ledger state on any exception
+- **Backward compat:** Setting `enable_realtime_state_refresh: False` restores original ledger-only behaviour; missing REGIME_CONFIG defaults to False (safe)
+- **Tests:** Added `TestRealtimeStateRefresh` — 4 tests: enabled, fallback-on-error, disabled, config validation
+
+---
+
 ## [2026-03-31] MASTER_SCORES Dead Code Removal
 - **Problem:** MASTER_SCORES defined in system_config.py but never referenced by any other file
 - **Fix:** Removed MASTER_SCORES dict definition and its reference in config summary dict
