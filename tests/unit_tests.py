@@ -1160,6 +1160,22 @@ class TestPhase1AtrMult:
         )
 
 
+class TestPauseMinHealthyPullback:
+    """Tests for min_healthy_pullback_pct de-hardcoding (SPEC §5)."""
+
+    def test_pause_min_healthy_pullback_in_config(self):
+        """Verify min_healthy_pullback_pct exists in POSITION_MANAGEMENT_CONFIG."""
+        from system_config import POSITION_MANAGEMENT_CONFIG
+        assert "min_healthy_pullback_pct" in POSITION_MANAGEMENT_CONFIG
+        assert POSITION_MANAGEMENT_CONFIG["min_healthy_pullback_pct"] == 0.005
+
+    def test_pause_min_healthy_pullback_range(self):
+        """Verify min_healthy_pullback_pct is in valid range (0-5%)."""
+        from system_config import POSITION_MANAGEMENT_CONFIG
+        val = POSITION_MANAGEMENT_CONFIG["min_healthy_pullback_pct"]
+        assert 0 < val < 0.05
+
+
 # ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================

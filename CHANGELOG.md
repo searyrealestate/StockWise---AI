@@ -1,5 +1,13 @@
 # Changelog
 
+## [2026-03-31] PAUSE Min Pullback De-Hardcode
+- **Problem:** min_healthy_pullback_pct (0.005) hardcoded in live_trading_engine.py line 265
+- **Fix:** Added min_healthy_pullback_pct to POSITION_MANAGEMENT_CONFIG in system_config.py, read via config in live_trading_engine.py
+- **Tests:** Added test_pause_min_healthy_pullback_in_config, test_pause_min_healthy_pullback_range
+- **Impact:** All PHASE_PAUSE thresholds now fully configurable — zero hardcoded values
+
+---
+
 ## [2026-03-31] fix(kinetic-stop): phase1_atr_mult 2.0→1.5 — reduce initial stop distance
 
 ### Fixed

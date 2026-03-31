@@ -449,6 +449,7 @@ MILESTONE_ALERT_CONFIG = {
 # Position Management Configuration
 POSITION_MANAGEMENT_CONFIG = {
     # PHASE_PAUSE: Healthy pullback detection
+    "min_healthy_pullback_pct": 0.005,   # Minimum pullback to trigger PAUSE (below = noise, not pullback)
     "max_healthy_pullback_pct": 0.03,    # Up to 3% pullback = still healthy
     "min_er_for_pause": 0.45,            # ER must be above this for "trend intact"
     "min_rsi_for_pause": 40,             # RSI must be above this for "not oversold"

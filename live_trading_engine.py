@@ -257,12 +257,13 @@ class LifecycleManager:
         rsi = position.get('last_rsi', 50)
         _pause_cfg = getattr(cfg, 'POSITION_MANAGEMENT_CONFIG', {})
         _max_pullback = _pause_cfg.get('max_healthy_pullback_pct', 0.03)
+        _min_pullback = _pause_cfg.get('min_healthy_pullback_pct', 0.005)
         _min_er = _pause_cfg.get('min_er_for_pause', 0.45)
         _min_rsi = _pause_cfg.get('min_rsi_for_pause', 40)
         _is_healthy_pullback = (
             not position.get("runner_mode") and
             profit_pct >= self.stop_cfg["phase3_parabolic_trigger_pct"] and  # PAUSE only from Phase 3+ (SPEC v13.4 §5)
-            0.005 < pullback_pct <= _max_pullback and
+            _min_pullback < pullback_pct <= _max_pullback and
             er_slow >= _min_er and
             rsi >= _min_rsi
         )
