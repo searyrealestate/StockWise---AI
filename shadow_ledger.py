@@ -95,6 +95,12 @@ class ShadowLedger:
             }
             last_signal_bar[t.id] = -self.cooldown  # Allow first signal immediately
 
+        # Coverage gap tracking — reset per symbol call
+        cov_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {}).get("coverage_gap", {})
+        if cov_cfg.get("enabled", False):
+            if not hasattr(self, '_coverage_data'):
+                self._coverage_data = {}
+
         # Walk candle-by-candle (skip first min_candles for indicator warmup)
         eval_end = len(df) - self.lookahead
         for i in range(min_candles, eval_end):
@@ -110,6 +116,17 @@ class ShadowLedger:
 
             # Filter templates by state if we have one; otherwise use all enabled
             matching = self.tm.get_for_state(state) if state else templates
+
+            # Coverage gap tracking — record per bar
+            if cov_cfg.get("enabled", False) and state:
+                try:
+                    bar_date = df.index[i]
+                    self._record_state_coverage(
+                        symbol, state, len(matching),
+                        [t.name for t in matching], bar_date
+                    )
+                except Exception as _cov_exc:
+                    logger.debug(f"[{symbol}] Coverage tracking error at bar {i}: {_cov_exc}")
 
             for template in matching:
                 try:
@@ -207,6 +224,589 @@ class ShadowLedger:
             f"{total_signals} signals across {len(templates)} templates"
         )
         return results
+
+    def _finalize_coverage_gaps(self):
+        """
+        Called after all symbols have been evaluated.
+        Runs gap analysis, saves report, logs results.
+        """
+        cov_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {}).get("coverage_gap", {})
+        if not cov_cfg.get("enabled", False):
+            return
+        if not getattr(self, '_coverage_data', {}):
+            return
+        try:
+            report = self._analyze_coverage_gaps()
+            self._save_coverage_gaps(report)
+            self._log_coverage_report(report)
+        except Exception as e:
+            logger.error(f"[Coverage] Gap analysis failed: {e}")
+
+    # ═══════════════════════════════════════════════════════════════
+    # COVERAGE GAP DETECTION  (SPEC §4)
+    # ═══════════════════════════════════════════════════════════════
+
+    # ── A. Per-bar state accumulator ─────────────────────────────
+
+    def _record_state_coverage(self, symbol, state_dict, templates_matched,
+                               template_names, bar_date):
+        """Accumulate state coverage data for one bar (in-memory, not disk)."""
+        try:
+            trend = state_dict.get("trend", "")
+            structure = state_dict.get("structure", "")
+            volume = state_dict.get("volume", "")
+            volatility = state_dict.get("volatility", "")
+            state_key = f"{trend}:{structure}:{volume}:{volatility}"
+
+            cd = self._coverage_data
+            if state_key not in cd:
+                cd[state_key] = {
+                    "bar_count": 0,
+                    "covered_count": 0,
+                    "symbols": {},
+                    "templates_seen": set(),
+                    "bars_by_year": {},
+                }
+
+            entry = cd[state_key]
+            entry["bar_count"] += 1
+            if templates_matched > 0:
+                entry["covered_count"] += 1
+                for t in template_names:
+                    entry["templates_seen"].add(t)
+
+            if symbol not in entry["symbols"]:
+                entry["symbols"][symbol] = {"total": 0, "covered": 0}
+            entry["symbols"][symbol]["total"] += 1
+            if templates_matched > 0:
+                entry["symbols"][symbol]["covered"] += 1
+
+            try:
+                ts = pd.Timestamp(bar_date)
+                year = str(ts.year)
+            except Exception:
+                year = str(bar_date)[:4]
+            entry["bars_by_year"][year] = entry["bars_by_year"].get(year, 0) + 1
+        except Exception as e:
+            logger.debug(f"[Coverage] _record_state_coverage error: {e}")
+
+    # ── B. Gap type classifier ────────────────────────────────────
+
+    def _classify_gap_type(self, state_key, templates_matched_ever, disabled_combos):
+        """Return "TRUE_GAP" | "EFFECTIVE_GAP" | "COVERED"."""
+        try:
+            if templates_matched_ever == 0:
+                return "TRUE_GAP"
+
+            # If at least one matching template exists but all combos for this state
+            # appear in disabled_combos → EFFECTIVE_GAP
+            # Simplified: if covered_count==0 but templates_matched_ever>0 → EFFECTIVE_GAP
+            cd = self._coverage_data.get(state_key, {})
+            covered = cd.get("covered_count", 0)
+            if covered == 0:
+                return "EFFECTIVE_GAP"
+
+            return "COVERED"
+        except Exception:
+            return "TRUE_GAP"
+
+    # ── C. Near-miss finder ───────────────────────────────────────
+
+    def _find_near_miss(self, state_key, all_templates):
+        """Find the template closest to covering this state (fewest axis mismatches)."""
+        try:
+            parts = state_key.split(":")
+            if len(parts) != 4:
+                return None
+            actual = {"trend": parts[0], "structure": parts[1],
+                      "volume": parts[2], "volatility": parts[3]}
+            AXES = ("trend", "structure", "volume", "volatility")
+
+            best = None
+            best_matches = -1
+
+            for template in all_templates:
+                req = getattr(template, 'required_state', {})
+                if not req:
+                    continue
+                matching = 0
+                blocking = []
+                for ax in AXES:
+                    req_vals = req.get(ax, [])
+                    if not req_vals:
+                        matching += 1
+                        continue
+                    if actual.get(ax, "") in req_vals:
+                        matching += 1
+                    else:
+                        blocking.append({
+                            "axis": ax,
+                            "required": req_vals,
+                            "actual": actual.get(ax, ""),
+                        })
+                if matching > best_matches and matching >= 2:
+                    best_matches = matching
+                    fix = f"Add {actual.get(blocking[0]['axis'], '')} to {template.name} {blocking[0]['axis']} requirement" if blocking else ""
+                    best = {
+                        "closest_template": template.name,
+                        "matching_axes": matching,
+                        "blocking_fields": blocking,
+                        "fix_suggestion": fix,
+                    }
+
+            return best
+        except Exception as e:
+            logger.debug(f"[Coverage] _find_near_miss error: {e}")
+            return None
+
+    # ── D. Opportunity scorer ─────────────────────────────────────
+
+    def _calc_opportunity_score(self, state_entry, state_key,
+                                total_bars_scanned, total_symbols,
+                                recent_cutoff_year):
+        """Return 0-1 float scoring how valuable a template for this gap would be."""
+        try:
+            bar_count = state_entry.get("bar_count", 0)
+            symbols = state_entry.get("symbols", {})
+            bars_by_year = state_entry.get("bars_by_year", {})
+
+            # Volume score from state key
+            volume_part = state_key.split(":")[2] if ":" in state_key else ""
+            vol_map = {"HEALTHY": 1.0, "SURGING": 0.8, "SURGE": 0.8,
+                       "LOW": 0.3, "DRY": 0.3}
+            volume_score = vol_map.get(volume_part, 0.5)
+
+            # Recency: bars in recent period / total
+            recent_bars = sum(
+                v for k, v in bars_by_year.items()
+                if k.isdigit() and int(k) >= recent_cutoff_year
+            )
+            recency_score = min(recent_bars / max(bar_count, 1), 1.0)
+
+            # Frequency
+            frequency_score = min(bar_count / max(total_bars_scanned, 1) * 10, 1.0)
+
+            # Diversity
+            diversity_score = len(symbols) / max(total_symbols, 1)
+
+            score = (
+                volume_score * 0.3
+                + recency_score * 0.3
+                + frequency_score * 0.2
+                + diversity_score * 0.2
+            )
+            return round(score, 3)
+        except Exception:
+            return 0.0
+
+    # ── E. Coverage overlap ───────────────────────────────────────
+
+    def _find_coverage_overlap(self):
+        """Identify over-covered and single-coverage states."""
+        over_covered = []
+        single_coverage = []
+
+        for state_key, entry in self._coverage_data.items():
+            tmpl_names = list(entry.get("templates_seen", set()))
+            n_templates = len(tmpl_names)
+            bars = entry.get("bar_count", 0)
+
+            if n_templates > 1:
+                over_covered.append({
+                    "state": state_key,
+                    "templates": n_templates,
+                    "template_names": sorted(tmpl_names),
+                    "bars": bars,
+                })
+            elif n_templates == 1:
+                single_coverage.append({
+                    "state": state_key,
+                    "template": tmpl_names[0],
+                    "bars": bars,
+                    "risk": "HIGH",
+                })
+
+        over_covered.sort(key=lambda x: x["templates"], reverse=True)
+        return {"over_covered": over_covered, "single_coverage": single_coverage}
+
+    # ── F. Disable-created gaps ───────────────────────────────────
+
+    def _find_disable_created_gaps(self, disabled_combos):
+        """Find states/symbols that lost coverage due to auto-disable."""
+        result = []
+        try:
+            for combo_key in disabled_combos:
+                parts = combo_key.split("::")
+                if len(parts) != 3:
+                    continue
+                tmpl_id, symbol, trend = parts
+
+                # Find matching state entries for this symbol+trend
+                for state_key, entry in self._coverage_data.items():
+                    if not state_key.startswith(trend + ":"):
+                        continue
+                    sym_data = entry.get("symbols", {}).get(symbol)
+                    if sym_data is None:
+                        continue
+
+                    tmpl_names = list(entry.get("templates_seen", set()))
+                    was_only = (len(tmpl_names) == 0 or
+                                (len(tmpl_names) == 1 and tmpl_id in tmpl_names))
+
+                    uncovered_bars = sym_data.get("total", 0) - sym_data.get("covered", 0)
+                    result.append({
+                        "symbol": symbol,
+                        "state": state_key,
+                        "disabled_template": tmpl_id,
+                        "was_only_template": was_only,
+                        "bars_now_uncovered": uncovered_bars,
+                        "action": "NEEDS_REPLACEMENT" if was_only else "REDUCED_COVERAGE",
+                    })
+        except Exception as e:
+            logger.debug(f"[Coverage] _find_disable_created_gaps error: {e}")
+        return result
+
+    # ── G. Main analysis ─────────────────────────────────────────
+
+    def _analyze_coverage_gaps(self):
+        """Build full coverage gap report from accumulated _coverage_data."""
+        cov_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {}).get("coverage_gap", {})
+        min_bars = cov_cfg.get("min_bars_to_report", 50)
+        warn_pct = cov_cfg.get("min_gap_pct_to_warn", 0.20)
+        alert_pct = cov_cfg.get("min_gap_pct_to_alert", 0.50)
+        top_n = cov_cfg.get("report_top_n_gaps", 10)
+        recent_months = cov_cfg.get("recent_period_months", 12)
+
+        import datetime as dt_module
+        now_year = dt_module.datetime.now().year
+        recent_cutoff_year = now_year - (recent_months // 12)
+
+        cd = getattr(self, '_coverage_data', {})
+        all_templates = self.tm.get_enabled()
+
+        # Aggregate totals
+        total_bars = sum(e["bar_count"] for e in cd.values())
+        total_covered = sum(e["covered_count"] for e in cd.values())
+        total_uncovered = total_bars - total_covered
+        cov_pct = round(total_covered / max(total_bars, 1) * 100, 1)
+        all_symbols = set()
+        for e in cd.values():
+            all_symbols.update(e.get("symbols", {}).keys())
+        total_symbols = len(all_symbols)
+
+        # Load disabled combos
+        try:
+            from template_matcher import TemplateMatcher as _TM
+            _tm_inst = _TM.__new__(_TM)
+            _tm_inst.tm = self.tm
+            disabled_combos = _tm_inst._load_disable_list()
+        except Exception:
+            disabled_combos = set()
+
+        # ── Gaps by state ─────────────────────────────────────────
+        gaps_by_state = []
+        state_distribution = {}
+
+        for state_key, entry in cd.items():
+            bar_count = entry["bar_count"]
+            covered = entry["covered_count"]
+            tmpl_names = list(entry["templates_seen"])
+
+            # State distribution (all states)
+            state_distribution[state_key] = {
+                "bars": bar_count,
+                "covered": covered > 0,
+                "templates": len(tmpl_names),
+                "template_names": sorted(tmpl_names),
+            }
+
+            # Gap candidates only
+            if covered == 0 and bar_count >= min_bars:
+                gap_type = self._classify_gap_type(
+                    state_key, len(tmpl_names), disabled_combos
+                )
+
+                # Temporal
+                recent_bars = sum(
+                    v for k, v in entry["bars_by_year"].items()
+                    if k.isdigit() and int(k) >= recent_cutoff_year
+                )
+                temporal = dict(entry["bars_by_year"])
+                temporal["recent_12m_bars"] = recent_bars
+                temporal["recent_12m_pct"] = round(recent_bars / max(bar_count, 1) * 100, 1)
+
+                # Near-miss
+                near_miss = None
+                if cov_cfg.get("track_near_miss"):
+                    near_miss = self._find_near_miss(state_key, all_templates)
+
+                # Opportunity score
+                opp_score = self._calc_opportunity_score(
+                    entry, state_key, total_bars, total_symbols, recent_cutoff_year
+                ) if cov_cfg.get("track_opportunity_score") else 0.0
+
+                # Disabled template info
+                disabled_tmpl = None
+                if gap_type == "EFFECTIVE_GAP":
+                    for ck in disabled_combos:
+                        parts = ck.split("::")
+                        if len(parts) == 3 and parts[0] in tmpl_names:
+                            disabled_tmpl = parts[0]
+                            break
+
+                sym_bar_counts = {
+                    sym: sdata["total"]
+                    for sym, sdata in entry["symbols"].items()
+                }
+
+                gaps_by_state.append({
+                    "state": state_key,
+                    "gap_type": gap_type,
+                    "bar_count": bar_count,
+                    "pct_of_total": round(bar_count / max(total_bars, 1) * 100, 1),
+                    "symbols_affected": sorted(entry["symbols"].keys()),
+                    "symbol_bar_counts": sym_bar_counts,
+                    "temporal": temporal,
+                    "near_miss": near_miss,
+                    "opportunity_score": opp_score,
+                    "disabled_template": disabled_tmpl,
+                    "disabled_wr": None,
+                })
+
+        # Sort: opportunity_score desc, then bar_count desc
+        gaps_by_state.sort(key=lambda g: (-g["opportunity_score"], -g["bar_count"]))
+        gaps_by_state = gaps_by_state[:top_n]
+
+        # ── Gaps by symbol ────────────────────────────────────────
+        sym_totals = {}
+        sym_uncovered = {}
+        sym_state_uncovered = {}
+
+        for state_key, entry in cd.items():
+            for sym, sdata in entry["symbols"].items():
+                sym_totals[sym] = sym_totals.get(sym, 0) + sdata["total"]
+                unc = sdata["total"] - sdata["covered"]
+                if unc > 0:
+                    sym_uncovered[sym] = sym_uncovered.get(sym, 0) + unc
+                    if sym not in sym_state_uncovered:
+                        sym_state_uncovered[sym] = []
+                    sym_state_uncovered[sym].append({"state": state_key, "bars": unc})
+
+        gaps_by_symbol = []
+        for sym in all_symbols:
+            total_s = sym_totals.get(sym, 0)
+            unc_s = sym_uncovered.get(sym, 0)
+            cov_s_pct = round((total_s - unc_s) / max(total_s, 1) * 100, 1)
+            unc_pct = 1.0 - (cov_s_pct / 100.0)
+
+            if unc_pct >= alert_pct:
+                alert_level = "ALERT"
+            elif unc_pct >= warn_pct:
+                alert_level = "WARNING"
+            else:
+                alert_level = "OK"
+
+            states_unc = sorted(
+                sym_state_uncovered.get(sym, []),
+                key=lambda x: -x["bars"]
+            )
+            dominant = states_unc[0]["state"] if states_unc else ""
+
+            gaps_by_symbol.append({
+                "symbol": sym,
+                "total_bars": total_s,
+                "uncovered_bars": unc_s,
+                "coverage_pct": cov_s_pct,
+                "alert_level": alert_level,
+                "dominant_uncovered_state": dominant,
+                "states_uncovered": states_unc,
+            })
+
+        gaps_by_symbol.sort(key=lambda x: -x["uncovered_bars"])
+
+        # ── Overlap + disable gaps ────────────────────────────────
+        coverage_overlap = self._find_coverage_overlap() if cov_cfg.get("track_overlap") else {}
+        disable_gaps = self._find_disable_created_gaps(disabled_combos) if cov_cfg.get("track_disable_created_gaps") else []
+
+        # ── Recommendations ───────────────────────────────────────
+        recommendations = []
+        priority = 1
+
+        # REPLACE_DISABLED — urgent
+        for dcg in disable_gaps:
+            if dcg["was_only_template"]:
+                recommendations.append({
+                    "priority": priority,
+                    "action": "REPLACE_DISABLED",
+                    "target_state": dcg["state"],
+                    "opportunity_bars": dcg["bars_now_uncovered"],
+                    "opportunity_score": 1.0,
+                    "symbols": [dcg["symbol"]],
+                    "reason": f"Auto-disable of {dcg['disabled_template']} created coverage gap",
+                    "near_miss": None,
+                })
+                priority += 1
+
+        # CREATE/MODIFY from gap analysis
+        for gap in gaps_by_state:
+            nm = gap.get("near_miss")
+            score = gap["opportunity_score"]
+
+            if nm and len(nm.get("blocking_fields", [])) == 1:
+                recommendations.append({
+                    "priority": priority,
+                    "action": "MODIFY_TEMPLATE",
+                    "target_state": gap["state"],
+                    "opportunity_bars": gap["bar_count"],
+                    "opportunity_score": score,
+                    "symbols": gap["symbols_affected"],
+                    "reason": nm.get("fix_suggestion", "Extend one axis of existing template"),
+                    "near_miss": nm,
+                })
+            elif score > 0.5 and nm:
+                recommendations.append({
+                    "priority": priority,
+                    "action": "CREATE_TEMPLATE",
+                    "target_state": gap["state"],
+                    "opportunity_bars": gap["bar_count"],
+                    "opportunity_score": score,
+                    "symbols": gap["symbols_affected"],
+                    "reason": f"Feasible: close to {nm['closest_template']} but needs new template",
+                    "near_miss": nm,
+                })
+            elif score > 0.5:
+                recommendations.append({
+                    "priority": priority,
+                    "action": "CREATE_TEMPLATE",
+                    "target_state": gap["state"],
+                    "opportunity_bars": gap["bar_count"],
+                    "opportunity_score": score,
+                    "symbols": gap["symbols_affected"],
+                    "reason": "High-opportunity gap with no close template match",
+                    "near_miss": None,
+                })
+            priority += 1
+
+        recommendations.sort(key=lambda r: r["priority"])
+
+        report = {
+            "last_analysis": datetime.now().date().isoformat(),
+            "total_bars_scanned": total_bars,
+            "total_bars_covered": total_covered,
+            "total_bars_uncovered": total_uncovered,
+            "coverage_pct": cov_pct,
+            "gaps_by_state": gaps_by_state,
+            "gaps_by_symbol": gaps_by_symbol,
+            "state_distribution": state_distribution,
+            "coverage_overlap": coverage_overlap,
+            "disable_created_gaps": disable_gaps,
+            "recommendations": recommendations,
+            "history": [],
+        }
+        return report
+
+    # ── H. Save coverage gaps ─────────────────────────────────────
+
+    def _save_coverage_gaps(self, report):
+        """Persist coverage gap report to shadow_ledger.json, append history."""
+        try:
+            data = safe_json_read(self.ledger_path, default={})
+
+            # Append history entry (max 52 weekly entries)
+            history = data.get("coverage_gaps", {}).get("history", [])
+            history.append({
+                "date": report["last_analysis"],
+                "coverage_pct": report["coverage_pct"],
+                "uncovered_states": len(report["gaps_by_state"]),
+            })
+            if len(history) > 52:
+                history = history[-52:]
+
+            # Convert sets to lists for JSON serialization (safety)
+            report_serializable = self._make_serializable(report)
+            report_serializable["history"] = history
+
+            data["coverage_gaps"] = report_serializable
+            safe_json_write(self.ledger_path, data)
+        except Exception as e:
+            logger.error(f"[Coverage] _save_coverage_gaps failed: {e}")
+
+    @staticmethod
+    def _make_serializable(obj):
+        """Recursively convert sets → sorted lists for JSON serialization."""
+        if isinstance(obj, set):
+            return sorted(obj)
+        if isinstance(obj, dict):
+            return {k: ShadowLedger._make_serializable(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [ShadowLedger._make_serializable(i) for i in obj]
+        return obj
+
+    # ── I. Log coverage report ────────────────────────────────────
+
+    def _log_coverage_report(self, report):
+        """Emit structured log lines for the coverage gap report."""
+        total = report.get("total_bars_scanned", 0)
+        covered = report.get("total_bars_covered", 0)
+        uncovered = report.get("total_bars_uncovered", 0)
+        cov_pct = report.get("coverage_pct", 0.0)
+        gaps = report.get("gaps_by_state", [])
+        top = gaps[0] if gaps else {}
+
+        logger.info(
+            f"[COVERAGE-SUMMARY] total_bars={total} | "
+            f"covered={covered} ({cov_pct / 100:.1%}) | "
+            f"uncovered={uncovered} | "
+            f"gap_states={len(gaps)} | "
+            f"top_gap={top.get('state', 'N/A')} "
+            f"({top.get('bar_count', 0)} bars, score={top.get('opportunity_score', 0):.2f})"
+        )
+
+        for gap in gaps:
+            nm = gap.get("near_miss") or {}
+            logger.info(
+                f"[COVERAGE-GAP] state={gap['state']} | "
+                f"type={gap['gap_type']} | "
+                f"bars={gap['bar_count']} | "
+                f"pct={gap['pct_of_total']:.1f}% | "
+                f"symbols={gap['symbols_affected']} | "
+                f"recent_12m={gap['temporal'].get('recent_12m_bars', 0)} | "
+                f"score={gap['opportunity_score']:.2f} | "
+                f"near_miss={nm.get('closest_template', 'NONE')}"
+            )
+
+        for sym in report.get("gaps_by_symbol", []):
+            if sym["alert_level"] != "OK":
+                unc = sym["uncovered_bars"]
+                tot = sym["total_bars"]
+                logger.warning(
+                    f"[COVERAGE-GAP] symbol={sym['symbol']} | "
+                    f"uncovered={unc}/{tot} ({100 - sym['coverage_pct']:.1f}%) | "
+                    f"dominant_state={sym['dominant_uncovered_state']} | "
+                    f"status={sym['alert_level']}"
+                )
+
+        for dcg in report.get("disable_created_gaps", []):
+            if dcg.get("was_only_template"):
+                logger.warning(
+                    f"[COVERAGE-GAP] DISABLE_CREATED | "
+                    f"symbol={dcg['symbol']} | state={dcg['state']} | "
+                    f"disabled={dcg['disabled_template']} | "
+                    f"was_only_template=True | "
+                    f"bars_uncovered={dcg['bars_now_uncovered']} | "
+                    f"action=NEEDS_REPLACEMENT"
+                )
+
+        for rec in report.get("recommendations", [])[:5]:
+            logger.info(
+                f"[COVERAGE-RECOMMEND] priority={rec['priority']} | "
+                f"action={rec['action']} | "
+                f"state={rec['target_state']} | "
+                f"bars={rec['opportunity_bars']} | "
+                f"score={rec['opportunity_score']:.2f} | "
+                f"symbols={rec['symbols']} | "
+                f"reason={rec['reason']}"
+            )
 
     def _resolve_outcome(self, df, entry_idx, entry_price, stop_loss, take_profit):
         """
@@ -976,6 +1576,9 @@ class ShadowLedger:
         days_back = self.config.get('eval_days_back', 1095)
         min_candles = self.config.get('min_candles_for_eval', 200)
 
+        # Reset coverage accumulator for this batch run
+        self._coverage_data = {}
+
         logger.info(
             f"Shadow Ledger: Starting full evaluation for "
             f"{len(symbols)} symbols, {days_back} days back"
@@ -1031,6 +1634,9 @@ class ShadowLedger:
             logger.info("Template block_stats saved to disk")
         except Exception as e:
             logger.warning(f"Failed to save template block_stats: {e}")
+
+        # Coverage gap analysis — runs once across all evaluated symbols
+        self._finalize_coverage_gaps()
 
         self._save_ledger()
         logger.info(

@@ -1294,3 +1294,443 @@ class TestAttributionSystem:
 
         assert read_calls, "safe_json_read must be called"
         assert write_calls, "safe_json_write must be called"
+
+
+# ═══════════════════════════════════════════════════════
+# 6.10  COVERAGE GAP DETECTION TESTS  (CG-01 → CG-27)
+# ═══════════════════════════════════════════════════════
+
+class TestCoverageGapDetection:
+    """Coverage gap detection — per-bar accumulation, gap classification,
+    near-miss, opportunity scoring, overlap, disable-created gaps,
+    analysis, persistence, and edge cases (CG-01 → CG-27)."""
+
+    @pytest.fixture
+    def sl(self):
+        return _make_sl()
+
+    # ── Core gap detection (CG-01 → CG-07) ──────────────────────────
+
+    # CG-01: _record_state_coverage accumulates bar_count and covered_count
+    def test_cg01_record_coverage_accumulates(self, sl):
+        sl._coverage_data = {}
+        state = {"trend": "BULLISH", "structure": "UPTREND",
+                 "volume": "HEALTHY", "volatility": "NORMAL"}
+        sl._record_state_coverage("AAPL", state, 2, ["TMPL_A", "TMPL_B"],
+                                  pd.Timestamp("2025-06-01"))
+        sl._record_state_coverage("AAPL", state, 1, ["TMPL_A"],
+                                  pd.Timestamp("2025-06-02"))
+        key = "BULLISH:UPTREND:HEALTHY:NORMAL"
+        entry = sl._coverage_data[key]
+        assert entry["bar_count"] == 2
+        assert entry["covered_count"] == 2
+
+    # CG-02: uncovered bar (templates_matched=0) does not increment covered_count
+    def test_cg02_record_coverage_uncovered_bar(self, sl):
+        sl._coverage_data = {}
+        state = {"trend": "BEARISH", "structure": "DOWNTREND",
+                 "volume": "LOW", "volatility": "HIGH"}
+        sl._record_state_coverage("MSFT", state, 0, [],
+                                  pd.Timestamp("2025-06-01"))
+        key = "BEARISH:DOWNTREND:LOW:HIGH"
+        entry = sl._coverage_data[key]
+        assert entry["bar_count"] == 1
+        assert entry["covered_count"] == 0
+
+    # CG-03: _record_state_coverage builds state_key from 4 axes
+    def test_cg03_record_coverage_state_key_format(self, sl):
+        sl._coverage_data = {}
+        state = {"trend": "BULL", "structure": "RANGE",
+                 "volume": "SURGING", "volatility": "LOW"}
+        sl._record_state_coverage("NVDA", state, 1, ["T"],
+                                  pd.Timestamp("2025-01-01"))
+        assert "BULL:RANGE:SURGING:LOW" in sl._coverage_data
+
+    # CG-04: _classify_gap_type returns TRUE_GAP when templates_matched_ever=0
+    def test_cg04_classify_true_gap(self, sl):
+        sl._coverage_data = {}
+        result = sl._classify_gap_type("BEARISH:RANGE:DRY:HIGH", 0, set())
+        assert result == "TRUE_GAP"
+
+    # CG-05: _classify_gap_type returns EFFECTIVE_GAP when covered_count=0
+    #         but templates_matched_ever > 0
+    def test_cg05_classify_effective_gap(self, sl):
+        sl._coverage_data = {
+            "BEARISH:RANGE:DRY:HIGH": {
+                "bar_count": 10, "covered_count": 0,
+                "templates_seen": set(),
+            }
+        }
+        result = sl._classify_gap_type("BEARISH:RANGE:DRY:HIGH", 2, set())
+        assert result == "EFFECTIVE_GAP"
+
+    # CG-06: _classify_gap_type returns COVERED when covered_count > 0
+    def test_cg06_classify_covered(self, sl):
+        sl._coverage_data = {
+            "BULLISH:UPTREND:HEALTHY:NORMAL": {
+                "bar_count": 50, "covered_count": 30,
+                "templates_seen": {"T1"},
+            }
+        }
+        result = sl._classify_gap_type("BULLISH:UPTREND:HEALTHY:NORMAL", 1, set())
+        assert result == "COVERED"
+
+    # CG-07: bars_by_year tracks occurrences by calendar year
+    def test_cg07_record_coverage_bars_by_year(self, sl):
+        sl._coverage_data = {}
+        state = {"trend": "BULLISH", "structure": "UP",
+                 "volume": "HEALTHY", "volatility": "NORMAL"}
+        sl._record_state_coverage("AAPL", state, 1, ["T"],
+                                  pd.Timestamp("2024-03-15"))
+        sl._record_state_coverage("AAPL", state, 1, ["T"],
+                                  pd.Timestamp("2024-08-20"))
+        sl._record_state_coverage("AAPL", state, 0, [],
+                                  pd.Timestamp("2025-01-10"))
+        by_year = sl._coverage_data["BULLISH:UP:HEALTHY:NORMAL"]["bars_by_year"]
+        assert by_year.get("2024", 0) == 2
+        assert by_year.get("2025", 0) == 1
+
+    # ── Analysis features (CG-08 → CG-15) ──────────────────────────
+
+    # CG-08: _find_near_miss returns closest template with blocking_fields populated
+    def test_cg08_find_near_miss_returns_closest(self, sl):
+        tmpl = MagicMock()
+        tmpl.name = "BULL_BREAKOUT"
+        tmpl.required_state = {
+            "trend": ["BULLISH"],
+            "structure": ["UPTREND"],
+            "volume": ["HEALTHY"],
+            "volatility": ["NORMAL", "LOW"],
+        }
+        # state has BEARISH trend — 3 axes match, only trend blocks
+        result = sl._find_near_miss("BEARISH:UPTREND:HEALTHY:NORMAL", [tmpl])
+        assert result is not None
+        assert result["closest_template"] == "BULL_BREAKOUT"
+        assert result["matching_axes"] == 3
+        assert len(result["blocking_fields"]) == 1
+        assert result["blocking_fields"][0]["axis"] == "trend"
+
+    # CG-09: _find_near_miss returns None when no template matches ≥ 2 axes
+    def test_cg09_find_near_miss_no_match(self, sl):
+        tmpl = MagicMock()
+        tmpl.name = "CONTRARIAN"
+        tmpl.required_state = {
+            "trend": ["SIDEWAYS"],
+            "structure": ["WEDGE"],
+            "volume": ["DRY"],
+            "volatility": ["EXTREME"],
+        }
+        # All 4 axes mismatch → matching=0 < threshold 2 → None
+        result = sl._find_near_miss("BULLISH:UPTREND:HEALTHY:NORMAL", [tmpl])
+        assert result is None
+
+    # CG-10: _calc_opportunity_score uses volume_score=1.0 for HEALTHY volume
+    def test_cg10_opportunity_score_healthy_volume(self, sl):
+        state_entry = {
+            "bar_count": 100,
+            "symbols": {"AAPL": {"total": 100, "covered": 0}},
+            "bars_by_year": {"2025": 80, "2024": 20},
+        }
+        # volume_score=1.0, recency=80/100=0.8, frequency=100/1000*10=1.0, diversity=1/5=0.2
+        # 1.0*0.3 + 0.8*0.3 + 1.0*0.2 + 0.2*0.2 = 0.30+0.24+0.20+0.04 = 0.78
+        score = sl._calc_opportunity_score(
+            state_entry, "BULLISH:UP:HEALTHY:NORMAL",
+            total_bars_scanned=1000, total_symbols=5,
+            recent_cutoff_year=2025,
+        )
+        assert 0.0 <= score <= 1.0
+        assert score == pytest.approx(0.78, abs=0.01)
+
+    # CG-11: recency_score increases when bars shift to recent years
+    def test_cg11_opportunity_score_recency(self, sl):
+        old_entry = {
+            "bar_count": 100,
+            "symbols": {"AAPL": {}},
+            "bars_by_year": {"2020": 100},   # all old
+        }
+        new_entry = {
+            "bar_count": 100,
+            "symbols": {"AAPL": {}},
+            "bars_by_year": {"2025": 100},   # all recent
+        }
+        score_old = sl._calc_opportunity_score(
+            old_entry, "BULL:UP:HEALTHY:NORMAL", 1000, 1, 2025)
+        score_new = sl._calc_opportunity_score(
+            new_entry, "BULL:UP:HEALTHY:NORMAL", 1000, 1, 2025)
+        assert score_new > score_old
+
+    # CG-12: _find_coverage_overlap detects over_covered states (≥2 templates)
+    def test_cg12_coverage_overlap_over_covered(self, sl):
+        sl._coverage_data = {
+            "BULLISH:UP:HEALTHY:NORMAL": {
+                "bar_count": 50, "covered_count": 50,
+                "templates_seen": {"TMPL_A", "TMPL_B", "TMPL_C"},
+                "symbols": {},
+            }
+        }
+        result = sl._find_coverage_overlap()
+        assert len(result["over_covered"]) == 1
+        assert result["over_covered"][0]["templates"] == 3
+        assert result["over_covered"][0]["state"] == "BULLISH:UP:HEALTHY:NORMAL"
+
+    # CG-13: _find_coverage_overlap detects single_coverage with risk=HIGH
+    def test_cg13_coverage_overlap_single_coverage(self, sl):
+        sl._coverage_data = {
+            "BEARISH:DOWN:LOW:HIGH": {
+                "bar_count": 30, "covered_count": 30,
+                "templates_seen": {"ONLY_TMPL"},
+                "symbols": {},
+            }
+        }
+        result = sl._find_coverage_overlap()
+        assert len(result["single_coverage"]) == 1
+        sc = result["single_coverage"][0]
+        assert sc["risk"] == "HIGH"
+        assert sc["template"] == "ONLY_TMPL"
+
+    # CG-14: _find_disable_created_gaps returns NEEDS_REPLACEMENT when
+    #         the disabled template was the only template for that state
+    def test_cg14_disable_created_gap_needs_replacement(self, sl):
+        sl._coverage_data = {
+            "BULLISH:UP:HEALTHY:NORMAL": {
+                "bar_count": 100, "covered_count": 0,
+                "templates_seen": set(),
+                "symbols": {"AAPL": {"total": 100, "covered": 0}},
+            }
+        }
+        disabled_combos = {"TMPL_A::AAPL::BULLISH"}
+        result = sl._find_disable_created_gaps(disabled_combos)
+        match = next((r for r in result if r["symbol"] == "AAPL"), None)
+        assert match is not None
+        assert match["action"] == "NEEDS_REPLACEMENT"
+        assert match["was_only_template"] is True
+
+    # CG-15: _find_disable_created_gaps returns REDUCED_COVERAGE when other
+    #         templates also cover the state
+    def test_cg15_disable_created_gap_reduced_coverage(self, sl):
+        sl._coverage_data = {
+            "BULLISH:UP:HEALTHY:NORMAL": {
+                "bar_count": 100, "covered_count": 80,
+                "templates_seen": {"TMPL_A", "TMPL_B"},
+                "symbols": {"AAPL": {"total": 100, "covered": 80}},
+            }
+        }
+        disabled_combos = {"TMPL_A::AAPL::BULLISH"}
+        result = sl._find_disable_created_gaps(disabled_combos)
+        match = next((r for r in result if r["symbol"] == "AAPL"), None)
+        assert match is not None
+        assert match["action"] == "REDUCED_COVERAGE"
+        assert match["was_only_template"] is False
+
+    # ── New analysis dimensions (CG-16 → CG-23) ─────────────────────
+
+    # CG-16: _analyze_coverage_gaps report has all required top-level keys
+    def test_cg16_analyze_gaps_report_keys(self, sl):
+        sl._coverage_data = {
+            "BULLISH:UP:HEALTHY:NORMAL": {
+                "bar_count": 100, "covered_count": 80,
+                "templates_seen": {"T1"},
+                "symbols": {"AAPL": {"total": 100, "covered": 80}},
+                "bars_by_year": {"2025": 100},
+            }
+        }
+        with patch("template_matcher.safe_json_read", return_value={}):
+            report = sl._analyze_coverage_gaps()
+        required_keys = {
+            "last_analysis", "total_bars_scanned", "total_bars_covered",
+            "total_bars_uncovered", "coverage_pct", "gaps_by_state",
+            "gaps_by_symbol", "state_distribution", "coverage_overlap",
+            "disable_created_gaps", "recommendations", "history",
+        }
+        assert required_keys.issubset(set(report.keys()))
+
+    # CG-17: gaps_by_state is sorted by opportunity_score descending
+    def test_cg17_analyze_gaps_sorted_by_opportunity_score(self, sl):
+        sl._coverage_data = {
+            "BULLISH:UP:HEALTHY:NORMAL": {
+                "bar_count": 200, "covered_count": 0, "templates_seen": set(),
+                "symbols": {"AAPL": {"total": 200, "covered": 0}},
+                "bars_by_year": {"2025": 200},
+            },
+            "BULLISH:UP:DRY:NORMAL": {
+                "bar_count": 200, "covered_count": 0, "templates_seen": set(),
+                "symbols": {"AAPL": {"total": 200, "covered": 0}},
+                "bars_by_year": {"2020": 200},  # old bars → lower recency_score
+            },
+        }
+        with patch("template_matcher.safe_json_read", return_value={}):
+            report = sl._analyze_coverage_gaps()
+        gaps = report["gaps_by_state"]
+        if len(gaps) >= 2:
+            assert gaps[0]["opportunity_score"] >= gaps[1]["opportunity_score"]
+
+    # CG-18: gaps_by_state is capped at report_top_n_gaps
+    def test_cg18_analyze_gaps_capped_at_top_n(self, sl):
+        sl._coverage_data = {}
+        for i in range(15):
+            key = f"BULL:UP:HEALTHY:STATE{i}"
+            sl._coverage_data[key] = {
+                "bar_count": 100, "covered_count": 0, "templates_seen": set(),
+                "symbols": {"AAPL": {"total": 100, "covered": 0}},
+                "bars_by_year": {"2025": 100},
+            }
+        top_n = cfg.TEMPLATE_EVOLUTION_CONFIG["coverage_gap"]["report_top_n_gaps"]
+        with patch("template_matcher.safe_json_read", return_value={}):
+            report = sl._analyze_coverage_gaps()
+        assert len(report["gaps_by_state"]) <= top_n
+
+    # CG-19: gaps_by_symbol contains entries for all symbols encountered
+    def test_cg19_analyze_gaps_by_symbol_populated(self, sl):
+        sl._coverage_data = {
+            "BULLISH:UP:HEALTHY:NORMAL": {
+                "bar_count": 100, "covered_count": 50,
+                "templates_seen": {"T1"},
+                "symbols": {
+                    "AAPL": {"total": 60, "covered": 50},
+                    "MSFT": {"total": 40, "covered": 0},
+                },
+                "bars_by_year": {"2025": 100},
+            }
+        }
+        with patch("template_matcher.safe_json_read", return_value={}):
+            report = sl._analyze_coverage_gaps()
+        symbols_in_report = {g["symbol"] for g in report["gaps_by_symbol"]}
+        assert "AAPL" in symbols_in_report
+        assert "MSFT" in symbols_in_report
+
+    # CG-20: alert_level=ALERT when uncovered_pct >= 0.50
+    def test_cg20_analyze_gaps_alert_level(self, sl):
+        # NVDA: 10 covered out of 100 → 90% uncovered → ALERT
+        sl._coverage_data = {
+            "BULLISH:UP:HEALTHY:NORMAL": {
+                "bar_count": 100, "covered_count": 0, "templates_seen": set(),
+                "symbols": {"NVDA": {"total": 100, "covered": 10}},
+                "bars_by_year": {"2025": 100},
+            }
+        }
+        with patch("template_matcher.safe_json_read", return_value={}):
+            report = sl._analyze_coverage_gaps()
+        nvda = next(g for g in report["gaps_by_symbol"] if g["symbol"] == "NVDA")
+        assert nvda["alert_level"] == "ALERT"
+
+    # CG-21: alert_level=WARNING when 0.20 <= uncovered_pct < 0.50
+    def test_cg21_analyze_gaps_warning_level(self, sl):
+        # TSLA: 70 covered out of 100 → 30% uncovered → WARNING
+        sl._coverage_data = {
+            "BULLISH:UP:HEALTHY:NORMAL": {
+                "bar_count": 100, "covered_count": 0, "templates_seen": set(),
+                "symbols": {"TSLA": {"total": 100, "covered": 70}},
+                "bars_by_year": {"2025": 100},
+            }
+        }
+        with patch("template_matcher.safe_json_read", return_value={}):
+            report = sl._analyze_coverage_gaps()
+        tsla = next(g for g in report["gaps_by_symbol"] if g["symbol"] == "TSLA")
+        assert tsla["alert_level"] == "WARNING"
+
+    # CG-22: alert_level=OK when uncovered_pct < 0.20
+    def test_cg22_analyze_gaps_ok_level(self, sl):
+        # AMZN: 90 covered out of 100 → 10% uncovered → OK
+        sl._coverage_data = {
+            "BULLISH:UP:HEALTHY:NORMAL": {
+                "bar_count": 100, "covered_count": 0, "templates_seen": set(),
+                "symbols": {"AMZN": {"total": 100, "covered": 90}},
+                "bars_by_year": {"2025": 100},
+            }
+        }
+        with patch("template_matcher.safe_json_read", return_value={}):
+            report = sl._analyze_coverage_gaps()
+        amzn = next(g for g in report["gaps_by_symbol"] if g["symbol"] == "AMZN")
+        assert amzn["alert_level"] == "OK"
+
+    # CG-23: REPLACE_DISABLED recommendation generated when auto-disable
+    #         created a coverage gap (was_only_template=True)
+    def test_cg23_replace_disabled_recommendation(self, sl):
+        sl._coverage_data = {
+            "BULLISH:UP:HEALTHY:NORMAL": {
+                "bar_count": 100, "covered_count": 0, "templates_seen": set(),
+                "symbols": {"AAPL": {"total": 100, "covered": 0}},
+                "bars_by_year": {"2025": 100},
+            }
+        }
+        with patch("template_matcher.safe_json_read",
+                   return_value={"disabled_combos": ["TMPL_A::AAPL::BULLISH"]}):
+            report = sl._analyze_coverage_gaps()
+        actions = [r["action"] for r in report["recommendations"]]
+        assert "REPLACE_DISABLED" in actions
+
+    # ── Edge cases / system (CG-24 → CG-27) ─────────────────────────
+
+    # CG-24: _make_serializable converts sets → sorted lists (recursive)
+    def test_cg24_make_serializable_sets_to_sorted_lists(self):
+        data = {
+            "templates": {"Z_TMPL", "A_TMPL", "M_TMPL"},
+            "nested": {"inner_set": {3, 1, 2}},
+            "plain": "value",
+        }
+        result = ShadowLedger._make_serializable(data)
+        assert isinstance(result["templates"], list)
+        assert result["templates"] == ["A_TMPL", "M_TMPL", "Z_TMPL"]
+        assert isinstance(result["nested"]["inner_set"], list)
+        assert result["nested"]["inner_set"] == [1, 2, 3]
+        assert result["plain"] == "value"
+
+    # CG-25: _save_coverage_gaps writes coverage_gaps key and appends history
+    def test_cg25_save_coverage_gaps_persists(self, sl):
+        report = {
+            "last_analysis": "2026-04-01",
+            "coverage_pct": 75.0,
+            "gaps_by_state": [{"state": "X:Y:Z:W", "bar_count": 50}],
+            "history": [],
+        }
+        saved = {}
+        with patch("shadow_ledger.safe_json_read", return_value={}), \
+             patch("shadow_ledger.safe_json_write",
+                   side_effect=lambda p, d: saved.update({"d": d})):
+            sl._save_coverage_gaps(report)
+        assert "coverage_gaps" in saved["d"]
+        cg = saved["d"]["coverage_gaps"]
+        assert cg["coverage_pct"] == 75.0
+        assert len(cg["history"]) == 1
+        assert cg["history"][0]["coverage_pct"] == 75.0
+        assert cg["history"][0]["date"] == "2026-04-01"
+
+    # CG-26: _save_coverage_gaps trims history to max 52 entries
+    def test_cg26_save_coverage_gaps_history_max_52(self, sl):
+        old_history = [
+            {"date": f"2024-{i:02d}-01", "coverage_pct": 70.0, "uncovered_states": 5}
+            for i in range(1, 53)
+        ]
+        existing_ledger = {"coverage_gaps": {"history": old_history}}
+        report = {
+            "last_analysis": "2026-04-01",
+            "coverage_pct": 80.0,
+            "gaps_by_state": [],
+            "history": [],
+        }
+        saved = {}
+        with patch("shadow_ledger.safe_json_read", return_value=existing_ledger), \
+             patch("shadow_ledger.safe_json_write",
+                   side_effect=lambda p, d: saved.update({"d": d})):
+            sl._save_coverage_gaps(report)
+        history = saved["d"]["coverage_gaps"]["history"]
+        assert len(history) == 52
+        assert history[-1]["coverage_pct"] == 80.0
+
+    # CG-27: _finalize_coverage_gaps is a no-op when coverage_gap.enabled=False
+    def test_cg27_finalize_noop_when_disabled(self, sl):
+        sl._coverage_data = {
+            "BULLISH:UP:HEALTHY:NORMAL": {
+                "bar_count": 100, "covered_count": 0,
+                "templates_seen": set(),
+                "symbols": {"AAPL": {"total": 100, "covered": 0}},
+                "bars_by_year": {"2025": 100},
+            }
+        }
+        patched_cfg = dict(cfg.TEMPLATE_EVOLUTION_CONFIG)
+        patched_cfg["coverage_gap"] = dict(cfg.TEMPLATE_EVOLUTION_CONFIG["coverage_gap"])
+        patched_cfg["coverage_gap"]["enabled"] = False
+        with patch.object(cfg, "TEMPLATE_EVOLUTION_CONFIG", patched_cfg), \
+             patch("shadow_ledger.safe_json_write") as mock_write:
+            sl._finalize_coverage_gaps()
+        mock_write.assert_not_called()

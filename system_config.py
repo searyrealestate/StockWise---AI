@@ -516,6 +516,21 @@ TEMPLATE_EVOLUTION_CONFIG = {
         "track_concurrent_signals": True,    # How many other signals fired the same day
         "preceding_candle_windows": [3, 5, 10],  # Windows for preceding candle analysis
         "max_attribution_records": 500,      # Rolling cap per template+symbol combo
+    },
+    "coverage_gap": {
+        "enabled": True,
+        "min_bars_to_report": 50,            # Ignore gaps with fewer bars than this
+        "min_gap_pct_to_warn": 0.20,         # 20%+ uncovered per symbol → WARNING
+        "min_gap_pct_to_alert": 0.50,        # 50%+ uncovered per symbol → ALERT
+        "track_state_distribution": True,    # Record all observed states
+        "track_per_symbol": True,            # Per-symbol coverage breakdown
+        "track_near_miss": True,             # Find closest template for each gap
+        "track_temporal": True,              # Split bars by year, compute recent_12m
+        "track_overlap": True,               # Detect over-covered / single-coverage states
+        "track_disable_created_gaps": True,  # Flag gaps caused by auto-disable
+        "track_opportunity_score": True,     # Score each gap for template generation priority
+        "report_top_n_gaps": 10,             # Include only top N gaps in report
+        "recent_period_months": 12,          # Definition of "recent" for recency scoring
     }
 }
 
@@ -551,6 +566,21 @@ def validate_template_evolution_config():
     max_rec = attr.get("max_attribution_records", None)
     assert isinstance(max_rec, int) and max_rec > 0, \
         "attribution.max_attribution_records must be int > 0"
+    cg = TEMPLATE_EVOLUTION_CONFIG.get("coverage_gap", {})
+    assert isinstance(cg.get("min_bars_to_report", None), int) and cg["min_bars_to_report"] > 0, \
+        "coverage_gap.min_bars_to_report must be int > 0"
+    warn_pct = cg.get("min_gap_pct_to_warn", None)
+    assert isinstance(warn_pct, float) and 0.0 < warn_pct < 1.0, \
+        "coverage_gap.min_gap_pct_to_warn must be float in (0, 1)"
+    alert_pct = cg.get("min_gap_pct_to_alert", None)
+    assert isinstance(alert_pct, float) and 0.0 < alert_pct < 1.0, \
+        "coverage_gap.min_gap_pct_to_alert must be float in (0, 1)"
+    assert alert_pct >= warn_pct, \
+        "coverage_gap.min_gap_pct_to_alert must be >= min_gap_pct_to_warn"
+    assert isinstance(cg.get("report_top_n_gaps", None), int) and cg["report_top_n_gaps"] > 0, \
+        "coverage_gap.report_top_n_gaps must be int > 0"
+    assert isinstance(cg.get("recent_period_months", None), int) and cg["recent_period_months"] > 0, \
+        "coverage_gap.recent_period_months must be int > 0"
     return True
 
 

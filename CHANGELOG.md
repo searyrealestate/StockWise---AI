@@ -1,5 +1,36 @@
 # Changelog
 
+## [2026-04-03] Coverage Gap Detection
+
+### Problem
+Shadow Ledger evaluates known templates but has no visibility into market states with zero coverage: states where no template exists (TRUE_GAP), states where all templates have been auto-disabled (EFFECTIVE_GAP), or states at risk from single-template dependency. No mechanism to surface where new or modified templates would add the most value.
+
+### Fix
+- Added `coverage_gap` section to `TEMPLATE_EVOLUTION_CONFIG` in `system_config.py` (13 flags: `enabled`, `min_bars_to_report=50`, `min_gap_pct_to_warn=0.20`, `min_gap_pct_to_alert=0.50`, `track_state_distribution`, `track_per_symbol`, `track_near_miss`, `track_temporal`, `track_overlap`, `track_disable_created_gaps`, `track_opportunity_score`, `report_top_n_gaps=10`, `recent_period_months=12`); `validate_template_evolution_config()` asserts all numeric bounds and ordering (`alert >= warn`)
+- Added 10 methods to `ShadowLedger`:
+  - `_record_state_coverage()` — per-bar accumulator: bar_count, covered_count, symbols dict, templates_seen set, bars_by_year dict; state key = `trend:structure:volume:volatility`
+  - `_classify_gap_type()` — returns TRUE_GAP (0 templates ever matched) / EFFECTIVE_GAP (matched but covered_count=0) / COVERED
+  - `_find_near_miss()` — finds closest template by axis match count (≥2 axes), returns closest_template, matching_axes, blocking_fields, fix_suggestion
+  - `_calc_opportunity_score()` — weighted 0-1 float: volume_score×0.3 + recency_score×0.3 + frequency_score×0.2 + diversity_score×0.2
+  - `_find_coverage_overlap()` — detects over_covered (>1 template) and single_coverage (risk=HIGH) states
+  - `_find_disable_created_gaps()` — cross-references disabled_combos with coverage data; NEEDS_REPLACEMENT or REDUCED_COVERAGE action
+  - `_analyze_coverage_gaps()` — full report: gaps_by_state (sorted by opp_score, capped top_n), gaps_by_symbol (ALERT/WARNING/OK), state_distribution, coverage_overlap, disable_created_gaps, recommendations (REPLACE_DISABLED > CREATE/MODIFY_TEMPLATE), history
+  - `_save_coverage_gaps()` — reads ledger, appends history entry (max 52), writes `coverage_gaps` key back via safe_json_write
+  - `_make_serializable()` — static method; recursively converts sets → sorted lists for JSON
+  - `_log_coverage_report()` — emits [COVERAGE-SUMMARY], [COVERAGE-GAP], [COVERAGE-RECOMMEND] log lines
+  - `_finalize_coverage_gaps()` — no-op when disabled or `_coverage_data` empty; otherwise orchestrates analyze → save → log
+- Integrated per-bar `_record_state_coverage()` call into `evaluate_history()` loop (after `matching = self.tm.get_for_state(state)`)
+- Reset `self._coverage_data = {}` at start of `run_full_evaluation()`; `_finalize_coverage_gaps()` called once before `_save_ledger()`
+- Disabled combos loaded inside `_analyze_coverage_gaps()` via `TemplateMatcher.__new__` + `_load_disable_list()` to avoid circular imports
+
+### Tests
+- 27 new tests (CG-01→27) in `tests/test_template_system.py`:
+  - CG-01→07: core accumulation, state_key format, TRUE_GAP/EFFECTIVE_GAP/COVERED classification, bars_by_year tracking
+  - CG-08→15: near-miss finder, opportunity score (volume + recency), coverage overlap (over/single), disable-created gaps (NEEDS_REPLACEMENT/REDUCED_COVERAGE)
+  - CG-16→23: full report keys, sorting, top_n cap, gaps_by_symbol population, ALERT/WARNING/OK alert levels, REPLACE_DISABLED recommendation
+  - CG-24→27: _make_serializable sets→lists, _save_coverage_gaps persistence, 52-entry history cap, _finalize_coverage_gaps no-op when disabled
+- **Total: 111 passed, 0 failed**
+
 ## [2026-04-03] Template Attribution + Kill Candle Analysis
 
 ### Problem
