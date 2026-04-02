@@ -1,5 +1,48 @@
 # Changelog
 
+## [2026-04-03] Template Attribution + Kill Candle Analysis
+
+### Problem
+Shadow Ledger records win/loss outcomes but not WHY trades succeed or fail. No data on kill candle type, entry quality, volume profile, market context, weakest block, or preceding price action.
+
+### Fix
+- Added `attribution` section to `TEMPLATE_EVOLUTION_CONFIG` in `system_config.py` (12 toggleable features, `preceding_candle_windows=[3,5,10]`, `max_attribution_records=500`); `validate_template_evolution_config()` asserts `preceding_candle_windows` is sorted list of positive ints and `max_attribution_records` is int > 0
+- Added `import math` to `shadow_ledger.py`
+- Added 15 methods to `ShadowLedger`:
+  - `_safe_float()` — NaN/Inf-safe float conversion
+  - `_classify_kill_type()` — gap_down / wick / drift / reversal
+  - `_build_kill_candle_data()` — body/wick/tail/gap/volume/max_favorable/bars_in_trade
+  - `_build_entry_quality()` — entry vs low/open, bars-to-profit, immediate drawdown
+  - `_build_volume_profile()` — entry/exit/avg ratios + increasing/decreasing/flat trend
+  - `_build_market_context()` — SPY day return, trade return, trend (None if no SPY)
+  - `_build_indicator_snapshot()` — RSI/ER/ATR/BB/ADX at entry + exit + delta
+  - `_compute_block_margin()` — per-block margin helper (7 block types)
+  - `_build_weakest_block()` — block with smallest margin to threshold
+  - `_build_risk_reward()` — planned/realized RR, target/stop dist, max_favorable_rr
+  - `_build_time_context()` — day-of-week, dates, bars, calendar days
+  - `_build_preceding_candles()` — multi-window [3,5,10] pattern/momentum/volume/key-levels
+  - `_build_key_levels()` — dist to SMA50/200, swing high/low support/resistance
+  - `_build_concurrent_signals()` — same-day signal count/wins/losses (cache-based)
+  - `_record_attribution()` — rolling storage in `shadow_ledger.json["attributions"]`, cap=500
+  - `_record_signal_attribution()` — orchestrates all builders, each independently try/except
+- Integrated `_record_signal_attribution()` into `evaluate_history()` loop after outcome resolved
+- Attribution stored under `attributions → template_name → symbol → [records]` — never touches `template_stats`
+- Each builder handles NaN/missing/None gracefully (field=None, no crash)
+
+### Files Modified
+- `system_config.py` — attribution config + validation
+- `shadow_ledger.py` — 15 new methods + integration hook
+- `tests/test_template_system.py` — 29 new tests (TA-01→29)
+
+### Tests
+- 29 new tests: TA-01→04 (kill type), TA-05→06 (entry quality), TA-07→08 (volume),
+  TA-09→10 (SPY), TA-11→12 (indicators), TA-13 (weakest block), TA-14 (RR),
+  TA-15 (time), TA-16→18 (preceding candles), TA-19 (key levels), TA-20 (concurrent),
+  TA-21→26 (storage/integration), TA-27→29 (system/regression)
+- All existing tests unchanged
+
+---
+
 ## [2026-04-03] Auto-Disable threshold adjustment + analytics logging
 
 ### Problem

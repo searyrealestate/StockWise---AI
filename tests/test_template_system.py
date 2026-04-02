@@ -26,6 +26,7 @@ from setup_templates import (
     CONDITION_BLOCKS, STOP_BLOCKS, TARGET_BLOCKS,
 )
 from template_matcher import TemplateMatcher
+from shadow_ledger import ShadowLedger
 import system_config as cfg
 
 
@@ -805,3 +806,491 @@ class TestSystemConfigTelegramHelp:
         assert help_text is not None, "TELEGRAM_HELP_TEXT not found in system_config"
         assert isinstance(help_text, str), "TELEGRAM_HELP_TEXT must be a string"
         assert "?" in help_text, "TELEGRAM_HELP_TEXT must document the ? command"
+
+
+# ═══════════════════════════════════════════════════════
+# 6.9  ATTRIBUTION BUILDER TESTS  (TA-01 → TA-29)
+# ═══════════════════════════════════════════════════════
+
+def _make_sl():
+    """Create a ShadowLedger with default config, mocking ledger file I/O."""
+    with patch("shadow_ledger.safe_json_read", return_value={"metadata": {}, "template_stats": {}}), \
+         patch("shadow_ledger.safe_json_write"):
+        sl = ShadowLedger()
+    return sl
+
+
+def _mdf(n=20, close_start=100.0, trend="flat"):
+    """Build an n-bar OHLCV + indicator DataFrame for attribution tests."""
+    dates = pd.date_range("2025-01-06", periods=n, freq="B")  # business days → Mon-Fri
+    closes = []
+    for i in range(n):
+        if trend == "up":
+            closes.append(close_start + i * 0.5)
+        elif trend == "down":
+            closes.append(close_start - i * 0.5)
+        else:
+            closes.append(close_start + (i % 3 - 1) * 0.2)
+
+    data = {
+        "open":      [c - 0.5 for c in closes],
+        "high":      [c + 1.0 for c in closes],
+        "low":       [c - 1.0 for c in closes],
+        "close":     closes,
+        "volume":    [2_000_000.0] * n,
+        "vol_avg_20": [1_000_000.0] * n,
+        "rsi":       [55.0] * n,
+        "er_fast":   [0.60] * n,
+        "er_slow":   [0.45] * n,
+        "atr":       [2.0]  * n,
+        "bb_width":  [0.05] * n,
+        "adx":       [28.0] * n,
+        "macd":      [0.3]  * n,
+        "macd_signal": [0.1] * n,
+        "sma_50":    [98.0] * n,
+        "sma_200":   [90.0] * n,
+    }
+    return pd.DataFrame(data, index=dates)
+
+
+class TestAttributionBuilders:
+    """Unit tests for the 12 attribution builder methods (TA-01 → TA-26)."""
+
+    @pytest.fixture
+    def sl(self):
+        return _make_sl()
+
+    @pytest.fixture
+    def df(self):
+        return _mdf(n=20)
+
+    # ── Kill candle classification (TA-01 → TA-04) ──────────────
+
+    # TA-01: gap_down — open already at/below stop after overnight gap
+    def test_ta01_kill_type_gap_down(self, sl):
+        # prev_close=100, open=98 → gap=-2% < -0.5%, open(98) <= stop(99) → gap_down
+        result = sl._classify_kill_type(
+            prev_close=100.0, open_price=98.0, high=99.0,
+            low=97.0, close=97.5, stop_price=99.0
+        )
+        assert result == "gap_down"
+
+    # TA-02: wick — long lower tail > 2× body
+    def test_ta02_kill_type_wick(self, sl):
+        # open=100, close=99.5 → body=0.5; low=96 → tail=3.5 > 2*0.5
+        result = sl._classify_kill_type(
+            prev_close=101.0, open_price=100.0, high=100.5,
+            low=96.0, close=99.5, stop_price=95.0
+        )
+        assert result == "wick"
+
+    # TA-03: drift — tiny body <0.3%, tail must be ≤ 2× body so wick check doesn't fire first
+    def test_ta03_kill_type_drift(self, sl):
+        # open=100, close=100.2 → body=0.2 (0.2% < 0.3%)
+        # low=99.8 → tail=min(100,100.2)-99.8=0.2 ≤ 2*0.2=0.4 → wick check fails → drift
+        result = sl._classify_kill_type(
+            prev_close=100.5, open_price=100.0, high=100.5,
+            low=99.8, close=100.2, stop_price=97.0
+        )
+        assert result == "drift"
+
+    # TA-04: reversal — strong bearish candle, no gap, body > 2× tail
+    def test_ta04_kill_type_reversal(self, sl):
+        # open=100, close=97 → body=3; low=96.8 → tail=0.2; no long wick/tail
+        result = sl._classify_kill_type(
+            prev_close=100.5, open_price=100.0, high=100.2,
+            low=96.8, close=97.0, stop_price=95.0
+        )
+        assert result == "reversal"
+
+    # ── Entry quality (TA-05 → TA-06) ───────────────────────────
+
+    # TA-05: entry_quality — basic field calculation
+    def test_ta05_entry_quality_calculation(self, sl, df):
+        # entry_idx=5, entry at close=100.0; bar_low=99.0, bar_open=99.5
+        result = sl._build_entry_quality(df, 5, 100.0)
+        assert result is not None
+        assert "entry_vs_low_pct" in result
+        assert "entry_vs_open_pct" in result
+        assert "immediate_drawdown_pct" in result
+        assert "bars_to_first_profit" in result
+
+    # TA-06: bars_to_first_profit=None when close never exceeds entry
+    def test_ta06_bars_to_first_profit_never_profitable(self, sl):
+        df_down = _mdf(n=20, close_start=100.0, trend="down")
+        # Entry at bar 0 at 105.0 — price falls throughout, never returns to 105
+        result = sl._build_entry_quality(df_down, 0, 105.0)
+        assert result is not None
+        assert result["bars_to_first_profit"] is None
+
+    # ── Volume profile (TA-07 → TA-08) ──────────────────────────
+
+    # TA-07: volume_profile — ratios and trend populated
+    def test_ta07_volume_profile_calculation(self, sl, df):
+        result = sl._build_volume_profile(df, 2, 8)
+        assert result is not None
+        assert "volume_at_entry" in result
+        assert "volume_at_exit" in result
+        assert "avg_volume_during_trade" in result
+        assert "volume_trend" in result
+        # volume=2M, vol_avg=1M → ratio=2.0
+        assert result["volume_at_entry"] == pytest.approx(2.0, abs=0.01)
+
+    # TA-08: volume_trend classification — >20% diff triggers increasing/decreasing
+    def test_ta08_volume_trend_classification(self, sl):
+        n = 10
+        dates = pd.date_range("2025-01-06", periods=n, freq="B")
+        data = {
+            "open": [100.0] * n, "high": [101.0] * n,
+            "low":  [99.0] * n,  "close": [100.0] * n,
+            # First half: 500K, second half: 2M → increasing
+            "volume": [500_000.0] * 5 + [2_000_000.0] * 5,
+            "vol_avg_20": [1_000_000.0] * n,
+        }
+        df_vol = pd.DataFrame(data, index=dates)
+        result = sl._build_volume_profile(df_vol, 0, 9)
+        assert result["volume_trend"] == "increasing"
+
+    # ── Market context / SPY (TA-09 → TA-10) ────────────────────
+
+    # TA-09: market_context — SPY data provided → all fields populated
+    def test_ta09_attribution_market_context_spy(self, sl):
+        spy = _mdf(n=20, close_start=450.0, trend="up")
+        result = sl._build_market_context(spy, 5, 10)
+        assert result is not None
+        assert "spy_return_on_day" in result
+        assert "spy_return_during_trade" in result
+        assert "spy_trend" in result
+
+    # TA-10: market_context — spy_bars=None → returns None, no crash
+    def test_ta10_attribution_missing_spy_graceful(self, sl):
+        result = sl._build_market_context(None, 5, 10)
+        assert result is None
+
+    # ── Indicator snapshot (TA-11 → TA-12) ──────────────────────
+
+    # TA-11: indicator_snapshot — at_entry, at_exit, delta all populated
+    def test_ta11_attribution_indicator_snapshot(self, sl, df):
+        result = sl._build_indicator_snapshot(df, 3, 8)
+        assert result is not None
+        assert "at_entry" in result
+        assert "at_exit" in result
+        assert "delta" in result
+        assert "rsi" in result["at_entry"]
+        assert result["at_entry"]["rsi"] == pytest.approx(55.0, abs=0.01)
+
+    # TA-12: indicator_snapshot — NaN indicator → that field=None, no crash
+    def test_ta12_attribution_indicator_nan_safety(self, sl):
+        df_nan = _mdf(n=10)
+        df_nan["rsi"] = float('nan')
+        result = sl._build_indicator_snapshot(df_nan, 2, 5)
+        assert result is not None
+        assert result["at_entry"]["rsi"] is None
+        assert result["at_exit"]["rsi"] is None
+
+    # ── Weakest block (TA-13) ────────────────────────────────────
+
+    # TA-13: weakest_block — returns dict with correct keys (or None if no mappable blocks)
+    def test_ta13_attribution_weakest_block(self, sl, df):
+        tm = TemplateManager()
+        templates = tm.get_enabled()
+        if not templates:
+            pytest.skip("No enabled templates")
+        template = templates[0]
+        result = sl._build_weakest_block(template, df, 5)
+        # Result is either None (no mappable blocks) or a valid dict
+        if result is not None:
+            for key in ("block_name", "value_at_entry", "threshold", "margin"):
+                assert key in result, f"Missing key '{key}' in weakest_block result"
+
+    # ── Risk/Reward (TA-14) ──────────────────────────────────────
+
+    # TA-14: risk_reward — planned_rr, realized_rr, max_favorable_rr correct
+    def test_ta14_attribution_risk_reward(self, sl, df):
+        # entry=100, stop=97, target=109 → planned_rr = 9/3 = 3.0
+        # exit=97 (stop hit) → realized_rr = (97-100)/3 = -1.0
+        result = sl._build_risk_reward(
+            entry_price=100.0, stop_price=97.0, target_price=109.0,
+            exit_price=97.0, bars=df, entry_idx=2, exit_idx=5
+        )
+        assert result is not None
+        assert result["planned_rr"] == pytest.approx(3.0, abs=0.01)
+        assert result["realized_rr"] == pytest.approx(-1.0, abs=0.01)
+        assert "max_favorable_pct" in result
+        assert "max_favorable_rr" in result
+
+    # ── Time context (TA-15) ─────────────────────────────────────
+
+    # TA-15: time_context — day_of_week, dates, bars, calendar_days correct
+    def test_ta15_attribution_time_context(self, sl, df):
+        result = sl._build_time_context(df, 2, 7)
+        assert result is not None
+        assert result["bars_in_trade"] == 5
+        assert result["entry_day_of_week"] in (
+            "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"
+        )
+        assert "entry_date" in result
+        assert "exit_date" in result
+        assert "calendar_days_in_trade" in result
+
+    # ── Preceding candles (TA-16 → TA-18) ───────────────────────
+
+    # TA-16: preceding_candles — all 3 windows [3,5,10] populated when sufficient history
+    def test_ta16_attribution_preceding_candles_multi_window(self, sl):
+        df_long = _mdf(n=30)
+        with patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {
+            "attribution": {"preceding_candle_windows": [3, 5, 10], "max_attribution_records": 500}
+        }):
+            result = sl._build_preceding_candles(df_long, 15)
+        assert result is not None
+        assert result["windows"] == [3, 5, 10]
+        for w in [3, 5, 10]:
+            assert result[f"window_{w}"] is not None
+            assert "pattern" in result[f"window_{w}"]
+            assert "momentum_pct" in result[f"window_{w}"]
+
+    # TA-17: preceding_candles — custom windows [5,15] → only 2 windows in result
+    def test_ta17_attribution_preceding_candles_custom_windows(self, sl):
+        df_long = _mdf(n=30)
+        with patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {
+            "attribution": {"preceding_candle_windows": [5, 15], "max_attribution_records": 500}
+        }):
+            result = sl._build_preceding_candles(df_long, 20)
+        assert result is not None
+        assert result["windows"] == [5, 15]
+        assert "window_5" in result
+        assert "window_15" in result
+        assert "window_10" not in result
+
+    # TA-18: preceding_candles — entry at bar 4, window=10 → window_10=None
+    def test_ta18_attribution_preceding_candles_insufficient_history(self, sl):
+        df_short = _mdf(n=15)
+        with patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {
+            "attribution": {"preceding_candle_windows": [3, 5, 10], "max_attribution_records": 500}
+        }):
+            result = sl._build_preceding_candles(df_short, 4)  # only 4 bars before entry
+        assert result is not None
+        assert result["window_10"] is None      # insufficient history
+        assert result["window_3"] is not None   # 3 bars available
+
+    # ── Key levels (TA-19) ───────────────────────────────────────
+
+    # TA-19: key_levels — distances to SMA50/200 correct
+    def test_ta19_attribution_key_levels(self, sl, df):
+        result = sl._build_key_levels(df, 10, 100.0)
+        assert result is not None
+        assert "distance_to_sma50_pct" in result
+        assert "distance_to_sma200_pct" in result
+        assert "distance_to_resistance_pct" in result
+        assert "distance_to_support_pct" in result
+        # close=100, sma_50=98 → dist = (100-98)/98*100 ≈ 2.04%
+        assert result["distance_to_sma50_pct"] == pytest.approx(2.04, abs=0.1)
+
+    # ── Concurrent signals (TA-20) ───────────────────────────────
+
+    # TA-20: concurrent_signals — count correct from cache
+    def test_ta20_attribution_concurrent_signals(self, sl):
+        cache = {
+            "2025-01-15": [
+                {"template": "MOMENTUM_BREAKOUT", "outcome": "win"},
+                {"template": "MOMENTUM_BREAKOUT", "outcome": "loss"},
+                {"template": "SQUEEZE_BREAKOUT",  "outcome": "win"},
+            ]
+        }
+        result = sl._build_concurrent_signals("MOMENTUM_BREAKOUT", "AAPL", "2025-01-15", cache)
+        assert result is not None
+        assert result["signals_same_day"] == 3
+        assert result["wins_same_day"] == 2
+        assert result["losses_same_day"] == 1
+        assert result["same_template_same_day"] == 2
+
+    # ── Storage tests (TA-21 → TA-26) ───────────────────────────
+
+    # TA-21: attribution persisted under correct ledger path
+    def test_ta21_attribution_persisted_to_ledger(self, sl):
+        saved = {}
+        with patch("shadow_ledger.safe_json_read", return_value={}), \
+             patch("shadow_ledger.safe_json_write", side_effect=lambda p, d: saved.update({"d": d})):
+            sl._record_attribution("MOMENTUM_BREAKOUT", "AAPL", {"outcome": "win", "pnl_pct": 0.05})
+
+        assert "attributions" in saved["d"]
+        assert "MOMENTUM_BREAKOUT" in saved["d"]["attributions"]
+        assert "AAPL" in saved["d"]["attributions"]["MOMENTUM_BREAKOUT"]
+        records = saved["d"]["attributions"]["MOMENTUM_BREAKOUT"]["AAPL"]
+        assert len(records) == 1
+        assert records[0]["outcome"] == "win"
+
+    # TA-22: rolling limit — >500 records → oldest removed, newest kept
+    def test_ta22_attribution_rolling_limit(self, sl):
+        # Pre-populate 501 records
+        old_records = [{"outcome": "old", "seq": i} for i in range(501)]
+        existing = {"attributions": {"T": {"SYM": old_records}}}
+        saved = {}
+
+        with patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG',
+                          {"attribution": {"max_attribution_records": 500}}), \
+             patch("shadow_ledger.safe_json_read", return_value=existing), \
+             patch("shadow_ledger.safe_json_write", side_effect=lambda p, d: saved.update({"d": d})):
+            sl._record_attribution("T", "SYM", {"outcome": "new_record"})
+
+        records = saved["d"]["attributions"]["T"]["SYM"]
+        assert len(records) == 500
+        assert records[-1]["outcome"] == "new_record"
+        assert records[0]["outcome"] == "old"   # seq=1 kept (seq=0 dropped)
+        assert records[0].get("seq") == 2       # oldest-2 is now first
+
+    # TA-23: attribution disabled → no data saved
+    def test_ta23_attribution_disabled_no_collection(self, sl, df):
+        saved = {}
+        with patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG',
+                          {"attribution": {"enabled": False}}), \
+             patch("shadow_ledger.safe_json_write", side_effect=lambda p, d: saved.update({"d": d})):
+
+            tm_mock = MagicMock()
+            tm_mock.name = "MOMENTUM_BREAKOUT"
+            tm_mock.conditions = []
+            outcome = {"hit": "stop", "pnl_pct": -2.0, "bars": 3}
+            sl._record_signal_attribution(tm_mock, "AAPL", df, 5, outcome, 100.0, 97.0, 109.0)
+
+        assert not saved, "No write should occur when attribution is disabled"
+
+    # TA-24: backward compatible — ledger without 'attributions' key works
+    def test_ta24_attribution_backward_compatible(self, sl):
+        # Legacy ledger has template_stats but no attributions key
+        legacy = {"template_stats": {"AAPL": {"MOMENTUM_BREAKOUT": {"signal_count": 5}}}}
+        saved = {}
+        with patch("shadow_ledger.safe_json_read", return_value=legacy), \
+             patch("shadow_ledger.safe_json_write", side_effect=lambda p, d: saved.update({"d": d})):
+            sl._record_attribution("MOMENTUM_BREAKOUT", "AAPL", {"outcome": "loss"})
+
+        assert "template_stats" in saved["d"], "Existing template_stats must be preserved"
+        assert "attributions" in saved["d"], "attributions key must be created"
+
+    # TA-25: win signal → attribution with outcome="win"
+    def test_ta25_attribution_win_also_recorded(self, sl, df):
+        saved = {}
+        with patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {"attribution": {
+            "enabled": True, "track_kill_candle": False, "track_entry_quality": False,
+            "track_volume_profile": False, "track_market_context": False,
+            "track_indicator_snapshot": False, "track_weakest_block": False,
+            "track_risk_reward": False, "track_time_context": False,
+            "track_preceding_candles": False, "track_key_levels": False,
+            "track_concurrent_signals": False, "max_attribution_records": 500,
+            "preceding_candle_windows": [3, 5, 10],
+        }}), \
+             patch("shadow_ledger.safe_json_read", return_value={}), \
+             patch("shadow_ledger.safe_json_write", side_effect=lambda p, d: saved.update({"d": d})):
+            tmock = MagicMock()
+            tmock.name = "MOMENTUM_BREAKOUT"
+            tmock.conditions = []
+            outcome = {"hit": "target", "pnl_pct": 5.0, "bars": 3}
+            sl._record_signal_attribution(tmock, "AAPL", df, 5, outcome, 100.0, 97.0, 109.0)
+
+        records = saved["d"]["attributions"]["MOMENTUM_BREAKOUT"]["AAPL"]
+        assert records[0]["outcome"] == "win"
+
+    # TA-26: one builder raises → that field=None, rest populated
+    def test_ta26_attribution_single_builder_fails_others_continue(self, sl, df):
+        saved = {}
+        with patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {"attribution": {
+            "enabled": True,
+            "track_kill_candle": True, "track_entry_quality": True,
+            "track_volume_profile": False, "track_market_context": False,
+            "track_indicator_snapshot": False, "track_weakest_block": False,
+            "track_risk_reward": False, "track_time_context": True,
+            "track_preceding_candles": False, "track_key_levels": False,
+            "track_concurrent_signals": False, "max_attribution_records": 500,
+            "preceding_candle_windows": [3, 5, 10],
+        }}), \
+             patch("shadow_ledger.safe_json_read", return_value={}), \
+             patch("shadow_ledger.safe_json_write", side_effect=lambda p, d: saved.update({"d": d})), \
+             patch.object(sl, '_build_entry_quality', side_effect=RuntimeError("simulated failure")):
+
+            tmock = MagicMock()
+            tmock.name = "MOMENTUM_BREAKOUT"
+            tmock.conditions = []
+            outcome = {"hit": "stop", "pnl_pct": -2.0, "bars": 3}
+            sl._record_signal_attribution(tmock, "AAPL", df, 5, outcome, 100.0, 97.0, 109.0)
+
+        records = saved["d"]["attributions"]["MOMENTUM_BREAKOUT"]["AAPL"]
+        record = records[0]
+        assert record["entry_quality"] is None, "Failed builder must set field to None"
+        assert record["kill_candle"] is not None or "kill_candle" in record  # other builders ran
+        assert record["time_context"] is not None   # time_context should succeed
+
+
+# ═══════════════════════════════════════════════════════
+# 6.10  ATTRIBUTION SYSTEM / REGRESSION TESTS  (TA-27 → TA-29)
+# ═══════════════════════════════════════════════════════
+
+class TestAttributionSystem:
+    """System / regression tests for attribution integration."""
+
+    @pytest.fixture
+    def sl(self):
+        return _make_sl()
+
+    # TA-27: _record_signal_attribution produces a complete attribution record
+    def test_ta27_full_signal_evaluation_with_attribution(self, sl):
+        df = _mdf(n=20)
+        saved = {}
+
+        with patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {"attribution": {
+            "enabled": True,
+            "track_kill_candle": True, "track_entry_quality": True,
+            "track_volume_profile": True, "track_market_context": True,
+            "track_indicator_snapshot": True, "track_weakest_block": True,
+            "track_risk_reward": True, "track_time_context": True,
+            "track_preceding_candles": True, "track_key_levels": True,
+            "track_concurrent_signals": True, "max_attribution_records": 500,
+            "preceding_candle_windows": [3, 5, 10],
+        }}), \
+             patch("shadow_ledger.safe_json_read", return_value={}), \
+             patch("shadow_ledger.safe_json_write", side_effect=lambda p, d: saved.update({"d": d})):
+
+            tmock = MagicMock()
+            tmock.name = "MOMENTUM_BREAKOUT"
+            tmock.conditions = []
+            outcome = {"hit": "stop", "pnl_pct": -2.5, "bars": 4}
+            sl._record_signal_attribution(tmock, "AAPL", df, 10, outcome, 100.0, 97.0, 109.0)
+
+        assert saved, "safe_json_write must be called"
+        record = saved["d"]["attributions"]["MOMENTUM_BREAKOUT"]["AAPL"][0]
+        assert record["outcome"] == "loss"
+        assert record["pnl_pct"] == pytest.approx(-2.5, abs=0.001)
+        assert "kill_candle" in record
+        assert "time_context" in record
+
+    # TA-28: existing shadow stats (signal_count, wins, losses, win_rate) unchanged
+    def test_ta28_existing_shadow_stats_unchanged(self, sl):
+        existing_stats = {
+            "template_stats": {
+                "AAPL": {
+                    "MOMENTUM_BREAKOUT": {
+                        "signal_count": 42, "wins": 28, "losses": 14, "win_rate": 66.7
+                    }
+                }
+            }
+        }
+        saved = {}
+        with patch("shadow_ledger.safe_json_read", return_value=existing_stats), \
+             patch("shadow_ledger.safe_json_write", side_effect=lambda p, d: saved.update({"d": d})):
+            sl._record_attribution("MOMENTUM_BREAKOUT", "AAPL", {"outcome": "win"})
+
+        stats = saved["d"]["template_stats"]["AAPL"]["MOMENTUM_BREAKOUT"]
+        assert stats["signal_count"] == 42
+        assert stats["wins"] == 28
+        assert stats["win_rate"] == pytest.approx(66.7, abs=0.01)
+
+    # TA-29: attribution I/O uses safe_json_read and safe_json_write
+    def test_ta29_attribution_uses_safe_json_io(self, sl):
+        read_calls = []
+        write_calls = []
+        with patch("shadow_ledger.safe_json_read",
+                   side_effect=lambda p, **kw: read_calls.append(p) or {}) as mock_read, \
+             patch("shadow_ledger.safe_json_write",
+                   side_effect=lambda p, d: write_calls.append(p)) as mock_write:
+            sl._record_attribution("TMPL", "SYM", {"outcome": "loss"})
+
+        assert read_calls, "safe_json_read must be called"
+        assert write_calls, "safe_json_write must be called"

@@ -500,6 +500,22 @@ TEMPLATE_EVOLUTION_CONFIG = {
         "disable_list_path": "data/shadow_ledger.json",  # Stored in shadow_ledger
         "re_enable_win_rate": 0.35,          # Re-enable if global win rate recovers above 35%
         "watchlist_loss_rate": 0.60,         # WR<40% → log WARNING for analysis (not disabled)
+    },
+    "attribution": {
+        "enabled": True,
+        "track_kill_candle": True,           # Classify what killed the trade (gap/wick/drift/reversal)
+        "track_entry_quality": True,         # Entry timing vs bar low/open, drawdown, bars-to-profit
+        "track_volume_profile": True,        # Volume ratios at entry/exit, trend during trade
+        "track_market_context": True,        # SPY return on day / during trade
+        "track_indicator_snapshot": True,    # RSI/ER/ATR/BB/ADX at entry + exit + delta
+        "track_weakest_block": True,         # Block closest to threshold at entry
+        "track_risk_reward": True,           # Planned vs realized R:R, max favorable
+        "track_time_context": True,          # Day-of-week, dates, bars/calendar days in trade
+        "track_preceding_candles": True,     # Multi-window price action before entry
+        "track_key_levels": True,            # Distance to SMA50/200, support, resistance
+        "track_concurrent_signals": True,    # How many other signals fired the same day
+        "preceding_candle_windows": [3, 5, 10],  # Windows for preceding candle analysis
+        "max_attribution_records": 500,      # Rolling cap per template+symbol combo
     }
 }
 
@@ -526,6 +542,15 @@ def validate_template_evolution_config():
         "auto_disable.watchlist_loss_rate must be in (0, 1)"
     assert wl <= ad["max_loss_rate"], \
         "auto_disable.watchlist_loss_rate must be <= max_loss_rate"
+    attr = TEMPLATE_EVOLUTION_CONFIG.get("attribution", {})
+    windows = attr.get("preceding_candle_windows", None)
+    assert isinstance(windows, list) and all(isinstance(w, int) and w > 0 for w in windows), \
+        "attribution.preceding_candle_windows must be list of positive ints"
+    assert windows == sorted(windows), \
+        "attribution.preceding_candle_windows must be sorted ascending"
+    max_rec = attr.get("max_attribution_records", None)
+    assert isinstance(max_rec, int) and max_rec > 0, \
+        "attribution.max_attribution_records must be int > 0"
     return True
 
 
