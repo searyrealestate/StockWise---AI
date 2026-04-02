@@ -1,5 +1,29 @@
 # Changelog
 
+## [2026-04-03] Auto-Disable threshold adjustment + analytics logging
+
+### Problem
+Auto-disable threshold (WR<35%) too aggressive — may disable combos that are still profitable with good R:R ratio.
+
+### Fix
+- Changed `max_loss_rate` 0.65 → 0.85 (only WR<15% disabled — truly toxic combos only)
+- Changed `min_signals_to_evaluate` 10 → 15 (more data before decision)
+- Changed `re_enable_win_rate` 0.50 → 0.35 (easier to recover)
+- Added `watchlist_loss_rate=0.60` — combos with WR<40% logged as WATCHLIST warning (not disabled)
+- Enhanced all auto-disable logs with analytics fields: `WR`, `signals`, `avg_pnl`, `best_pnl`, `worst_pnl`, `loss_streak`, `status`
+- Updated `validate_template_evolution_config()` — validates `watchlist_loss_rate` float, (0,1), <= `max_loss_rate`
+
+### Files Modified
+- `system_config.py` — threshold changes + `watchlist_loss_rate` param + validator update
+- `template_matcher.py` — watchlist `else` branch + enhanced log format for DISABLED/RE-ENABLED
+- `tests/test_template_system.py` — updated TD-12/IT-11 data, comments TD-17/18; added TD-20/21/22
+
+### Tests
+- 3 new tests (TD-20, TD-21, TD-22), 2 updated (TD-12, IT-11 data), comments updated (TD-17, TD-18)
+- All 55 template tests pass; all 112 unit tests pass
+
+---
+
 ## [2026-04-03] Template Auto-Disable per Symbol+State with Telegram Notifications
 - **Problem:** Templates kept firing on chronically unprofitable symbol+state combos (e.g. SQUEEZE_BREAKOUT on LLY in BEARISH/SIDEWAYS — 100% blocked in backtest) with no automatic suppression mechanism
 - **Fix (system_config.py):** Added `TEMPLATE_EVOLUTION_CONFIG` — `auto_disable` sub-dict with `enabled`, `min_signals_to_evaluate` (10), `max_loss_rate` (0.65), `min_loss_streak` (5), `disable_list_path`, `re_enable_win_rate` (0.50)

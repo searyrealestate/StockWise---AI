@@ -479,16 +479,17 @@ class TestTemplateAutoDisable:
     # ── evaluate_auto_disable — disable path ─────────────────────────────────
 
     # TD-12: high loss rate >= min_signals → combo added to disable list
+    # WR=10% (wins=2/20) → loss_rate=0.90 > max_loss_rate=0.85 → DISABLED
     def test_td12_high_loss_rate_triggers_disable(self, matcher):
-        stats = {"LLY": {"SQUEEZE_BREAKOUT": {"signal_count": 15, "wins": 3, "loss_streak": 1}}}
+        stats = {"LLY": {"SQUEEZE_BREAKOUT": {"signal_count": 20, "wins": 2, "loss_streak": 1}}}
         saved = {}
 
         with patch("template_matcher.safe_json_read", return_value={"disabled_combos": []}), \
              patch("template_matcher.safe_json_write", side_effect=lambda p, d: saved.update({"d": d})), \
              patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {"auto_disable": {
-                 "enabled": True, "min_signals_to_evaluate": 10,
-                 "max_loss_rate": 0.65, "min_loss_streak": 5,
-                 "re_enable_win_rate": 0.50,
+                 "enabled": True, "min_signals_to_evaluate": 15,
+                 "max_loss_rate": 0.85, "min_loss_streak": 5,
+                 "re_enable_win_rate": 0.35, "watchlist_loss_rate": 0.60,
                  "disable_list_path": "data/shadow_ledger.json"}}):
             matcher.evaluate_auto_disable("SQUEEZE_BREAKOUT", "LLY",
                                           self.SIDEWAYS_STATE, shadow_stats=stats)
@@ -503,9 +504,9 @@ class TestTemplateAutoDisable:
         with patch("template_matcher.safe_json_read", return_value={"disabled_combos": []}), \
              patch("template_matcher.safe_json_write", side_effect=lambda p, d: saved.update({"d": d})), \
              patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {"auto_disable": {
-                 "enabled": True, "min_signals_to_evaluate": 10,
-                 "max_loss_rate": 0.65, "min_loss_streak": 5,
-                 "re_enable_win_rate": 0.50,
+                 "enabled": True, "min_signals_to_evaluate": 15,
+                 "max_loss_rate": 0.85, "min_loss_streak": 5,
+                 "re_enable_win_rate": 0.35, "watchlist_loss_rate": 0.60,
                  "disable_list_path": "data/shadow_ledger.json"}}):
             matcher.evaluate_auto_disable("SQUEEZE_BREAKOUT", "LLY",
                                           self.SIDEWAYS_STATE, shadow_stats=stats)
@@ -520,9 +521,9 @@ class TestTemplateAutoDisable:
         with patch("template_matcher.safe_json_read", return_value={"disabled_combos": []}), \
              patch("template_matcher.safe_json_write", side_effect=lambda p, d: saved.update({"d": d})), \
              patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {"auto_disable": {
-                 "enabled": True, "min_signals_to_evaluate": 10,
-                 "max_loss_rate": 0.65, "min_loss_streak": 5,
-                 "re_enable_win_rate": 0.50,
+                 "enabled": True, "min_signals_to_evaluate": 15,
+                 "max_loss_rate": 0.85, "min_loss_streak": 5,
+                 "re_enable_win_rate": 0.35, "watchlist_loss_rate": 0.60,
                  "disable_list_path": "data/shadow_ledger.json"}}):
             matcher.evaluate_auto_disable("MOMENTUM_BREAKOUT", "AAPL",
                                           BULL_STATE, shadow_stats=stats)
@@ -537,9 +538,9 @@ class TestTemplateAutoDisable:
         with patch("template_matcher.safe_json_read", return_value={"disabled_combos": []}), \
              patch("template_matcher.safe_json_write", side_effect=lambda p, d: saved.update({"d": d})), \
              patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {"auto_disable": {
-                 "enabled": True, "min_signals_to_evaluate": 10,
-                 "max_loss_rate": 0.65, "min_loss_streak": 5,
-                 "re_enable_win_rate": 0.50,
+                 "enabled": True, "min_signals_to_evaluate": 15,
+                 "max_loss_rate": 0.85, "min_loss_streak": 5,
+                 "re_enable_win_rate": 0.35, "watchlist_loss_rate": 0.60,
                  "disable_list_path": "data/shadow_ledger.json"}}):
             matcher.evaluate_auto_disable("TREND_PULLBACK_EMA", "MSFT",
                                           BULL_STATE, shadow_stats=stats)
@@ -565,7 +566,7 @@ class TestTemplateAutoDisable:
     # TD-17: combo already disabled + global WR recovered → removed from disable list
     def test_td17_re_enable_on_recovered_win_rate(self, matcher):
         key = "SQUEEZE_BREAKOUT::LLY::SIDEWAYS"
-        # Global: 10 signals, 6 wins → 60% WR > re_enable_win_rate 50%
+        # Global: 10 signals, 6 wins → 60% WR > re_enable_win_rate 35%
         stats = {
             "LLY": {"SQUEEZE_BREAKOUT": {"signal_count": 10, "wins": 6, "loss_streak": 0}},
         }
@@ -574,9 +575,9 @@ class TestTemplateAutoDisable:
         with patch("template_matcher.safe_json_read", return_value={"disabled_combos": [key]}), \
              patch("template_matcher.safe_json_write", side_effect=lambda p, d: saved.update({"d": d})), \
              patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {"auto_disable": {
-                 "enabled": True, "min_signals_to_evaluate": 10,
-                 "max_loss_rate": 0.65, "min_loss_streak": 5,
-                 "re_enable_win_rate": 0.50,
+                 "enabled": True, "min_signals_to_evaluate": 15,
+                 "max_loss_rate": 0.85, "min_loss_streak": 5,
+                 "re_enable_win_rate": 0.35, "watchlist_loss_rate": 0.60,
                  "disable_list_path": "data/shadow_ledger.json"}}):
             matcher.evaluate_auto_disable("SQUEEZE_BREAKOUT", "LLY",
                                           self.SIDEWAYS_STATE, shadow_stats=stats)
@@ -587,7 +588,7 @@ class TestTemplateAutoDisable:
     # TD-18: combo already disabled + global WR still low → stays disabled
     def test_td18_stays_disabled_when_wr_still_low(self, matcher):
         key = "SQUEEZE_BREAKOUT::LLY::SIDEWAYS"
-        # Global: 10 signals, 3 wins → 30% WR < re_enable_win_rate 50%
+        # Global: 10 signals, 3 wins → 30% WR < re_enable_win_rate 35%
         stats = {
             "LLY": {"SQUEEZE_BREAKOUT": {"signal_count": 10, "wins": 3, "loss_streak": 0}},
         }
@@ -596,9 +597,9 @@ class TestTemplateAutoDisable:
         with patch("template_matcher.safe_json_read", return_value={"disabled_combos": [key]}), \
              patch("template_matcher.safe_json_write", side_effect=lambda p, d: saved.update({"d": d})), \
              patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {"auto_disable": {
-                 "enabled": True, "min_signals_to_evaluate": 10,
-                 "max_loss_rate": 0.65, "min_loss_streak": 5,
-                 "re_enable_win_rate": 0.50,
+                 "enabled": True, "min_signals_to_evaluate": 15,
+                 "max_loss_rate": 0.85, "min_loss_streak": 5,
+                 "re_enable_win_rate": 0.35, "watchlist_loss_rate": 0.60,
                  "disable_list_path": "data/shadow_ledger.json"}}):
             matcher.evaluate_auto_disable("SQUEEZE_BREAKOUT", "LLY",
                                           self.SIDEWAYS_STATE, shadow_stats=stats)
@@ -621,6 +622,97 @@ class TestTemplateAutoDisable:
             signals = matcher.scan_ticker("AAPL", df, BULL_STATE)
         assert signals == [], "All templates disabled → zero signals expected"
 
+    # TD-20: WR=30% (loss_rate=0.70 > watchlist 0.60) → WATCHLIST warning logged, NOT disabled
+    def test_td20_watchlist_logging_underperforming_combo(self, matcher):
+        # WR=30% (wins=6/20) → loss_rate=0.70 > watchlist_loss_rate=0.60 but < max_loss_rate=0.85
+        stats = {"META": {"SQUEEZE_BREAKOUT": {
+            "signal_count": 20, "wins": 6, "loss_streak": 2,
+            "avg_pnl": -0.005, "best_pnl": 0.03, "worst_pnl": -0.08
+        }}}
+        saved = {}
+
+        with patch("template_matcher.safe_json_read", return_value={"disabled_combos": []}), \
+             patch("template_matcher.safe_json_write", side_effect=lambda p, d: saved.update({"d": d})), \
+             patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {"auto_disable": {
+                 "enabled": True, "min_signals_to_evaluate": 15,
+                 "max_loss_rate": 0.85, "min_loss_streak": 5,
+                 "re_enable_win_rate": 0.35, "watchlist_loss_rate": 0.60,
+                 "disable_list_path": "data/shadow_ledger.json"}}), \
+             self.capture_warnings() as warnings:
+            matcher.evaluate_auto_disable("SQUEEZE_BREAKOUT", "META",
+                                          self.SIDEWAYS_STATE, shadow_stats=stats)
+
+        assert not saved, "WR=30% should NOT trigger disable (below max_loss_rate=0.85)"
+        watchlist_msgs = [w for w in warnings if "WATCHLIST" in w]
+        assert watchlist_msgs, "Expected WATCHLIST warning for WR=30% combo"
+
+    # TD-21: WR=50% (loss_rate=0.50 < watchlist 0.60) → no watchlist warning, no disable
+    def test_td21_watchlist_not_logged_above_threshold(self, matcher):
+        # WR=50% (wins=10/20) → loss_rate=0.50 < watchlist_loss_rate=0.60 → silence
+        stats = {"AAPL": {"MOMENTUM_BREAKOUT": {
+            "signal_count": 20, "wins": 10, "loss_streak": 1,
+            "avg_pnl": 0.003, "best_pnl": 0.05, "worst_pnl": -0.02
+        }}}
+        saved = {}
+
+        with patch("template_matcher.safe_json_read", return_value={"disabled_combos": []}), \
+             patch("template_matcher.safe_json_write", side_effect=lambda p, d: saved.update({"d": d})), \
+             patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {"auto_disable": {
+                 "enabled": True, "min_signals_to_evaluate": 15,
+                 "max_loss_rate": 0.85, "min_loss_streak": 5,
+                 "re_enable_win_rate": 0.35, "watchlist_loss_rate": 0.60,
+                 "disable_list_path": "data/shadow_ledger.json"}}), \
+             self.capture_warnings() as warnings:
+            matcher.evaluate_auto_disable("MOMENTUM_BREAKOUT", "AAPL",
+                                          BULL_STATE, shadow_stats=stats)
+
+        assert not saved, "WR=50% must not trigger disable"
+        watchlist_msgs = [w for w in warnings if "WATCHLIST" in w]
+        assert not watchlist_msgs, "No WATCHLIST warning expected for WR=50%"
+
+    # TD-22: disable log contains all analytics fields
+    def test_td22_disable_log_includes_analytics_fields(self, matcher):
+        stats = {"LLY": {"SQUEEZE_BREAKOUT": {
+            "signal_count": 20, "wins": 1, "loss_streak": 3,
+            "avg_pnl": -0.012, "best_pnl": 0.02, "worst_pnl": -0.09
+        }}}
+
+        log_messages = []
+        with patch("template_matcher.safe_json_read", return_value={"disabled_combos": []}), \
+             patch("template_matcher.safe_json_write"), \
+             patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {"auto_disable": {
+                 "enabled": True, "min_signals_to_evaluate": 15,
+                 "max_loss_rate": 0.85, "min_loss_streak": 5,
+                 "re_enable_win_rate": 0.35, "watchlist_loss_rate": 0.60,
+                 "disable_list_path": "data/shadow_ledger.json"}}), \
+             patch("template_matcher.logger") as mock_logger:
+            mock_logger.warning.side_effect = lambda m, *a, **kw: log_messages.append(str(m))
+            matcher.evaluate_auto_disable("SQUEEZE_BREAKOUT", "LLY",
+                                          self.SIDEWAYS_STATE, shadow_stats=stats)
+
+        disable_logs = [m for m in log_messages if "DISABLED" in m and "WATCHLIST" not in m]
+        assert disable_logs, "Expected at least one DISABLED log line"
+        log = disable_logs[0]
+        for field in ["WR=", "signals=", "avg_pnl=", "best_pnl=", "worst_pnl=", "loss_streak=", "status=DISABLED"]:
+            assert field in log, f"Expected '{field}' in disable log, got: {log}"
+
+    @staticmethod
+    def capture_warnings():
+        """Context manager that captures logger.warning calls as a list of strings."""
+        import contextlib
+
+        @contextlib.contextmanager
+        def _capture():
+            captured = []
+            with patch("template_matcher.logger") as mock_log:
+                mock_log.warning.side_effect = lambda m, *a, **kw: captured.append(str(m))
+                mock_log.info.side_effect = lambda m, *a, **kw: None
+                mock_log.debug.side_effect = lambda m, *a, **kw: None
+                mock_log.error.side_effect = lambda m, *a, **kw: None
+                yield captured
+
+        return _capture()
+
 
 # ═══════════════════════════════════════════════════════
 # 6.5  INTEGRATION TESTS  (IT-11)
@@ -634,14 +726,15 @@ class TestIntegration:
         matcher = TemplateMatcher()
         notifier = MagicMock()
 
-        stats = {"TSLA": {"MOMENTUM_BREAKOUT": {"signal_count": 15, "wins": 3, "loss_streak": 0}}}
+        # WR=10% (wins=2/20) → loss_rate=0.90 > max_loss_rate=0.85 → DISABLED
+        stats = {"TSLA": {"MOMENTUM_BREAKOUT": {"signal_count": 20, "wins": 2, "loss_streak": 0}}}
 
         with patch("template_matcher.safe_json_read", return_value={"disabled_combos": []}), \
              patch("template_matcher.safe_json_write"), \
              patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {"auto_disable": {
-                 "enabled": True, "min_signals_to_evaluate": 10,
-                 "max_loss_rate": 0.65, "min_loss_streak": 5,
-                 "re_enable_win_rate": 0.50,
+                 "enabled": True, "min_signals_to_evaluate": 15,
+                 "max_loss_rate": 0.85, "min_loss_streak": 5,
+                 "re_enable_win_rate": 0.35, "watchlist_loss_rate": 0.60,
                  "disable_list_path": "data/shadow_ledger.json"}}):
             matcher.evaluate_auto_disable("MOMENTUM_BREAKOUT", "TSLA",
                                           BULL_STATE, shadow_stats=stats,

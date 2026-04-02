@@ -494,11 +494,12 @@ WEEKLY_RETRAIN_CONFIG = {
 TEMPLATE_EVOLUTION_CONFIG = {
     "auto_disable": {
         "enabled": True,
-        "min_signals_to_evaluate": 10,   # Need >= 10 signals before considering disable
-        "max_loss_rate": 0.65,           # Disable combo if loss rate > 65%
-        "min_loss_streak": 5,            # OR disable after 5 consecutive losses
+        "min_signals_to_evaluate": 15,       # Need >= 15 signals before considering disable
+        "max_loss_rate": 0.85,               # Disable combo if loss rate > 85% (WR<15% — truly toxic)
+        "min_loss_streak": 5,                # OR disable after 5 consecutive losses
         "disable_list_path": "data/shadow_ledger.json",  # Stored in shadow_ledger
-        "re_enable_win_rate": 0.50,      # Re-enable if global win rate recovers above 50%
+        "re_enable_win_rate": 0.35,          # Re-enable if global win rate recovers above 35%
+        "watchlist_loss_rate": 0.60,         # WR<40% → log WARNING for analysis (not disabled)
     }
 }
 
@@ -518,6 +519,13 @@ def validate_template_evolution_config():
         "auto_disable.min_signals_to_evaluate must be > 0"
     assert isinstance(ad.get("disable_list_path", None), str), \
         "auto_disable.disable_list_path must be str"
+    wl = ad.get("watchlist_loss_rate", None)
+    assert isinstance(wl, float), \
+        "auto_disable.watchlist_loss_rate must be float"
+    assert 0.0 < wl < 1.0, \
+        "auto_disable.watchlist_loss_rate must be in (0, 1)"
+    assert wl <= ad["max_loss_rate"], \
+        "auto_disable.watchlist_loss_rate must be <= max_loss_rate"
     return True
 
 

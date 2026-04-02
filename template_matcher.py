@@ -478,7 +478,12 @@ class TemplateMatcher:
             if global_wr >= re_enable_wr:
                 disabled_set.discard(key)
                 self._save_disable_list(disabled_set)
-                logger.info(f"[AutoDisable] RE-ENABLED {key} — global WR {global_wr:.0%} >= {re_enable_wr:.0%}")
+                logger.info(
+                    f"[AutoDisable] RE-ENABLED {key} | "
+                    f"global_wr={global_wr:.1%} | "
+                    f"threshold={re_enable_wr:.1%} | "
+                    f"status=RE-ENABLED"
+                )
                 if notifier:
                     try:
                         notifier.send_auto_disable_notification(template_id, symbol, stock_state,
@@ -500,10 +505,31 @@ class TemplateMatcher:
         if should_disable:
             disabled_set.add(key)
             self._save_disable_list(disabled_set)
-            logger.warning(f"[AutoDisable] DISABLED {key} — {reason}")
+            logger.warning(
+                f"[AutoDisable] DISABLED {key} | "
+                f"WR={1-loss_rate:.1%} | signals={signal_count} | "
+                f"avg_pnl={per_stock.get('avg_pnl', 0):.2%} | "
+                f"loss_streak={loss_streak} | "
+                f"best_pnl={per_stock.get('best_pnl', 0):.2%} | "
+                f"worst_pnl={per_stock.get('worst_pnl', 0):.2%} | "
+                f"status=DISABLED | reason={reason}"
+            )
             if notifier:
                 try:
                     notifier.send_auto_disable_notification(template_id, symbol, stock_state,
                                                             action="disabled", reason=reason)
                 except Exception:
                     pass
+        else:
+            # Watchlist: underperforming but not yet at disable threshold — log for analysis
+            watchlist_lr = ad_cfg.get("watchlist_loss_rate", 0.60)
+            if signal_count >= min_signals and loss_rate > watchlist_lr:
+                logger.warning(
+                    f"[AutoDisable-WATCHLIST] {key} | "
+                    f"WR={1-loss_rate:.1%} | signals={signal_count} | "
+                    f"avg_pnl={per_stock.get('avg_pnl', 0):.2%} | "
+                    f"loss_streak={loss_streak} | "
+                    f"best_pnl={per_stock.get('best_pnl', 0):.2%} | "
+                    f"worst_pnl={per_stock.get('worst_pnl', 0):.2%} | "
+                    f"status=WATCHLIST"
+                )
