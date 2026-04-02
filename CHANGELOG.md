@@ -1,5 +1,18 @@
 # Changelog
 
+## [2026-04-03] Template Auto-Disable per Symbol+State with Telegram Notifications
+- **Problem:** Templates kept firing on chronically unprofitable symbol+state combos (e.g. SQUEEZE_BREAKOUT on LLY in BEARISH/SIDEWAYS — 100% blocked in backtest) with no automatic suppression mechanism
+- **Fix (system_config.py):** Added `TEMPLATE_EVOLUTION_CONFIG` — `auto_disable` sub-dict with `enabled`, `min_signals_to_evaluate` (10), `max_loss_rate` (0.65), `min_loss_streak` (5), `disable_list_path`, `re_enable_win_rate` (0.50)
+- **Fix (system_config.py):** Added `validate_template_evolution_config()` — asserts required keys and value ranges
+- **Fix (system_config.py):** Added `TELEGRAM_HELP_TEXT` — documents `/confirm`, `/unfilled`, `?` commands
+- **Fix (template_matcher.py):** Imported `safe_json_write` (previously missing); added `_disable_combo_key()`, `_load_disable_list()`, `_save_disable_list()`, `_is_combo_disabled()`, `evaluate_auto_disable()` methods; integrated disable check in `scan_ticker()` loop before condition evaluation
+- **Fix (notification_manager.py):** Added `send_auto_disable_notification()` — formats and sends Telegram alert on disable/re-enable events; added `?` handler in `process_incoming_command()` that returns `TELEGRAM_HELP_TEXT`
+- **Combo key format:** `template_id::symbol::trend` — stored in `data/shadow_ledger.json["disabled_combos"]`
+- **Re-enable logic:** If combo is disabled and global win rate for the template recovers above `re_enable_win_rate`, combo is removed from disable list and Telegram notified
+- **Tests (test_template_system.py):** Added 23 tests — TD-01→19 (combo key, load/save, is_disabled, evaluate paths), IT-11 (Telegram fires on disable), RG-16 (validate config), PF-11 (notification format), ST-01 (TELEGRAM_HELP_TEXT)
+
+---
+
 ## [2026-03-31] Weekly Auto-Retrain Scheduler on Weekends (Gap 4)
 - **Problem:** ML models only retrained manually; no automatic mechanism → models become stale over time
 - **Fix:** Added `WEEKLY_RETRAIN_CONFIG` to system_config.py (enabled, retrain_days, last_retrain_path, min_days_between_retrain)

@@ -93,29 +93,70 @@ class NotificationManager:
         Commands:
         /confirm [TICKER] -> Marks trade as executed in reality (2x weight in ML)
         /unfilled [TICKER] -> Marks trade as slipped/unfillable (Trains ML liquidity risk)
+        ? -> Show help text
         """
-        if not text or not text.startswith('/'):
+        if not text:
             return
-            
+
+        # Help shortcut: any message that is just "?" returns help text
+        if text.strip() == "?":
+            help_text = getattr(cfg, 'TELEGRAM_HELP_TEXT', "No help configured.")
+            self.send_message(help_text)
+            return
+
+        if not text.startswith('/'):
+            return
+
         parts = text.strip().upper().split()
         command = parts[0]
-        
+
         if command in ['/CONFIRM', '/UNFILLED'] and len(parts) > 1:
             ticker = parts[1]
-            
+
             # Determine standard ML flag from system configuration
             if command == '/CONFIRM':
                 status = getattr(cfg, 'TRADE_STATUS_EXECUTED', 'CONFIRMED')
             else:
                 status = getattr(cfg, 'TRADE_STATUS_UNFILLED', 'UNFILLED')
-                
+
             success = self._update_ledger_status(ticker, status)
-            
+
             if hasattr(self, 'send_message'):
                 if success:
                     self.send_message(f"System Update: {ticker} marked as {status}. ML Execution Vector synced.")
                 else:
                     self.send_message(f"System Error: Failed to update ledger for {ticker}.Check logs.")
+
+    def send_auto_disable_notification(self, template_id, symbol, stock_state,
+                                       action="disabled", reason=""):
+        """
+        Send a Telegram notification when a template+symbol+state combo is auto-disabled
+        or re-enabled by the evolution engine.
+
+        Args:
+            template_id: Template ID string (e.g. "MOMENTUM_BREAKOUT")
+            symbol: Stock ticker
+            stock_state: State dict (uses 'trend' for context)
+            action: "disabled" or "re_enabled"
+            reason: Human-readable reason string (used when action="disabled")
+        """
+        trend = stock_state.get("trend", "UNKNOWN") if stock_state else "UNKNOWN"
+        if action == "disabled":
+            msg = (
+                f"[AutoDisable] Template DISABLED\n"
+                f"Template: {template_id}\n"
+                f"Symbol: {symbol} | State: {trend}\n"
+                f"Reason: {reason}"
+            )
+        else:
+            msg = (
+                f"[AutoDisable] Template RE-ENABLED\n"
+                f"Template: {template_id}\n"
+                f"Symbol: {symbol} | State: {trend}\n"
+                f"Global win rate has recovered."
+            )
+        logger.info(f"[AutoDisable] Notification: {action} — {template_id}::{symbol}::{trend}")
+        self.send_message(msg)
 
     def send_message(self, message):
         """

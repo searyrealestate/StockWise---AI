@@ -359,3 +359,356 @@ class TestTemplateMatcher:
         assert after == before + 2, (
             f"Expected total_scans to increment by 2; was {before}, now {after}"
         )
+
+
+# ═══════════════════════════════════════════════════════
+# 6.4  TEMPLATE AUTO-DISABLE TESTS  (TD-01 → TD-19)
+# ═══════════════════════════════════════════════════════
+
+class TestTemplateAutoDisable:
+    """
+    Unit tests for the Template Auto-Disable evolution engine.
+    All file I/O is mocked via safe_json_read / safe_json_write patches.
+    """
+
+    @pytest.fixture
+    def matcher(self):
+        return TemplateMatcher()
+
+    SIDEWAYS_STATE = {"trend": "SIDEWAYS", "volume": "HEALTHY", "volatility": "COMPRESSED"}
+
+    # ── Combo key builder ────────────────────────────────────────────────────
+
+    # TD-01: combo key format is template_id::symbol::trend
+    def test_td01_combo_key_format(self, matcher):
+        key = matcher._disable_combo_key("SQUEEZE_BREAKOUT", "LLY", self.SIDEWAYS_STATE)
+        assert key == "SQUEEZE_BREAKOUT::LLY::SIDEWAYS"
+
+    # TD-02: combo key with empty state → trend part is empty string
+    def test_td02_combo_key_empty_state(self, matcher):
+        key = matcher._disable_combo_key("MOMENTUM_BREAKOUT", "AAPL", {})
+        assert key == "MOMENTUM_BREAKOUT::AAPL::"
+
+    # TD-03: combo key with None state → trend part is empty string
+    def test_td03_combo_key_none_state(self, matcher):
+        key = matcher._disable_combo_key("TREND_PULLBACK_EMA", "MSFT", None)
+        assert key == "TREND_PULLBACK_EMA::MSFT::"
+
+    # ── Load / Save disable list ─────────────────────────────────────────────
+
+    # TD-04: _load_disable_list returns empty set when shadow_ledger has no disabled_combos
+    def test_td04_load_disable_list_empty(self, matcher):
+        with patch("template_matcher.safe_json_read", return_value={}):
+            result = matcher._load_disable_list()
+        assert result == set()
+
+    # TD-05: _load_disable_list returns set of keys from shadow_ledger
+    def test_td05_load_disable_list_populated(self, matcher):
+        ledger = {"disabled_combos": ["TID::AAPL::BULLISH", "TID2::MSFT::SIDEWAYS"]}
+        with patch("template_matcher.safe_json_read", return_value=ledger):
+            result = matcher._load_disable_list()
+        assert result == {"TID::AAPL::BULLISH", "TID2::MSFT::SIDEWAYS"}
+
+    # TD-06: _load_disable_list returns empty set on read error (resilient)
+    def test_td06_load_disable_list_read_error(self, matcher):
+        with patch("template_matcher.safe_json_read", side_effect=OSError("no file")):
+            result = matcher._load_disable_list()
+        assert result == set()
+
+    # TD-07: _save_disable_list merges into existing ledger data (no data loss)
+    def test_td07_save_preserves_existing_ledger_data(self, matcher):
+        existing = {"template_stats": {"AAPL": {}}, "disabled_combos": []}
+        captured = {}
+
+        def fake_read(path, default=None):
+            return dict(existing)
+
+        def fake_write(path, data):
+            captured["data"] = data
+
+        with patch("template_matcher.safe_json_read", side_effect=fake_read), \
+             patch("template_matcher.safe_json_write", side_effect=fake_write):
+            matcher._save_disable_list({"TID::AAPL::BULLISH"})
+
+        assert "template_stats" in captured["data"], "Existing keys must be preserved"
+        assert "TID::AAPL::BULLISH" in captured["data"]["disabled_combos"]
+
+    # TD-08: _save_disable_list stores keys as sorted list
+    def test_td08_save_stores_sorted_list(self, matcher):
+        captured = {}
+
+        with patch("template_matcher.safe_json_read", return_value={}), \
+             patch("template_matcher.safe_json_write", side_effect=lambda p, d: captured.update({"d": d})):
+            matcher._save_disable_list({"ZZZ::MSFT::BULLISH", "AAA::AAPL::SIDEWAYS"})
+
+        stored = captured["d"]["disabled_combos"]
+        assert stored == sorted(stored), "disabled_combos must be stored sorted"
+
+    # ── _is_combo_disabled ────────────────────────────────────────────────────
+
+    # TD-09: combo on disable list → _is_combo_disabled returns True
+    def test_td09_is_combo_disabled_true(self, matcher):
+        ledger = {"disabled_combos": ["SQUEEZE_BREAKOUT::LLY::SIDEWAYS"]}
+        with patch("template_matcher.safe_json_read", return_value=ledger), \
+             patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG',
+                          {"auto_disable": {"enabled": True,
+                                            "disable_list_path": "data/shadow_ledger.json"}}):
+            result = matcher._is_combo_disabled("SQUEEZE_BREAKOUT", "LLY", self.SIDEWAYS_STATE)
+        assert result is True
+
+    # TD-10: combo NOT on disable list → _is_combo_disabled returns False
+    def test_td10_is_combo_disabled_false(self, matcher):
+        ledger = {"disabled_combos": ["OTHER::AAPL::BULLISH"]}
+        with patch("template_matcher.safe_json_read", return_value=ledger), \
+             patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG',
+                          {"auto_disable": {"enabled": True,
+                                            "disable_list_path": "data/shadow_ledger.json"}}):
+            result = matcher._is_combo_disabled("SQUEEZE_BREAKOUT", "LLY", self.SIDEWAYS_STATE)
+        assert result is False
+
+    # TD-11: auto_disable disabled in config → _is_combo_disabled always False
+    def test_td11_is_combo_disabled_when_feature_off(self, matcher):
+        ledger = {"disabled_combos": ["SQUEEZE_BREAKOUT::LLY::SIDEWAYS"]}
+        with patch("template_matcher.safe_json_read", return_value=ledger), \
+             patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG',
+                          {"auto_disable": {"enabled": False,
+                                            "disable_list_path": "data/shadow_ledger.json"}}):
+            result = matcher._is_combo_disabled("SQUEEZE_BREAKOUT", "LLY", self.SIDEWAYS_STATE)
+        assert result is False
+
+    # ── evaluate_auto_disable — disable path ─────────────────────────────────
+
+    # TD-12: high loss rate >= min_signals → combo added to disable list
+    def test_td12_high_loss_rate_triggers_disable(self, matcher):
+        stats = {"LLY": {"SQUEEZE_BREAKOUT": {"signal_count": 15, "wins": 3, "loss_streak": 1}}}
+        saved = {}
+
+        with patch("template_matcher.safe_json_read", return_value={"disabled_combos": []}), \
+             patch("template_matcher.safe_json_write", side_effect=lambda p, d: saved.update({"d": d})), \
+             patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {"auto_disable": {
+                 "enabled": True, "min_signals_to_evaluate": 10,
+                 "max_loss_rate": 0.65, "min_loss_streak": 5,
+                 "re_enable_win_rate": 0.50,
+                 "disable_list_path": "data/shadow_ledger.json"}}):
+            matcher.evaluate_auto_disable("SQUEEZE_BREAKOUT", "LLY",
+                                          self.SIDEWAYS_STATE, shadow_stats=stats)
+
+        assert "SQUEEZE_BREAKOUT::LLY::SIDEWAYS" in saved["d"]["disabled_combos"]
+
+    # TD-13: loss streak >= min_loss_streak → combo disabled (regardless of signal count)
+    def test_td13_loss_streak_triggers_disable(self, matcher):
+        stats = {"LLY": {"SQUEEZE_BREAKOUT": {"signal_count": 5, "wins": 1, "loss_streak": 6}}}
+        saved = {}
+
+        with patch("template_matcher.safe_json_read", return_value={"disabled_combos": []}), \
+             patch("template_matcher.safe_json_write", side_effect=lambda p, d: saved.update({"d": d})), \
+             patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {"auto_disable": {
+                 "enabled": True, "min_signals_to_evaluate": 10,
+                 "max_loss_rate": 0.65, "min_loss_streak": 5,
+                 "re_enable_win_rate": 0.50,
+                 "disable_list_path": "data/shadow_ledger.json"}}):
+            matcher.evaluate_auto_disable("SQUEEZE_BREAKOUT", "LLY",
+                                          self.SIDEWAYS_STATE, shadow_stats=stats)
+
+        assert "SQUEEZE_BREAKOUT::LLY::SIDEWAYS" in saved["d"]["disabled_combos"]
+
+    # TD-14: low loss rate + short streak → no disable
+    def test_td14_low_loss_rate_no_disable(self, matcher):
+        stats = {"AAPL": {"MOMENTUM_BREAKOUT": {"signal_count": 20, "wins": 14, "loss_streak": 1}}}
+        saved = {}
+
+        with patch("template_matcher.safe_json_read", return_value={"disabled_combos": []}), \
+             patch("template_matcher.safe_json_write", side_effect=lambda p, d: saved.update({"d": d})), \
+             patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {"auto_disable": {
+                 "enabled": True, "min_signals_to_evaluate": 10,
+                 "max_loss_rate": 0.65, "min_loss_streak": 5,
+                 "re_enable_win_rate": 0.50,
+                 "disable_list_path": "data/shadow_ledger.json"}}):
+            matcher.evaluate_auto_disable("MOMENTUM_BREAKOUT", "AAPL",
+                                          BULL_STATE, shadow_stats=stats)
+
+        assert not saved, "Should not write when no disable criteria met"
+
+    # TD-15: fewer signals than min → no disable even with high loss rate
+    def test_td15_below_min_signals_no_disable(self, matcher):
+        stats = {"MSFT": {"TREND_PULLBACK_EMA": {"signal_count": 3, "wins": 0, "loss_streak": 3}}}
+        saved = {}
+
+        with patch("template_matcher.safe_json_read", return_value={"disabled_combos": []}), \
+             patch("template_matcher.safe_json_write", side_effect=lambda p, d: saved.update({"d": d})), \
+             patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {"auto_disable": {
+                 "enabled": True, "min_signals_to_evaluate": 10,
+                 "max_loss_rate": 0.65, "min_loss_streak": 5,
+                 "re_enable_win_rate": 0.50,
+                 "disable_list_path": "data/shadow_ledger.json"}}):
+            matcher.evaluate_auto_disable("TREND_PULLBACK_EMA", "MSFT",
+                                          BULL_STATE, shadow_stats=stats)
+
+        assert not saved, "Should not disable with fewer signals than min_signals_to_evaluate"
+
+    # TD-16: feature disabled in config → evaluate_auto_disable is no-op
+    def test_td16_feature_disabled_no_op(self, matcher):
+        stats = {"LLY": {"SQUEEZE_BREAKOUT": {"signal_count": 20, "wins": 2, "loss_streak": 10}}}
+        saved = {}
+
+        with patch("template_matcher.safe_json_read", return_value={"disabled_combos": []}), \
+             patch("template_matcher.safe_json_write", side_effect=lambda p, d: saved.update({"d": d})), \
+             patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG',
+                          {"auto_disable": {"enabled": False}}):
+            matcher.evaluate_auto_disable("SQUEEZE_BREAKOUT", "LLY",
+                                          self.SIDEWAYS_STATE, shadow_stats=stats)
+
+        assert not saved, "When feature is disabled, evaluate_auto_disable must be a no-op"
+
+    # ── evaluate_auto_disable — re-enable path ──────────────────────────────
+
+    # TD-17: combo already disabled + global WR recovered → removed from disable list
+    def test_td17_re_enable_on_recovered_win_rate(self, matcher):
+        key = "SQUEEZE_BREAKOUT::LLY::SIDEWAYS"
+        # Global: 10 signals, 6 wins → 60% WR > re_enable_win_rate 50%
+        stats = {
+            "LLY": {"SQUEEZE_BREAKOUT": {"signal_count": 10, "wins": 6, "loss_streak": 0}},
+        }
+        saved = {}
+
+        with patch("template_matcher.safe_json_read", return_value={"disabled_combos": [key]}), \
+             patch("template_matcher.safe_json_write", side_effect=lambda p, d: saved.update({"d": d})), \
+             patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {"auto_disable": {
+                 "enabled": True, "min_signals_to_evaluate": 10,
+                 "max_loss_rate": 0.65, "min_loss_streak": 5,
+                 "re_enable_win_rate": 0.50,
+                 "disable_list_path": "data/shadow_ledger.json"}}):
+            matcher.evaluate_auto_disable("SQUEEZE_BREAKOUT", "LLY",
+                                          self.SIDEWAYS_STATE, shadow_stats=stats)
+
+        assert key not in saved["d"]["disabled_combos"], \
+            "Combo should be removed from disable list on WR recovery"
+
+    # TD-18: combo already disabled + global WR still low → stays disabled
+    def test_td18_stays_disabled_when_wr_still_low(self, matcher):
+        key = "SQUEEZE_BREAKOUT::LLY::SIDEWAYS"
+        # Global: 10 signals, 3 wins → 30% WR < re_enable_win_rate 50%
+        stats = {
+            "LLY": {"SQUEEZE_BREAKOUT": {"signal_count": 10, "wins": 3, "loss_streak": 0}},
+        }
+        saved = {}
+
+        with patch("template_matcher.safe_json_read", return_value={"disabled_combos": [key]}), \
+             patch("template_matcher.safe_json_write", side_effect=lambda p, d: saved.update({"d": d})), \
+             patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {"auto_disable": {
+                 "enabled": True, "min_signals_to_evaluate": 10,
+                 "max_loss_rate": 0.65, "min_loss_streak": 5,
+                 "re_enable_win_rate": 0.50,
+                 "disable_list_path": "data/shadow_ledger.json"}}):
+            matcher.evaluate_auto_disable("SQUEEZE_BREAKOUT", "LLY",
+                                          self.SIDEWAYS_STATE, shadow_stats=stats)
+
+        assert not saved, "Should not write when combo remains disabled (WR still low)"
+
+    # ── scan_ticker integration ──────────────────────────────────────────────
+
+    # TD-19: disabled combo → template skipped in scan_ticker, zero signals
+    def test_td19_scan_ticker_skips_disabled_combo(self, matcher):
+        df = _single_row_df(
+            close=105.0, open=102.0, high=108.0, low=97.0,
+            rsi=62.0, macd=0.5, macd_signal=0.2,
+            sma_50=100.0, sma_200=90.0,
+            volume=2_000_000.0, vol_avg_20=500_000.0,
+            atr=2.5,
+        )
+        # Patch _is_combo_disabled to always return True (all combos disabled)
+        with patch.object(matcher, '_is_combo_disabled', return_value=True):
+            signals = matcher.scan_ticker("AAPL", df, BULL_STATE)
+        assert signals == [], "All templates disabled → zero signals expected"
+
+
+# ═══════════════════════════════════════════════════════
+# 6.5  INTEGRATION TESTS  (IT-11)
+# ═══════════════════════════════════════════════════════
+
+class TestIntegration:
+    """Cross-component integration tests."""
+
+    # IT-11: auto_disable Telegram notification fires on disable event
+    def test_it11_telegram_notification_on_disable(self):
+        matcher = TemplateMatcher()
+        notifier = MagicMock()
+
+        stats = {"TSLA": {"MOMENTUM_BREAKOUT": {"signal_count": 15, "wins": 3, "loss_streak": 0}}}
+
+        with patch("template_matcher.safe_json_read", return_value={"disabled_combos": []}), \
+             patch("template_matcher.safe_json_write"), \
+             patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {"auto_disable": {
+                 "enabled": True, "min_signals_to_evaluate": 10,
+                 "max_loss_rate": 0.65, "min_loss_streak": 5,
+                 "re_enable_win_rate": 0.50,
+                 "disable_list_path": "data/shadow_ledger.json"}}):
+            matcher.evaluate_auto_disable("MOMENTUM_BREAKOUT", "TSLA",
+                                          BULL_STATE, shadow_stats=stats,
+                                          notifier=notifier)
+
+        notifier.send_auto_disable_notification.assert_called_once()
+        call_kwargs = notifier.send_auto_disable_notification.call_args
+        assert call_kwargs.kwargs.get("action") == "disabled" or \
+               (call_kwargs.args and "disabled" in call_kwargs.args)
+
+
+# ═══════════════════════════════════════════════════════
+# 6.6  REGIME CONFIG TESTS  (RG-16)
+# ═══════════════════════════════════════════════════════
+
+class TestRegimeConfig:
+    """TEMPLATE_EVOLUTION_CONFIG structure validation."""
+
+    # RG-16: validate_template_evolution_config passes with default config
+    def test_rg16_validate_template_evolution_config(self):
+        result = cfg.validate_template_evolution_config()
+        assert result is True, "validate_template_evolution_config() must return True"
+
+
+# ═══════════════════════════════════════════════════════
+# 6.7  NOTIFICATION MANAGER TESTS  (PF-11)
+# ═══════════════════════════════════════════════════════
+
+class TestNotificationManager:
+    """Notification manager auto-disable integration."""
+
+    # PF-11: send_auto_disable_notification sends correctly formatted message
+    def test_pf11_send_auto_disable_notification_format(self):
+        from notification_manager import NotificationManager
+        nm = NotificationManager.__new__(NotificationManager)
+        nm.token = "fake"
+        nm.chat_id = "123"
+        nm.enabled = False
+        nm.message_queue = []
+
+        sent = []
+        with patch.object(nm, 'send_message', side_effect=lambda m: sent.append(m)):
+            nm.send_auto_disable_notification(
+                "SQUEEZE_BREAKOUT", "LLY",
+                {"trend": "SIDEWAYS"},
+                action="disabled",
+                reason="loss_rate=80% > 65%"
+            )
+
+        assert len(sent) == 1
+        msg = sent[0]
+        assert "SQUEEZE_BREAKOUT" in msg
+        assert "LLY" in msg
+        assert "SIDEWAYS" in msg
+        assert "disabled" in msg.lower() or "DISABLED" in msg
+
+
+# ═══════════════════════════════════════════════════════
+# 6.8  SYSTEM CONFIG TELEGRAM HELP TESTS  (ST-01)
+# ═══════════════════════════════════════════════════════
+
+class TestSystemConfigTelegramHelp:
+    """TELEGRAM_HELP_TEXT configuration."""
+
+    # ST-01: TELEGRAM_HELP_TEXT exists and contains ? help entry
+    def test_st01_telegram_help_text_exists_and_contains_help(self):
+        help_text = getattr(cfg, 'TELEGRAM_HELP_TEXT', None)
+        assert help_text is not None, "TELEGRAM_HELP_TEXT not found in system_config"
+        assert isinstance(help_text, str), "TELEGRAM_HELP_TEXT must be a string"
+        assert "?" in help_text, "TELEGRAM_HELP_TEXT must document the ? command"

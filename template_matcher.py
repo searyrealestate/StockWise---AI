@@ -21,7 +21,7 @@ import time
 from datetime import datetime
 import system_config as cfg
 from setup_templates import TemplateManager, CONDITION_BLOCKS, STOP_BLOCKS, TARGET_BLOCKS
-from safe_json_io import safe_json_read
+from safe_json_io import safe_json_read, safe_json_write
 
 logger = logging.getLogger("TemplateMatcher")
 
@@ -110,6 +110,11 @@ class TemplateMatcher:
         signals = []
 
         for template in matching_templates:
+            # Auto-disable check: skip template+symbol+state combos marked as disabled
+            if self._is_combo_disabled(template.id, symbol, stock_state):
+                logger.info(f"[{symbol}] {template.id}: DISABLED for this symbol/state combo — skipping")
+                continue
+
             all_passed, details = template.evaluate_conditions(last_row)
 
             if all_passed:
@@ -374,3 +379,131 @@ class TemplateMatcher:
     def _get_template_by_id(self, template_id):
         """Find template by ID. Delegates to TemplateManager's registry."""
         return self.tm.get_template_by_id(template_id)
+
+    # ========================================
+    # TEMPLATE AUTO-DISABLE (TEMPLATE EVOLUTION)
+    # ========================================
+
+    def _disable_combo_key(self, template_id, symbol, stock_state):
+        """Build a string key for a (template, symbol, trend_state) combo."""
+        trend = stock_state.get("trend", "") if stock_state else ""
+        return f"{template_id}::{symbol}::{trend}"
+
+    def _load_disable_list(self):
+        """
+        Load the set of disabled combo keys from shadow_ledger.json.
+        Returns a set of string keys (template_id::symbol::trend).
+        """
+        evo_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {})
+        path = evo_cfg.get("auto_disable", {}).get("disable_list_path", "data/shadow_ledger.json")
+        try:
+            data = safe_json_read(path, default={})
+            return set(data.get("disabled_combos", []))
+        except Exception:
+            return set()
+
+    def _save_disable_list(self, disabled_set):
+        """
+        Persist the updated disabled combo set back to shadow_ledger.json.
+        Only writes the 'disabled_combos' key — leaves all other ledger data intact.
+        """
+        evo_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {})
+        path = evo_cfg.get("auto_disable", {}).get("disable_list_path", "data/shadow_ledger.json")
+        try:
+            data = safe_json_read(path, default={})
+            data["disabled_combos"] = sorted(disabled_set)
+            safe_json_write(path, data)
+        except Exception as e:
+            logger.error(f"[AutoDisable] Failed to save disable list: {e}")
+
+    def _is_combo_disabled(self, template_id, symbol, stock_state):
+        """
+        Returns True if this template+symbol+trend combo is on the disable list.
+        Auto-disable must be enabled in TEMPLATE_EVOLUTION_CONFIG.
+        """
+        evo_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {})
+        if not evo_cfg.get("auto_disable", {}).get("enabled", False):
+            return False
+        key = self._disable_combo_key(template_id, symbol, stock_state)
+        return key in self._load_disable_list()
+
+    def evaluate_auto_disable(self, template_id, symbol, stock_state, shadow_stats=None,
+                              notifier=None):
+        """
+        Evaluate whether a template+symbol+state combo should be auto-disabled.
+
+        Disable criteria (from TEMPLATE_EVOLUTION_CONFIG):
+          - signal_count >= min_signals_to_evaluate AND loss_rate > max_loss_rate
+          - OR loss_streak >= min_loss_streak
+
+        If criteria met: adds combo to disable list, sends Telegram notification.
+        If combo is already disabled but global win rate has recovered above
+        re_enable_win_rate threshold: re-enables and notifies.
+
+        Args:
+            template_id: Template ID string
+            symbol: Stock ticker
+            stock_state: Current state dict (uses 'trend' key for combo key)
+            shadow_stats: template_stats section of shadow_ledger (optional, loads if None)
+            notifier: NotificationManager instance for Telegram alerts (optional)
+        """
+        evo_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {})
+        ad_cfg = evo_cfg.get("auto_disable", {})
+        if not ad_cfg.get("enabled", False):
+            return
+
+        min_signals = ad_cfg.get("min_signals_to_evaluate", 10)
+        max_loss_rate = ad_cfg.get("max_loss_rate", 0.65)
+        min_streak = ad_cfg.get("min_loss_streak", 5)
+        re_enable_wr = ad_cfg.get("re_enable_win_rate", 0.50)
+
+        # Load per-symbol stats from shadow_ledger if not provided
+        if shadow_stats is None:
+            shadow_stats = self._load_shadow_stats()
+
+        per_stock = shadow_stats.get(symbol, {}).get(template_id, {})
+        signal_count = per_stock.get("signal_count", 0)
+        wins = per_stock.get("wins", 0)
+        loss_streak = per_stock.get("loss_streak", 0)
+
+        loss_rate = 1.0 - (wins / signal_count) if signal_count > 0 else 0.0
+
+        key = self._disable_combo_key(template_id, symbol, stock_state)
+        disabled_set = self._load_disable_list()
+
+        if key in disabled_set:
+            # Check for re-enable: global win rate recovered
+            global_stat = self._aggregate_global_stats(shadow_stats, template_id)
+            global_wr = global_stat.get("win_rate", 0.0) / 100.0
+            if global_wr >= re_enable_wr:
+                disabled_set.discard(key)
+                self._save_disable_list(disabled_set)
+                logger.info(f"[AutoDisable] RE-ENABLED {key} — global WR {global_wr:.0%} >= {re_enable_wr:.0%}")
+                if notifier:
+                    try:
+                        notifier.send_auto_disable_notification(template_id, symbol, stock_state,
+                                                                action="re_enabled")
+                    except Exception:
+                        pass
+            return
+
+        # Evaluate disable criteria
+        should_disable = False
+        reason = ""
+        if signal_count >= min_signals and loss_rate > max_loss_rate:
+            should_disable = True
+            reason = f"loss_rate={loss_rate:.0%} > {max_loss_rate:.0%} over {signal_count} signals"
+        elif loss_streak >= min_streak:
+            should_disable = True
+            reason = f"loss_streak={loss_streak} >= {min_streak}"
+
+        if should_disable:
+            disabled_set.add(key)
+            self._save_disable_list(disabled_set)
+            logger.warning(f"[AutoDisable] DISABLED {key} — {reason}")
+            if notifier:
+                try:
+                    notifier.send_auto_disable_notification(template_id, symbol, stock_state,
+                                                            action="disabled", reason=reason)
+                except Exception:
+                    pass

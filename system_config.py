@@ -491,6 +491,43 @@ WEEKLY_RETRAIN_CONFIG = {
     "min_days_between_retrain": 5,   # Don't retrain more than once per 5 days
 }
 
+TEMPLATE_EVOLUTION_CONFIG = {
+    "auto_disable": {
+        "enabled": True,
+        "min_signals_to_evaluate": 10,   # Need >= 10 signals before considering disable
+        "max_loss_rate": 0.65,           # Disable combo if loss rate > 65%
+        "min_loss_streak": 5,            # OR disable after 5 consecutive losses
+        "disable_list_path": "data/shadow_ledger.json",  # Stored in shadow_ledger
+        "re_enable_win_rate": 0.50,      # Re-enable if global win rate recovers above 50%
+    }
+}
+
+
+def validate_template_evolution_config():
+    """Validate TEMPLATE_EVOLUTION_CONFIG has required keys and sane values."""
+    ad = TEMPLATE_EVOLUTION_CONFIG.get("auto_disable", {})
+    assert isinstance(ad.get("min_signals_to_evaluate", None), int), \
+        "auto_disable.min_signals_to_evaluate must be int"
+    assert isinstance(ad.get("max_loss_rate", None), float), \
+        "auto_disable.max_loss_rate must be float"
+    assert 0.0 < ad["max_loss_rate"] < 1.0, \
+        "auto_disable.max_loss_rate must be in (0, 1)"
+    assert isinstance(ad.get("min_loss_streak", None), int), \
+        "auto_disable.min_loss_streak must be int"
+    assert ad.get("min_signals_to_evaluate", 0) > 0, \
+        "auto_disable.min_signals_to_evaluate must be > 0"
+    assert isinstance(ad.get("disable_list_path", None), str), \
+        "auto_disable.disable_list_path must be str"
+    return True
+
+
+TELEGRAM_HELP_TEXT = (
+    "StockWise Commands:\n"
+    "/confirm [TICKER] — Mark trade as executed (2x ML weight)\n"
+    "/unfilled [TICKER] — Mark trade as slipped (trains liquidity risk)\n"
+    "? — Show this help message"
+)
+
 # Portfolio Risk Management (Phase 5)
 PORTFOLIO_RISK_CONFIG = {
     # --- Correlation Check ---
