@@ -54,9 +54,14 @@ class ShadowLedger:
         })
 
     def _save_ledger(self):
-        """Persist ledger atomically."""
+        """Persist ledger — updates template_stats and metadata only.
+        All other keys (attributions, coverage_gaps, disabled_combos) are
+        written by their own methods and must not be overwritten here."""
         self.ledger["metadata"]["last_run"] = datetime.now().isoformat()
-        safe_json_write(self.ledger_path, self.ledger)
+        data = safe_json_read(self.ledger_path, default={})
+        data["metadata"] = self.ledger["metadata"]
+        data["template_stats"] = self.ledger.get("template_stats", {})
+        safe_json_write(self.ledger_path, data)
 
     def evaluate_history(self, symbol, df, stock_state_fn=None):
         """
@@ -237,6 +242,7 @@ class ShadowLedger:
             return
         try:
             report = self._analyze_coverage_gaps()
+            self.ledger["coverage_gaps"] = self._make_serializable(report)
             self._save_coverage_gaps(report)
             self._log_coverage_report(report)
         except Exception as e:

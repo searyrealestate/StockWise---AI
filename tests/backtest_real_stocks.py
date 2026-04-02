@@ -44,6 +44,8 @@ from feature_engine import FeatureEngine
 from stock_hunter import StockHunter
 from template_matcher import TemplateMatcher
 from portfolio_risk import PortfolioRiskManager
+from shadow_ledger import ShadowLedger  # CP-1: evolution engine verification
+from safe_json_io import safe_json_read, safe_json_write  # CP-1
 
 logging.basicConfig(level=logging.WARNING,
                     format='%(asctime)s | %(levelname)s | %(message)s')
@@ -229,6 +231,28 @@ def print_report(results):
         print(f"  Total PnL:       {total_pnl:+.2f}%")
         print(f"  Avg PnL/Trade:   {total_pnl/len(all_trades):+.2f}%")
 
+        # CP-1: Profit Factor, MaxDD, Edge, Kelly
+        wins_pnl = [t['pnl_pct'] for t in all_trades if t['won']]
+        loss_pnl = [abs(t['pnl_pct']) for t in all_trades if not t['won']]
+        total_profit = sum(wins_pnl)
+        total_loss_abs = sum(loss_pnl)
+        pf = total_profit / total_loss_abs if total_loss_abs > 0 else float('inf')
+        avg_win = total_profit / len(wins_pnl) if wins_pnl else 0.0
+        avg_loss = total_loss_abs / len(loss_pnl) if loss_pnl else 0.0
+        cum_pnl, peak_pnl, max_dd = 0.0, 0.0, 0.0
+        for t in all_trades:
+            cum_pnl += t['pnl_pct']
+            peak_pnl = max(peak_pnl, cum_pnl)
+            max_dd = max(max_dd, peak_pnl - cum_pnl)
+        wr_f = wins / len(all_trades)
+        rr = avg_win / avg_loss if avg_loss > 0 else 0.0
+        edge = (wr_f * avg_win - (1 - wr_f) * avg_loss) / avg_loss if avg_loss > 0 else 0.0
+        kelly = max(0.0, wr_f - (1 - wr_f) / rr) * 100 if rr > 0 else 0.0
+        print(f"  Profit Factor:   {pf:.2f}")
+        print(f"  Max Drawdown:    {max_dd:.2f}%")
+        print(f"  Edge:            {edge:.2f}")
+        print(f"  Kelly:           {kelly:.1f}%")
+
         # Weaknesses analysis
         print(f"\n--- Weakness Analysis ---")
 
@@ -265,3 +289,57 @@ if __name__ == "__main__":
     print(f"Starting backtest: {symbols} | {args.days} days | Provider: {args.provider}")
     results = run_backtest(symbols, days_back=args.days, provider=args.provider)
     print_report(results)
+
+    # ── CP-1: Evolution Engine Verification ──────────────────────────────────
+    print("\n" + "="*70)
+    print("  CP-1: SHADOW LEDGER EVALUATION (attribution + coverage + auto-disable)")
+    print("="*70)
+
+    # Step A: run evaluate_history per symbol (attribution + coverage gap data)
+    dm_sl = DataSourceManager()
+    fe_sl = FeatureEngine()
+    hunter_sl = StockHunter(dm_sl)
+    sl = ShadowLedger()
+    sl._coverage_data = {}
+
+    for sym in symbols:
+        try:
+            df_raw = dm_sl.get_stock_data(sym, days_back=args.days)
+            if df_raw is None or len(df_raw) < 200:
+                print(f"  [{sym}] Skipped — insufficient data")
+                continue
+            df_f = fe_sl.calculate_features(df_raw)
+            state_fn = lambda df_s, _h=hunter_sl: _h.classify_stock_state(df_s)
+            sl.evaluate_history(sym, df_f, stock_state_fn=state_fn)
+            print(f"  [{sym}] evaluate_history complete")
+        except Exception as _ex:
+            print(f"  [{sym}] Error: {_ex}")
+
+    sl._save_ledger()               # template_stats + metadata
+    sl._finalize_coverage_gaps()   # coverage_gaps (merged into existing file)
+    print("[Shadow Ledger] Data written to data/shadow_ledger.json")
+
+    # Step B: evaluate auto-disable for each unique template+symbol+trend combo
+    print("\n[Auto-Disable] Evaluating combos from shadow_ledger stats...")
+    shadow_stats = safe_json_read('data/shadow_ledger.json', default={}).get('template_stats', {})
+    matcher_sl = TemplateMatcher()
+    for sym, tmpl_stats in shadow_stats.items():
+        for tid, stats in tmpl_stats.items():
+            # Use dominant trend from backtest trades, fall back to BULLISH
+            sym_trades = [t for t in results['trades'] if t['symbol'] == sym and t['template'] == tid]
+            trend_counts = {}
+            for t in sym_trades:
+                st = t.get('state') or {}
+                tr = (st.get('trend', 'BULLISH') if isinstance(st, dict) else 'BULLISH')
+                trend_counts[tr] = trend_counts.get(tr, 0) + 1
+            trends_to_check = list(trend_counts.keys()) if trend_counts else ['BULLISH']
+            for trend in trends_to_check:
+                matcher_sl.evaluate_auto_disable(
+                    template_id=tid, symbol=sym,
+                    stock_state={'trend': trend},
+                    shadow_stats=shadow_stats,
+                )
+    dc_final = safe_json_read('data/shadow_ledger.json', default={}).get('disabled_combos', [])
+    print(f"[Auto-Disable] Done. Disabled combos: {len(dc_final)}")
+    for c in sorted(dc_final):
+        print(f"  DISABLED: {c}")
