@@ -531,6 +531,24 @@ TEMPLATE_EVOLUTION_CONFIG = {
         "track_opportunity_score": True,     # Score each gap for template generation priority
         "report_top_n_gaps": 10,             # Include only top N gaps in report
         "recent_period_months": 12,          # Definition of "recent" for recency scoring
+    },
+    "contextual_trust": {
+        "enabled": True,
+        "burn_in_signals": 20,               # Signals needed before trust score leaves BURN_IN
+        "min_signals_per_cell": 5,           # Min signals in a state cell before using it
+        "min_signals_for_proven": 20,        # Min signals to reach PROVEN lifecycle
+        "bayesian_prior_weight": 0.4,        # Weight of base-rate prior (0.43) in blending
+        "global_fallback_weight": 0.3,       # Weight of cross-symbol global WR
+        "local_weight": 0.7,                 # Max weight for local per-(symbol, state) WR
+        "proven_wr_threshold": 0.50,         # Decayed WR >= this → PROVEN
+        "monitoring_wr_threshold": 0.35,     # Decayed WR >= this → MONITORING
+        "degraded_wr_threshold": 0.20,       # Decayed WR >= this → DEGRADED (else DISABLED)
+        "lifecycle_check_min_signals": 10,   # Min signals before lifecycle transitions out of BURN_IN
+        "hysteresis": 0.05,                  # Band around thresholds to prevent flip-flopping
+        "confidence_interval_pct": 0.95,     # Wilson CI level (0.95 = 95%)
+        "use_decayed_wr": True,              # Use exponentially decayed WR (recent = more weight)
+        "decay_rate": 0.95,                  # Per-signal decay factor (0.95 = 5% fade per signal)
+        "state_grouping_levels": 3,          # Fallback levels: L3=full, L2=trend+vol, L1=trend
     }
 }
 
@@ -581,6 +599,37 @@ def validate_template_evolution_config():
         "coverage_gap.report_top_n_gaps must be int > 0"
     assert isinstance(cg.get("recent_period_months", None), int) and cg["recent_period_months"] > 0, \
         "coverage_gap.recent_period_months must be int > 0"
+    ct = TEMPLATE_EVOLUTION_CONFIG.get("contextual_trust", {})
+    assert isinstance(ct.get("enabled", None), bool), \
+        "contextual_trust.enabled must be bool"
+    assert isinstance(ct.get("burn_in_signals", None), int) and ct["burn_in_signals"] > 0, \
+        "contextual_trust.burn_in_signals must be int > 0"
+    assert isinstance(ct.get("min_signals_per_cell", None), int) and ct["min_signals_per_cell"] > 0, \
+        "contextual_trust.min_signals_per_cell must be int > 0"
+    assert isinstance(ct.get("min_signals_for_proven", None), int) and ct["min_signals_for_proven"] > 0, \
+        "contextual_trust.min_signals_for_proven must be int > 0"
+    for _ct_key in ["bayesian_prior_weight", "global_fallback_weight", "local_weight"]:
+        _val = ct.get(_ct_key, None)
+        assert isinstance(_val, float) and 0.0 < _val <= 1.0, \
+            f"contextual_trust.{_ct_key} must be float in (0, 1]"
+    for _ct_key in ["proven_wr_threshold", "monitoring_wr_threshold", "degraded_wr_threshold", "hysteresis"]:
+        _val = ct.get(_ct_key, None)
+        assert isinstance(_val, float) and 0.0 <= _val < 1.0, \
+            f"contextual_trust.{_ct_key} must be float in [0, 1)"
+    assert ct["proven_wr_threshold"] > ct["monitoring_wr_threshold"] > ct["degraded_wr_threshold"], \
+        "contextual_trust WR thresholds must be strictly decreasing: proven > monitoring > degraded"
+    assert isinstance(ct.get("lifecycle_check_min_signals", None), int) and ct["lifecycle_check_min_signals"] > 0, \
+        "contextual_trust.lifecycle_check_min_signals must be int > 0"
+    _ci_pct = ct.get("confidence_interval_pct", None)
+    assert isinstance(_ci_pct, float) and 0.0 < _ci_pct < 1.0, \
+        "contextual_trust.confidence_interval_pct must be float in (0, 1)"
+    assert isinstance(ct.get("use_decayed_wr", None), bool), \
+        "contextual_trust.use_decayed_wr must be bool"
+    _dr = ct.get("decay_rate", None)
+    assert isinstance(_dr, float) and 0.0 < _dr < 1.0, \
+        "contextual_trust.decay_rate must be float in (0, 1)"
+    assert isinstance(ct.get("state_grouping_levels", None), int) and ct["state_grouping_levels"] in [1, 2, 3], \
+        "contextual_trust.state_grouping_levels must be int in {1, 2, 3}"
     return True
 
 
@@ -588,6 +637,7 @@ TELEGRAM_HELP_TEXT = (
     "StockWise Commands:\n"
     "/confirm [TICKER] — Mark trade as executed (2x ML weight)\n"
     "/unfilled [TICKER] — Mark trade as slipped (trains liquidity risk)\n"
+    "/trust [TEMPLATE] [TICKER] — Show contextual trust score for a setup\n"
     "? — Show this help message"
 )
 

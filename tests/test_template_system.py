@@ -1734,3 +1734,418 @@ class TestCoverageGapDetection:
              patch("shadow_ledger.safe_json_write") as mock_write:
             sl._finalize_coverage_gaps()
         mock_write.assert_not_called()
+
+
+# ═══════════════════════════════════════════════════════
+# 6.11  CONTEXTUAL TRUST TESTS  (CT-01 → CT-35)
+# ═══════════════════════════════════════════════════════
+
+_CT_CONFIG = {
+    "enabled": True,
+    "burn_in_signals": 20,
+    "min_signals_per_cell": 5,
+    "min_signals_for_proven": 20,
+    "bayesian_prior_weight": 0.4,
+    "global_fallback_weight": 0.3,
+    "local_weight": 0.7,
+    "proven_wr_threshold": 0.50,
+    "monitoring_wr_threshold": 0.35,
+    "degraded_wr_threshold": 0.20,
+    "lifecycle_check_min_signals": 10,
+    "hysteresis": 0.05,
+    "confidence_interval_pct": 0.95,
+    "use_decayed_wr": True,
+    "decay_rate": 0.95,
+    "state_grouping_levels": 3,
+}
+
+_CT_EVO_CFG = {
+    "auto_disable": {
+        "enabled": True,
+        "min_signals_to_evaluate": 15,
+        "max_loss_rate": 0.85,
+        "min_loss_streak": 5,
+        "re_enable_win_rate": 0.35,
+        "watchlist_loss_rate": 0.60,
+        "disable_list_path": "data/shadow_ledger.json",
+    },
+    "attribution": {"enabled": False},
+    "coverage_gap": {"enabled": False},
+    "contextual_trust": _CT_CONFIG,
+}
+
+
+class TestContextualTrust:
+    """CP-2 Contextual Trust System — config, state keys, math, lifecycle,
+    get_trust_score, shadow ledger integration, and Telegram notification
+    (CT-01 → CT-35)."""
+
+    @pytest.fixture
+    def matcher(self):
+        return TemplateMatcher()
+
+    @pytest.fixture
+    def sl(self):
+        return _make_sl()
+
+    BULL_STATE_FULL = {
+        "trend": "BULLISH", "structure": "UPTREND",
+        "volume": "HEALTHY", "volatility": "NORMAL",
+    }
+
+    # ── System config (CT-01 → CT-05) ────────────────────────────────────
+
+    # CT-01: contextual_trust section present in TEMPLATE_EVOLUTION_CONFIG
+    def test_ct01_contextual_trust_section_present(self):
+        assert "contextual_trust" in cfg.TEMPLATE_EVOLUTION_CONFIG, \
+            "contextual_trust section missing from TEMPLATE_EVOLUTION_CONFIG"
+
+    # CT-02: validate_template_evolution_config passes with contextual_trust present
+    def test_ct02_validate_config_passes(self):
+        result = cfg.validate_template_evolution_config()
+        assert result is True
+
+    # CT-03: all 16 required keys present with correct types
+    def test_ct03_all_required_keys_present_and_typed(self):
+        ct = cfg.TEMPLATE_EVOLUTION_CONFIG["contextual_trust"]
+        assert isinstance(ct["enabled"], bool)
+        for int_key in ["burn_in_signals", "min_signals_per_cell",
+                         "min_signals_for_proven", "lifecycle_check_min_signals",
+                         "state_grouping_levels"]:
+            assert isinstance(ct[int_key], int), f"{int_key} must be int"
+        for float_key in ["bayesian_prior_weight", "global_fallback_weight",
+                           "local_weight", "proven_wr_threshold",
+                           "monitoring_wr_threshold", "degraded_wr_threshold",
+                           "hysteresis", "confidence_interval_pct", "decay_rate"]:
+            assert isinstance(ct[float_key], float), f"{float_key} must be float"
+        assert isinstance(ct["use_decayed_wr"], bool)
+
+    # CT-04: WR threshold ordering: proven > monitoring > degraded
+    def test_ct04_wr_threshold_ordering(self):
+        ct = cfg.TEMPLATE_EVOLUTION_CONFIG["contextual_trust"]
+        assert ct["proven_wr_threshold"] > ct["monitoring_wr_threshold"], \
+            "proven_wr_threshold must be > monitoring_wr_threshold"
+        assert ct["monitoring_wr_threshold"] > ct["degraded_wr_threshold"], \
+            "monitoring_wr_threshold must be > degraded_wr_threshold"
+
+    # CT-05: TELEGRAM_HELP_TEXT contains /trust command reference
+    def test_ct05_telegram_help_contains_trust(self):
+        help_text = getattr(cfg, 'TELEGRAM_HELP_TEXT', "")
+        assert "/trust" in help_text, \
+            "TELEGRAM_HELP_TEXT must document the /trust command"
+
+    # ── State key building (CT-06 → CT-11) ───────────────────────────────
+
+    # CT-06: _build_state_key produces "trend:structure:volume:volatility"
+    def test_ct06_build_state_key_format(self, matcher):
+        state = {"trend": "BULLISH", "structure": "UPTREND",
+                 "volume": "HEALTHY", "volatility": "NORMAL"}
+        key = matcher._build_state_key(state)
+        assert key == "BULLISH:UPTREND:HEALTHY:NORMAL"
+
+    # CT-07: _build_state_key with empty dict returns ":::"
+    def test_ct07_build_state_key_empty_dict(self, matcher):
+        key = matcher._build_state_key({})
+        assert key == ":::"
+
+    # CT-08: _build_state_key with None returns ":::"
+    def test_ct08_build_state_key_none(self, matcher):
+        key = matcher._build_state_key(None)
+        assert key == ":::"
+
+    # CT-09: _get_state_group_keys returns L3 matching full state
+    def test_ct09_get_state_group_keys_l3(self, matcher):
+        state = {"trend": "BULLISH", "structure": "UPTREND",
+                 "volume": "HEALTHY", "volatility": "NORMAL"}
+        l3, l2, l1 = matcher._get_state_group_keys(state)
+        assert l3 == "BULLISH:UPTREND:HEALTHY:NORMAL"
+
+    # CT-10: _get_state_group_keys L2 contains wildcards for structure and volume
+    def test_ct10_get_state_group_keys_l2_wildcards(self, matcher):
+        state = {"trend": "BULLISH", "structure": "UPTREND",
+                 "volume": "HEALTHY", "volatility": "NORMAL"}
+        l3, l2, l1 = matcher._get_state_group_keys(state)
+        assert "BULLISH" in l2
+        assert "NORMAL" in l2
+        assert "*" in l2  # wildcard for structure and/or volume
+
+    # CT-11: _get_state_group_keys L1 contains only trend (rest wildcards)
+    def test_ct11_get_state_group_keys_l1_trend_only(self, matcher):
+        state = {"trend": "BEARISH", "structure": "DOWN",
+                 "volume": "LOW", "volatility": "HIGH"}
+        l3, l2, l1 = matcher._get_state_group_keys(state)
+        assert l1.startswith("BEARISH:")
+        assert "*" in l1
+
+    # ── Decayed WR (CT-12 → CT-16) ───────────────────────────────────────
+
+    # CT-12: empty signals list returns 0.5
+    def test_ct12_decayed_wr_empty_signals(self, matcher):
+        with patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', _CT_EVO_CFG):
+            result = matcher._calculate_decayed_wr([])
+        assert result == 0.5
+
+    # CT-13: all-win signals → decayed_wr = 1.0
+    def test_ct13_decayed_wr_all_wins(self, matcher):
+        signals = [{"won": True}] * 10
+        with patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', _CT_EVO_CFG):
+            result = matcher._calculate_decayed_wr(signals)
+        assert result == pytest.approx(1.0, abs=0.001)
+
+    # CT-14: all-loss signals → decayed_wr = 0.0
+    def test_ct14_decayed_wr_all_losses(self, matcher):
+        signals = [{"won": False}] * 10
+        with patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', _CT_EVO_CFG):
+            result = matcher._calculate_decayed_wr(signals)
+        assert result == pytest.approx(0.0, abs=0.001)
+
+    # CT-15: most recent win gives higher contribution than older wins
+    def test_ct15_decayed_wr_recency_weighted(self, matcher):
+        # Only the last signal is a win — should produce decayed_wr > 0.0
+        signals_recent_win = [{"won": False}, {"won": False}, {"won": True}]
+        signals_early_win  = [{"won": True},  {"won": False}, {"won": False}]
+        with patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', _CT_EVO_CFG):
+            wr_recent = matcher._calculate_decayed_wr(signals_recent_win)
+            wr_early  = matcher._calculate_decayed_wr(signals_early_win)
+        assert wr_recent > wr_early, \
+            "Most recent win must produce higher decayed_wr than early win"
+
+    # CT-16: decay_rate=1.0 is equivalent to raw win rate
+    def test_ct16_decay_rate_1_equals_raw_wr(self, matcher):
+        signals = [{"won": True}, {"won": False}, {"won": True}, {"won": False}]
+        flat_cfg = dict(_CT_EVO_CFG)
+        flat_cfg["contextual_trust"] = dict(_CT_CONFIG, decay_rate=1.0)
+        with patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', flat_cfg):
+            result = matcher._calculate_decayed_wr(signals)
+        assert result == pytest.approx(0.5, abs=0.001)
+
+    # ── Wilson CI (CT-17 → CT-19) ────────────────────────────────────────
+
+    # CT-17: n=0 returns (0.0, 1.0)
+    def test_ct17_wilson_ci_n_zero(self, matcher):
+        lo, hi = matcher._wilson_confidence_interval(0, 0)
+        assert lo == 0.0 and hi == 1.0
+
+    # CT-18: all wins (wins=n=10) → upper CI close to 1.0
+    def test_ct18_wilson_ci_all_wins(self, matcher):
+        lo, hi = matcher._wilson_confidence_interval(10, 10)
+        assert hi >= 0.7, f"Upper CI for 10/10 must be near 1.0, got {hi}"
+        assert lo >= 0.65
+
+    # CT-19: 50% win rate → lower < 0.5 < upper (interval straddles 0.5)
+    def test_ct19_wilson_ci_symmetric_half(self, matcher):
+        lo, hi = matcher._wilson_confidence_interval(50, 100)
+        assert lo < 0.5 < hi
+
+    # ── Bayesian score (CT-20 → CT-22) ───────────────────────────────────
+
+    # CT-20: n=0 → score near prior (0.43)
+    def test_ct20_bayesian_score_n_zero_near_prior(self, matcher):
+        with patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', _CT_EVO_CFG):
+            score = matcher._calculate_bayesian_score(0.43, 0.43, 0, prior=0.43)
+        # With n=0 local_scale=0, score = (0*local + global_w*global + prior_w*prior)/(global_w+prior_w)
+        assert 0.30 <= score <= 0.60, f"Score near prior expected, got {score}"
+
+    # CT-21: n=burn_in, local_wr=1.0, global=1.0 → score should be > 0.5
+    def test_ct21_bayesian_score_high_wr_high_score(self, matcher):
+        with patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', _CT_EVO_CFG):
+            score = matcher._calculate_bayesian_score(1.0, 1.0, 20, prior=0.43)
+        assert score > 0.5, f"Expected score > 0.5 with high WR, got {score}"
+
+    # CT-22: local_wr=0.0, global_wr=0.0 → score < 0.5
+    def test_ct22_bayesian_score_low_wr_low_score(self, matcher):
+        with patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', _CT_EVO_CFG):
+            score = matcher._calculate_bayesian_score(0.0, 0.0, 20, prior=0.0)
+        assert score < 0.5, f"Expected score < 0.5 with zero WR, got {score}"
+
+    # ── Lifecycle determination (CT-23 → CT-26) ──────────────────────────
+
+    # CT-23: n < lifecycle_check_min_signals → BURN_IN
+    def test_ct23_lifecycle_burn_in_low_signals(self, matcher):
+        result = matcher._determine_lifecycle(5, 9, 0.8, _CT_CONFIG)
+        assert result == "BURN_IN"
+
+    # CT-24: high decayed_wr + >= min_signals_for_proven → PROVEN
+    def test_ct24_lifecycle_proven(self, matcher):
+        result = matcher._determine_lifecycle(15, 20, 0.70, _CT_CONFIG)
+        assert result == "PROVEN"
+
+    # CT-25: mid decayed_wr (above monitoring threshold) → MONITORING
+    def test_ct25_lifecycle_monitoring(self, matcher):
+        # 0.35 - hysteresis(0.05) = 0.30; use 0.40 → MONITORING
+        result = matcher._determine_lifecycle(5, 15, 0.40, _CT_CONFIG)
+        assert result == "MONITORING"
+
+    # CT-26: low decayed_wr → DEGRADED or DISABLED (below monitoring threshold)
+    def test_ct26_lifecycle_degraded(self, matcher):
+        # 0.20 - hysteresis(0.05) = 0.15; use 0.25 → DEGRADED
+        result = matcher._determine_lifecycle(3, 15, 0.25, _CT_CONFIG)
+        assert result in ("DEGRADED", "DISABLED")
+
+    # ── get_trust_score (CT-27 → CT-31) ──────────────────────────────────
+
+    # CT-27: feature disabled → returns BURN_IN with score=0.5 and level=PRIOR
+    def test_ct27_get_trust_score_feature_disabled(self, matcher):
+        disabled_cfg = dict(_CT_EVO_CFG)
+        disabled_cfg["contextual_trust"] = dict(_CT_CONFIG, enabled=False)
+        with patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', disabled_cfg):
+            result = matcher.get_trust_score("TMPL", "AAPL", BULL_STATE)
+        assert result["lifecycle"] == "BURN_IN"
+        assert result["score"] == 0.5
+        assert result["level_used"] == "PRIOR"
+
+    # CT-28: no trust matrix data → PRIOR level, BURN_IN lifecycle
+    def test_ct28_get_trust_score_no_data(self, matcher):
+        with patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', _CT_EVO_CFG), \
+             patch("template_matcher.safe_json_read", return_value={}):
+            result = matcher.get_trust_score("TMPL", "AAPL", BULL_STATE)
+        assert result["lifecycle"] == "BURN_IN"
+        assert result["level_used"] == "PRIOR"
+        assert result["total"] == 0
+
+    # CT-29: sufficient L3 data → uses L3 level
+    def test_ct29_get_trust_score_uses_l3(self, matcher):
+        l3_key = "BULLISH:HEALTHY:HEALTHY:NORMAL"
+        signals = [{"won": True}] * 10
+        ledger = {
+            "trust_matrix": {
+                "TMPL": {
+                    "AAPL": {
+                        l3_key: {"wins": 10, "total": 10, "signals": signals, "lifecycle": "PROVEN"}
+                    }
+                }
+            }
+        }
+        state = {"trend": "BULLISH", "structure": "HEALTHY",
+                 "volume": "HEALTHY", "volatility": "NORMAL"}
+        with patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', _CT_EVO_CFG), \
+             patch("template_matcher.safe_json_read", return_value=ledger):
+            result = matcher.get_trust_score("TMPL", "AAPL", state)
+        assert result["level_used"] == "L3"
+        assert result["total"] == 10
+
+    # CT-30: sparse L3 but enough L1 → falls back to L1
+    def test_ct30_get_trust_score_fallback_to_l1(self, matcher):
+        # L3 has 2 signals (below min_signals_per_cell=5), L1 has 10
+        l3_key = "BULLISH:UPTREND:HEALTHY:NORMAL"
+        l1_key = "BULLISH:*:*:*"
+        ledger = {
+            "trust_matrix": {
+                "TMPL": {
+                    "AAPL": {
+                        l3_key: {"wins": 1, "total": 2, "signals": [{"won": True}] * 2,
+                                 "lifecycle": "BURN_IN"},
+                        l1_key: {"wins": 7, "total": 10, "signals": [{"won": True}] * 7 + [{"won": False}] * 3,
+                                 "lifecycle": "PROVEN"},
+                    }
+                }
+            }
+        }
+        state = {"trend": "BULLISH", "structure": "UPTREND",
+                 "volume": "HEALTHY", "volatility": "NORMAL"}
+        with patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', _CT_EVO_CFG), \
+             patch("template_matcher.safe_json_read", return_value=ledger):
+            result = matcher.get_trust_score("TMPL", "AAPL", state)
+        assert result["level_used"] in ("L1", "L2"), \
+            f"Expected L1 or L2 fallback, got {result['level_used']}"
+
+    # CT-31: get_trust_score result has all required fields
+    def test_ct31_get_trust_score_returns_all_fields(self, matcher):
+        with patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', _CT_EVO_CFG), \
+             patch("template_matcher.safe_json_read", return_value={}):
+            result = matcher.get_trust_score("TMPL", "AAPL", BULL_STATE)
+        for field in ["score", "lifecycle", "wins", "total",
+                      "decayed_wr", "ci_lower", "ci_upper", "level_used"]:
+            assert field in result, f"Missing required field: {field}"
+
+    # ── Shadow ledger trust matrix (CT-32 → CT-34) ───────────────────────
+
+    # CT-32: _update_trust_matrix adds signal record and increments counters
+    def test_ct32_update_trust_matrix_adds_record(self, sl):
+        saved = {}
+        outcome = {"hit": "target", "pnl_pct": 2.5}
+        state = {"trend": "BULLISH", "structure": "UPTREND",
+                 "volume": "HEALTHY", "volatility": "NORMAL"}
+        with patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', _CT_EVO_CFG), \
+             patch("shadow_ledger.safe_json_read", return_value={}), \
+             patch("shadow_ledger.safe_json_write",
+                   side_effect=lambda p, d: saved.update({"d": d})):
+            sl._update_trust_matrix("TMPL", "AAPL", state, outcome)
+        cell = saved["d"]["trust_matrix"]["TMPL"]["AAPL"]["BULLISH:UPTREND:HEALTHY:NORMAL"]
+        assert cell["total"] == 1
+        assert cell["wins"] == 1
+        assert len(cell["signals"]) == 1
+        assert cell["signals"][0]["won"] is True
+
+    # CT-33: "neither" outcome is not counted in trust matrix
+    def test_ct33_update_trust_matrix_skips_neither(self, sl):
+        saved = {}
+        outcome = {"hit": "neither", "pnl_pct": 0.0}
+        state = {"trend": "BULLISH", "structure": "UP",
+                 "volume": "HEALTHY", "volatility": "NORMAL"}
+        with patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', _CT_EVO_CFG), \
+             patch("shadow_ledger.safe_json_read", return_value={}), \
+             patch("shadow_ledger.safe_json_write",
+                   side_effect=lambda p, d: saved.update({"d": d})):
+            sl._update_trust_matrix("TMPL", "AAPL", state, outcome)
+        assert not saved, "'neither' outcome must not write to trust matrix"
+
+    # CT-34: lifecycle updates after enough signals accumulated
+    def test_ct34_update_trust_matrix_lifecycle_updates(self, sl):
+        # Build existing cell with 9 wins out of 19 signals → BURN_IN (n<10)
+        existing_cell = {
+            "signals": [{"won": True}] * 9 + [{"won": False}] * 10,
+            "wins": 9, "total": 19, "decayed_wr": 0.5, "lifecycle": "BURN_IN",
+        }
+        existing_ledger = {
+            "trust_matrix": {"TMPL": {"AAPL": {"BULLISH:UP:LOW:HIGH": existing_cell}}}
+        }
+        saved = {}
+        outcome = {"hit": "target", "pnl_pct": 3.0}  # 20th signal → n=20 >= min_proven
+        state = {"trend": "BULLISH", "structure": "UP",
+                 "volume": "LOW", "volatility": "HIGH"}
+        with patch.object(cfg, 'TEMPLATE_EVOLUTION_CONFIG', _CT_EVO_CFG), \
+             patch("shadow_ledger.safe_json_read", return_value=existing_ledger), \
+             patch("shadow_ledger.safe_json_write",
+                   side_effect=lambda p, d: saved.update({"d": d})):
+            sl._update_trust_matrix("TMPL", "AAPL", state, outcome)
+        cell = saved["d"]["trust_matrix"]["TMPL"]["AAPL"]["BULLISH:UP:LOW:HIGH"]
+        assert cell["total"] == 20
+        assert cell["lifecycle"] != "BURN_IN", \
+            "lifecycle must transition out of BURN_IN after 20 signals"
+
+    # ── Notification (CT-35) ──────────────────────────────────────────────
+
+    # CT-35: send_signal_alert formats trust status line with lifecycle icon
+    def test_ct35_send_signal_alert_trust_line_format(self):
+        from notification_manager import NotificationManager, LIFECYCLE_ICONS
+        nm = NotificationManager.__new__(NotificationManager)
+        nm.token = "fake"
+        nm.chat_id = "123"
+        nm.enabled = False
+        nm.message_queue = []
+
+        sent = []
+        trust_info = {
+            "lifecycle": "PROVEN",
+            "score": 0.712,
+            "decayed_wr": 0.65,
+            "total": 25,
+            "ci_lower": 0.45,
+            "ci_upper": 0.82,
+        }
+        with patch.object(nm, 'send_message', side_effect=lambda m: sent.append(m)):
+            nm.send_signal_alert(
+                symbol="NVDA", template_id="MOMENTUM_BREAKOUT",
+                entry_price=150.0, stop_loss=145.0, take_profit=162.0,
+                rr_ratio=2.4, trust_info=trust_info,
+            )
+
+        assert len(sent) == 1
+        msg = sent[0]
+        assert "NVDA" in msg
+        assert "MOMENTUM_BREAKOUT" in msg
+        assert "PROVEN" in msg
+        assert LIFECYCLE_ICONS["PROVEN"] in msg
+        assert "Score=" in msg
+        assert "WR=" in msg

@@ -17,6 +17,7 @@ so the system can track idle periods and adjust thresholds.
 """
 
 import logging
+import math
 import time
 from datetime import datetime
 import system_config as cfg
@@ -121,6 +122,18 @@ class TemplateMatcher:
                 # Step 3: Calculate entry, stop, target
                 signal = self._build_signal(symbol, template, last_row, details, stock_state)
                 if signal:
+                    # CP-2: Contextual trust score (informational — does NOT block signals)
+                    try:
+                        trust = self.get_trust_score(template.id, symbol, stock_state)
+                        signal["trust"] = trust
+                        logger.info(
+                            f"[TRUST] {template.id} | {symbol} | "
+                            f"lifecycle={trust['lifecycle']} | score={trust['score']:.3f} | "
+                            f"decayed_wr={trust['decayed_wr']:.1%} | "
+                            f"signals={trust['total']} | level={trust['level_used']}"
+                        )
+                    except Exception as _trust_ex:
+                        logger.debug(f"[{symbol}] Trust score failed: {_trust_ex}")
                     signals.append(signal)
                     if _dl:
                         try: _dl.log_signal(symbol=symbol, template_id=template.id, confidence=float(signal.get('confidence_score', 0)), regime=str(stock_state.get('trend', '') if stock_state else ''))
@@ -533,3 +546,279 @@ class TemplateMatcher:
                     f"worst_pnl={per_stock.get('worst_pnl', 0):.2%} | "
                     f"status=WATCHLIST"
                 )
+
+    # ========================================
+    # CONTEXTUAL TRUST SYSTEM (CP-2)
+    # ========================================
+
+    def _load_trust_matrix(self):
+        """Load trust_matrix section from shadow_ledger.json."""
+        evo_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {})
+        path = evo_cfg.get("auto_disable", {}).get(
+            "disable_list_path", "data/shadow_ledger.json"
+        )
+        try:
+            data = safe_json_read(path, default={})
+            return data.get("trust_matrix", {})
+        except Exception:
+            return {}
+
+    def _save_trust_matrix(self, trust_matrix):
+        """Persist trust_matrix — writes only the trust_matrix key."""
+        evo_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {})
+        path = evo_cfg.get("auto_disable", {}).get(
+            "disable_list_path", "data/shadow_ledger.json"
+        )
+        try:
+            data = safe_json_read(path, default={})
+            data["trust_matrix"] = trust_matrix
+            safe_json_write(path, data)
+        except Exception as e:
+            logger.error(f"[Trust] Failed to save trust matrix: {e}")
+
+    def _build_state_key(self, stock_state):
+        """Build 'trend:structure:volume:volatility' key from state dict."""
+        if not stock_state:
+            return ":::"
+        trend = stock_state.get("trend", "")
+        structure = stock_state.get("structure", "")
+        volume = stock_state.get("volume", "")
+        volatility = stock_state.get("volatility", "")
+        return f"{trend}:{structure}:{volume}:{volatility}"
+
+    def _get_state_group_keys(self, stock_state):
+        """Return (L3, L2, L1) grouping keys for hierarchical fallback.
+
+        L3 = full state  "trend:structure:volume:volatility"
+        L2 = trend+volatility  "trend:*:*:volatility"
+        L1 = trend only  "trend:*:*:*"
+        """
+        trend = stock_state.get("trend", "") if stock_state else ""
+        volatility = stock_state.get("volatility", "") if stock_state else ""
+        l3 = self._build_state_key(stock_state)
+        l2 = f"{trend}:*:*:{volatility}"
+        l1 = f"{trend}:*:*:*"
+        return l3, l2, l1
+
+    def _calculate_decayed_wr(self, signals_list):
+        """Compute exponentially decayed win rate (most recent = highest weight).
+
+        Args:
+            signals_list: list of dicts with 'won' bool, ordered oldest→newest
+        Returns:
+            float: decayed win rate in [0, 1], or 0.5 if no signals
+        """
+        if not signals_list:
+            return 0.5
+        ct_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {}).get("contextual_trust", {})
+        decay = ct_cfg.get("decay_rate", 0.95)
+        n = len(signals_list)
+        total_weight = 0.0
+        weighted_wins = 0.0
+        for i, sig in enumerate(signals_list):
+            # most recent signal (i=n-1) gets weight decay^0 = 1.0
+            w = decay ** (n - 1 - i)
+            total_weight += w
+            if sig.get("won", False):
+                weighted_wins += w
+        return weighted_wins / total_weight if total_weight > 0 else 0.5
+
+    def _wilson_confidence_interval(self, wins, n, z=1.96):
+        """Wilson 95% confidence interval for a proportion.
+
+        Args:
+            wins: number of winning signals
+            n: total signals
+            z: z-score (default 1.96 for 95% CI)
+        Returns:
+            (lower, upper) floats in [0, 1]
+        """
+        if n == 0:
+            return (0.0, 1.0)
+        p_hat = wins / n
+        z2 = z * z
+        denom = 1.0 + z2 / n
+        center = (p_hat + z2 / (2.0 * n)) / denom
+        margin = z * math.sqrt(
+            max(p_hat * (1.0 - p_hat) / n + z2 / (4.0 * n * n), 0.0)
+        ) / denom
+        return (max(0.0, round(center - margin, 4)), min(1.0, round(center + margin, 4)))
+
+    def _calculate_bayesian_score(self, local_wr, global_wr, n, prior=0.43):
+        """Blend local WR, global WR, and prior using Bayesian-style weighting.
+
+        Local weight scales with n: more data → trust local more.
+
+        Args:
+            local_wr: per-(symbol, state) win rate in [0, 1]
+            global_wr: cross-symbol win rate for this template in [0, 1]
+            n: local signal count
+            prior: base-rate prior (default 0.43)
+        Returns:
+            float: blended trust score in [0, 1]
+        """
+        ct_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {}).get("contextual_trust", {})
+        prior_w = ct_cfg.get("bayesian_prior_weight", 0.4)
+        global_w = ct_cfg.get("global_fallback_weight", 0.3)
+        local_w = ct_cfg.get("local_weight", 0.7)
+        burn_in = ct_cfg.get("burn_in_signals", 20)
+        local_scale = min(n / max(burn_in, 1), 1.0)
+        w_local = local_w * local_scale
+        w_global = global_w
+        w_prior = prior_w
+        total = w_local + w_global + w_prior
+        score = (w_local * local_wr + w_global * global_wr + w_prior * prior) / max(total, 1e-9)
+        return round(score, 4)
+
+    def _determine_lifecycle(self, wins, n, decayed_wr, config):
+        """Classify a trust cell into a lifecycle state (with hysteresis).
+
+        States:
+          BURN_IN    — n < lifecycle_check_min_signals
+          PROVEN     — decayed_wr >= proven_wr_threshold (with hysteresis band)
+          MONITORING — decayed_wr >= monitoring_wr_threshold
+          DEGRADED   — decayed_wr >= degraded_wr_threshold
+          DISABLED   — decayed_wr < degraded_wr_threshold AND n >= min_signals_for_proven
+
+        Args:
+            wins: total wins
+            n: total signals
+            decayed_wr: exponentially decayed win rate
+            config: contextual_trust config dict
+        Returns:
+            str: lifecycle state name
+        """
+        min_signals = config.get("lifecycle_check_min_signals", 10)
+        if n < min_signals:
+            return "BURN_IN"
+        proven_thr = config.get("proven_wr_threshold", 0.50)
+        monitoring_thr = config.get("monitoring_wr_threshold", 0.35)
+        degraded_thr = config.get("degraded_wr_threshold", 0.20)
+        hysteresis = config.get("hysteresis", 0.05)
+        min_proven = config.get("min_signals_for_proven", 20)
+        if decayed_wr >= proven_thr - hysteresis and n >= min_proven:
+            return "PROVEN"
+        elif decayed_wr >= monitoring_thr - hysteresis:
+            return "MONITORING"
+        elif decayed_wr >= degraded_thr - hysteresis:
+            return "DEGRADED"
+        return "DISABLED"
+
+    def _aggregate_grouped_cells(self, trust_matrix, template_id, symbol,
+                                 key_levels, min_signals=5):
+        """Try each (key, level) in order; return first cell with >= min_signals.
+
+        Falls back through L3→L2→L1→None.
+
+        Args:
+            trust_matrix: full trust_matrix dict
+            template_id: template ID string
+            symbol: stock ticker
+            key_levels: list of (key, level_name) tuples in priority order
+            min_signals: minimum signals needed to use a cell
+        Returns:
+            (cell_dict | None, level_str)
+        """
+        sym_data = trust_matrix.get(template_id, {}).get(symbol, {})
+        for key, level in key_levels:
+            cell = sym_data.get(key)
+            if cell and cell.get("total", 0) >= min_signals:
+                return cell, level
+        # No cell has enough data — return first available (sparse fallback)
+        for key, level in key_levels:
+            cell = sym_data.get(key)
+            if cell:
+                return cell, level
+        return None, "PRIOR"
+
+    def _get_template_global_wr(self, trust_matrix, template_id):
+        """Compute global win rate across all symbols and states for a template.
+
+        Returns:
+            float: global win rate in [0, 1], or 0.43 (base prior) if no data
+        """
+        tmpl_data = trust_matrix.get(template_id, {})
+        total_wins = 0
+        total_signals = 0
+        for sym_data in tmpl_data.values():
+            for cell in sym_data.values():
+                total_wins += cell.get("wins", 0)
+                total_signals += cell.get("total", 0)
+        if total_signals == 0:
+            return 0.43
+        return round(total_wins / total_signals, 4)
+
+    def get_trust_score(self, template_id, symbol, stock_state):
+        """Compute contextual trust score for a template+symbol+state triple.
+
+        Uses hierarchical state grouping (L3→L2→L1) for sparse-cell fallback.
+
+        Args:
+            template_id: template ID string
+            symbol: stock ticker
+            stock_state: state dict with trend/structure/volume/volatility
+        Returns:
+            dict: {
+                "score": float [0,1],
+                "lifecycle": str,
+                "wins": int,
+                "total": int,
+                "decayed_wr": float,
+                "ci_lower": float,
+                "ci_upper": float,
+                "level_used": str ("L3"/"L2"/"L1"/"PRIOR"),
+            }
+        """
+        ct_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {}).get("contextual_trust", {})
+        if not ct_cfg.get("enabled", False):
+            return {
+                "score": 0.5, "lifecycle": "BURN_IN", "wins": 0, "total": 0,
+                "decayed_wr": 0.5, "ci_lower": 0.0, "ci_upper": 1.0, "level_used": "PRIOR"
+            }
+
+        trust_matrix = self._load_trust_matrix()
+        l3_key, l2_key, l1_key = self._get_state_group_keys(stock_state)
+        min_signals = ct_cfg.get("min_signals_per_cell", 5)
+
+        cell, level = self._aggregate_grouped_cells(
+            trust_matrix, template_id, symbol,
+            [(l3_key, "L3"), (l2_key, "L2"), (l1_key, "L1")],
+            min_signals
+        )
+
+        global_wr = self._get_template_global_wr(trust_matrix, template_id)
+
+        if not cell:
+            score = self._calculate_bayesian_score(0.43, global_wr, 0)
+            ci = self._wilson_confidence_interval(0, 0)
+            return {
+                "score": score, "lifecycle": "BURN_IN", "wins": 0, "total": 0,
+                "decayed_wr": 0.5, "ci_lower": ci[0], "ci_upper": ci[1], "level_used": "PRIOR"
+            }
+
+        wins = cell.get("wins", 0)
+        total = cell.get("total", 0)
+        signals_list = cell.get("signals", [])
+
+        use_decayed = ct_cfg.get("use_decayed_wr", True)
+        decayed_wr = (
+            self._calculate_decayed_wr(signals_list)
+            if (use_decayed and signals_list)
+            else wins / max(total, 1)
+        )
+
+        local_wr = wins / max(total, 1)
+        score = self._calculate_bayesian_score(local_wr, global_wr, total)
+        lifecycle = self._determine_lifecycle(wins, total, decayed_wr, ct_cfg)
+        ci = self._wilson_confidence_interval(wins, total)
+
+        return {
+            "score": score,
+            "lifecycle": lifecycle,
+            "wins": wins,
+            "total": total,
+            "decayed_wr": round(decayed_wr, 4),
+            "ci_lower": ci[0],
+            "ci_upper": ci[1],
+            "level_used": level,
+        }

@@ -1,5 +1,44 @@
 # Changelog
 
+## [2026-04-03] Contextual Trust System (CP-2)
+
+### Problem
+Template signals were fired with no per-state awareness of historical reliability. The system had no way to express "this template is PROVEN on AAPL in BULLISH/NORMAL states but DEGRADED on MSFT in SIDEWAYS/COMPRESSED states." Confidence scores were global; operators had no trust context in Telegram alerts.
+
+### Fix
+- Added `contextual_trust` section to `TEMPLATE_EVOLUTION_CONFIG` in `system_config.py` (16 keys: `enabled`, `burn_in_signals=20`, `min_signals_per_cell=5`, `min_signals_for_proven=20`, `bayesian_prior_weight=0.4`, `global_fallback_weight=0.3`, `local_weight=0.7`, `proven_wr_threshold=0.50`, `monitoring_wr_threshold=0.35`, `degraded_wr_threshold=0.20`, `lifecycle_check_min_signals=10`, `hysteresis=0.05`, `confidence_interval_pct=0.95`, `use_decayed_wr=True`, `decay_rate=0.95`, `state_grouping_levels=3`); `validate_template_evolution_config()` asserts all 16 keys with type and range checks, including `proven > monitoring > degraded` threshold ordering
+- Added 11 methods to `TemplateMatcher` in `template_matcher.py`:
+  - `_load_trust_matrix()` / `_save_trust_matrix()` — targeted read/write of `trust_matrix` key in shadow_ledger.json
+  - `_build_state_key(state)` — builds `"trend:structure:volume:volatility"` key
+  - `_get_state_group_keys(state)` — returns `(L3, L2, L1)` fallback keys: L3=full, L2=trend+volatility, L1=trend-only
+  - `_calculate_decayed_wr(signals)` — exponentially decayed WR (recent signals weighted `decay^0=1.0`, oldest `decay^(n-1)`)
+  - `_wilson_confidence_interval(wins, n, z=1.96)` — Wilson 95% CI; returns `(0.0, 1.0)` when n=0
+  - `_calculate_bayesian_score(local_wr, global_wr, n, prior=0.43)` — Bayesian blend: local weight scales with `n/burn_in`, prior anchors at 0.43 base rate
+  - `_determine_lifecycle(wins, n, decayed_wr, config)` — returns BURN_IN/PROVEN/MONITORING/DEGRADED/DISABLED with 5% hysteresis band
+  - `_aggregate_grouped_cells(trust_matrix, tmpl, sym, key_levels, min_signals)` — L3→L2→L1 fallback chain
+  - `_get_template_global_wr(trust_matrix, template_id)` — cross-symbol aggregate WR (falls back to 0.43)
+  - `get_trust_score(template_id, symbol, stock_state)` — main API: returns `{score, lifecycle, wins, total, decayed_wr, ci_lower, ci_upper, level_used}`
+- Integrated `get_trust_score()` in `scan_ticker()` (template_matcher.py): on each signal, appends `signal["trust"]` dict and logs `[TRUST]` line; trust is INFORMATIONAL — does NOT block signals
+- Added 5 methods to `ShadowLedger` in `shadow_ledger.py`:
+  - `_load_trust_matrix_from_disk()` / `_save_trust_matrix_to_disk()` — targeted trust_matrix key I/O
+  - `_calculate_decayed_wr_simple()` / `_determine_lifecycle_simple()` — shadow ledger-side counterparts
+  - `_update_trust_matrix(template_id, symbol, state, outcome)` — adds signal record (won, pnl_pct, timestamp), caps at 52 entries, recalculates decayed_wr + lifecycle; skips "neither" outcomes
+- Integrated `_update_trust_matrix()` call in `evaluate_history()` after attribution (shadow_ledger.py)
+- Added `LIFECYCLE_ICONS` dict and `send_signal_alert(symbol, template_id, entry, stop, target, rr, trust_info=None)` to `NotificationManager` in `notification_manager.py`; trust status line: `Trust: [+] PROVEN | Score=0.712 | WR=65.0% | n=25 | CI=[0.45,0.82]`
+- Added `/trust [TEMPLATE] [TICKER]` to `TELEGRAM_HELP_TEXT` in `system_config.py`
+
+### Tests
+- 35 new tests (CT-01→35) in `tests/test_template_system.py` (`TestContextualTrust` class):
+  - CT-01→05: system config — section present, validate passes, all 16 keys typed, threshold ordering, /trust in TELEGRAM_HELP_TEXT
+  - CT-06→11: state key building — `_build_state_key` format, empty/None dict, `_get_state_group_keys` L3/L2/L1 levels
+  - CT-12→16: `_calculate_decayed_wr` — empty→0.5, all wins→1.0, all losses→0.0, recency weighting, decay_rate=1.0 equals raw WR
+  - CT-17→19: `_wilson_confidence_interval` — n=0, all-wins, symmetric at 50%
+  - CT-20→22: `_calculate_bayesian_score` — n=0 near prior, high WR → high score, zero WR → low score
+  - CT-23→26: `_determine_lifecycle` — BURN_IN gate, PROVEN, MONITORING, DEGRADED/DISABLED
+  - CT-27→31: `get_trust_score` — disabled→PRIOR, no data→BURN_IN, L3 used, L1 fallback, all fields present
+  - CT-32→34: `_update_trust_matrix` — adds record, skips "neither", lifecycle transitions after 20 signals
+  - CT-35: `send_signal_alert` formats trust line with icon, lifecycle, score, WR
+
 ## [2026-04-03] Coverage Gap Detection
 
 ### Problem

@@ -202,6 +202,14 @@ class ShadowLedger:
                             f"[{symbol}] Attribution failed for {template.id}: {_attr_exc}"
                         )
 
+                    # Trust matrix update (CP-2)
+                    try:
+                        self._update_trust_matrix(template.id, symbol, state, outcome)
+                    except Exception as _trust_exc:
+                        logger.debug(
+                            f"[{symbol}] Trust matrix update failed for {template.id}: {_trust_exc}"
+                        )
+
                 except Exception as e:
                     logger.debug(
                         f"[{symbol}] Template {template.id} eval error at bar {i}: {e}"
@@ -247,6 +255,130 @@ class ShadowLedger:
             self._log_coverage_report(report)
         except Exception as e:
             logger.error(f"[Coverage] Gap analysis failed: {e}")
+
+    # ═══════════════════════════════════════════════════════════════
+    # CONTEXTUAL TRUST MATRIX  (CP-2)
+    # ═══════════════════════════════════════════════════════════════
+
+    def _load_trust_matrix_from_disk(self):
+        """Load trust_matrix from shadow_ledger.json."""
+        try:
+            data = safe_json_read(self.ledger_path, default={})
+            return data.get("trust_matrix", {})
+        except Exception:
+            return {}
+
+    def _save_trust_matrix_to_disk(self, trust_matrix):
+        """Persist trust_matrix — writes only the trust_matrix key."""
+        try:
+            data = safe_json_read(self.ledger_path, default={})
+            data["trust_matrix"] = trust_matrix
+            safe_json_write(self.ledger_path, data)
+        except Exception as e:
+            logger.error(f"[Trust] Failed to save trust matrix: {e}")
+
+    def _calculate_decayed_wr_simple(self, signals):
+        """Exponentially decayed win rate (oldest→newest, most recent = highest weight)."""
+        ct_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {}).get("contextual_trust", {})
+        decay = ct_cfg.get("decay_rate", 0.95)
+        if not signals:
+            return 0.5
+        n = len(signals)
+        total_w, win_w = 0.0, 0.0
+        for i, sig in enumerate(signals):
+            w = decay ** (n - 1 - i)
+            total_w += w
+            if sig.get("won", False):
+                win_w += w
+        return round(win_w / max(total_w, 1e-9), 4)
+
+    def _determine_lifecycle_simple(self, wins, n, decayed_wr, config):
+        """Lifecycle classification matching TemplateMatcher._determine_lifecycle."""
+        min_signals = config.get("lifecycle_check_min_signals", 10)
+        if n < min_signals:
+            return "BURN_IN"
+        proven_thr = config.get("proven_wr_threshold", 0.50)
+        monitoring_thr = config.get("monitoring_wr_threshold", 0.35)
+        degraded_thr = config.get("degraded_wr_threshold", 0.20)
+        hysteresis = config.get("hysteresis", 0.05)
+        min_proven = config.get("min_signals_for_proven", 20)
+        if decayed_wr >= proven_thr - hysteresis and n >= min_proven:
+            return "PROVEN"
+        elif decayed_wr >= monitoring_thr - hysteresis:
+            return "MONITORING"
+        elif decayed_wr >= degraded_thr - hysteresis:
+            return "DEGRADED"
+        return "DISABLED"
+
+    def _update_trust_matrix(self, template_id, symbol, stock_state, outcome):
+        """Update trust matrix cell for template+symbol+state after a resolved outcome.
+
+        Called after each resolved signal in evaluate_history().
+        Only target/stop outcomes are recorded (not "neither" = still open).
+
+        Args:
+            template_id: template ID string
+            symbol: stock ticker
+            stock_state: state dict with trend/structure/volume/volatility
+            outcome: dict with keys 'hit' ("target"/"stop"/"neither") and 'pnl_pct'
+        """
+        ct_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {}).get("contextual_trust", {})
+        if not ct_cfg.get("enabled", False):
+            return
+
+        hit = outcome.get("hit", "neither")
+        if hit not in ("target", "stop"):
+            return  # "neither" = trade still open — skip
+
+        try:
+            trust_matrix = self._load_trust_matrix_from_disk()
+
+            # Build state key
+            trend = stock_state.get("trend", "") if stock_state else ""
+            structure = stock_state.get("structure", "") if stock_state else ""
+            volume = stock_state.get("volume", "") if stock_state else ""
+            volatility = stock_state.get("volatility", "") if stock_state else ""
+            state_key = f"{trend}:{structure}:{volume}:{volatility}"
+
+            # Navigate / create nested structure
+            if template_id not in trust_matrix:
+                trust_matrix[template_id] = {}
+            if symbol not in trust_matrix[template_id]:
+                trust_matrix[template_id][symbol] = {}
+            if state_key not in trust_matrix[template_id][symbol]:
+                trust_matrix[template_id][symbol][state_key] = {
+                    "signals": [], "wins": 0, "total": 0,
+                    "decayed_wr": 0.5, "lifecycle": "BURN_IN",
+                }
+
+            cell = trust_matrix[template_id][symbol][state_key]
+            won = (hit == "target")
+            pnl = outcome.get("pnl_pct", 0.0)
+
+            signal_record = {
+                "won": won,
+                "pnl_pct": round(float(pnl), 4),
+                "timestamp": datetime.now().isoformat(),
+            }
+            cell["signals"].append(signal_record)
+
+            # Rolling cap: keep last 52 signals (~1 year of weekly signals)
+            if len(cell["signals"]) > 52:
+                cell["signals"] = cell["signals"][-52:]
+
+            cell["total"] += 1
+            if won:
+                cell["wins"] += 1
+
+            # Update derived stats
+            cell["decayed_wr"] = self._calculate_decayed_wr_simple(cell["signals"])
+            cell["lifecycle"] = self._determine_lifecycle_simple(
+                cell["wins"], cell["total"], cell["decayed_wr"], ct_cfg
+            )
+
+            self._save_trust_matrix_to_disk(trust_matrix)
+        except Exception as e:
+            logger.warning(f"[Trust] _update_trust_matrix error for {template_id}::{symbol}: {e}")
 
     # ═══════════════════════════════════════════════════════════════
     # COVERAGE GAP DETECTION  (SPEC §4)

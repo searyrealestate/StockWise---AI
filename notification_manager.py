@@ -22,6 +22,16 @@ from safe_json_io import safe_json_read, safe_json_write
 
 logger = logging.getLogger("NotificationManager")
 
+# CP-2: Contextual trust lifecycle icons for Telegram signal notifications
+LIFECYCLE_ICONS = {
+    "BURN_IN": "[?]",
+    "PROVEN": "[+]",
+    "MONITORING": "[~]",
+    "DEGRADED": "[-]",
+    "DISABLED": "[X]",
+}
+
+
 class NotificationManager:
     """
     Handles all external communication via Telegram Bot API.
@@ -126,6 +136,50 @@ class NotificationManager:
                     self.send_message(f"System Update: {ticker} marked as {status}. ML Execution Vector synced.")
                 else:
                     self.send_message(f"System Error: Failed to update ledger for {ticker}.Check logs.")
+
+    def send_signal_alert(self, symbol, template_id, entry_price, stop_loss,
+                          take_profit, rr_ratio, trust_info=None):
+        """
+        [CP-2: Contextual Trust]
+        Send a formatted signal alert to Telegram, including the trust status line
+        when trust_info is provided.
+
+        Args:
+            symbol: Stock ticker
+            template_id: Template ID string
+            entry_price: Calculated entry price
+            stop_loss: Stop loss price
+            take_profit: Take profit price
+            rr_ratio: Risk/reward ratio
+            trust_info: Optional dict from get_trust_score() —
+                        keys: lifecycle, score, decayed_wr, total, ci_lower, ci_upper
+        """
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        lines = [
+            f"[SIGNAL] {symbol} — {template_id}",
+            f"Time: {timestamp}",
+            f"Entry: ${entry_price:.2f} | Stop: ${stop_loss:.2f} | Target: ${take_profit:.2f}",
+            f"R:R {rr_ratio:.1f}",
+        ]
+        if trust_info:
+            lifecycle = trust_info.get("lifecycle", "BURN_IN")
+            icon = LIFECYCLE_ICONS.get(lifecycle, "[?]")
+            score = trust_info.get("score", 0.5)
+            decayed_wr = trust_info.get("decayed_wr", 0.5)
+            total = trust_info.get("total", 0)
+            ci_lower = trust_info.get("ci_lower", 0.0)
+            ci_upper = trust_info.get("ci_upper", 1.0)
+            lines.append(
+                f"Trust: {icon} {lifecycle} | "
+                f"Score={score:.3f} | WR={decayed_wr:.1%} | "
+                f"n={total} | CI=[{ci_lower:.2f},{ci_upper:.2f}]"
+            )
+        msg = "\n".join(lines)
+        lifecycle_label = trust_info.get("lifecycle", "N/A") if trust_info else "N/A"
+        logger.info(
+            f"[Signal Alert] {symbol} | {template_id} | lifecycle={lifecycle_label}"
+        )
+        self.send_message(msg)
 
     def send_auto_disable_notification(self, template_id, symbol, stock_state,
                                        action="disabled", reason=""):
