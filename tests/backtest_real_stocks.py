@@ -326,6 +326,10 @@ if __name__ == "__main__":
         gen = TemplateGenerator()
         gen_report = gen.generate_from_gaps()
         created = gen_report.get("created", [])
+        if not created:
+            print("[Template Generation] No gaps found — running bootstrap (all recipes)...")
+            gen_report = gen.generate_all_recipes()
+            created = gen_report.get("created", [])
         print(f"[Template Generation] Created {len(created)} templates: {created}")
         if gen_report.get("skipped_duplicate"):
             print(f"[Template Generation] Skipped duplicates: {gen_report['skipped_duplicate']}")

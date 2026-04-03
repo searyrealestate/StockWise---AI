@@ -3088,6 +3088,19 @@ class TestTemplateGenerator:
         assert report["total_generated"] >= 1
         assert all(t["id"].startswith("GEN_") for t in report["templates"])
 
+    # TG-21: generate_all_recipes bootstrap creates one template per recipe
+    def test_tg21_generate_all_recipes_creates_templates(self):
+        result = self.gen.generate_all_recipes()
+        assert len(result["created"]) >= 3  # at least 3 of 5 (some may be duplicates)
+        assert result["mode"] == "bootstrap"
+
+    # TG-22: second bootstrap call skips already-created templates
+    def test_tg22_generate_all_recipes_skips_duplicates(self):
+        self.gen.generate_all_recipes()
+        result2 = self.gen.generate_all_recipes()
+        assert len(result2["created"]) == 0
+        assert len(result2["skipped_duplicate"]) >= 3
+
 
 # ── CP-4: Signal Direction Tests ─────────────────────────────────────────────
 

@@ -1470,6 +1470,64 @@ class TemplateGenerator:
 
         return False
 
+    def generate_all_recipes(self):
+        """Bootstrap: create one template per recipe, regardless of gap data.
+
+        Use when coverage_gaps is empty or stale. Creates templates for ALL
+        defined recipes so they can start collecting data in backtests.
+
+        Returns: same report format as generate_from_gaps()
+        """
+        gen_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {}).get("generation", {})
+        if not gen_cfg.get("enabled", True):
+            logger.info("[GENERATE] Template generation is disabled in config")
+            return {"created": [], "skipped_duplicate": [], "validation_failed": [],
+                    "total_gaps_evaluated": 0, "mode": "bootstrap"}
+
+        recipes = getattr(cfg, 'TEMPLATE_GENERATION_RECIPES', {})
+        report = {"created": [], "skipped_duplicate": [], "validation_failed": [],
+                  "total_gaps_evaluated": len(recipes), "mode": "bootstrap"}
+
+        for recipe_id, recipe in recipes.items():
+            # Build a synthetic gap state from recipe's target conditions
+            trends  = recipe.get("applicable_trends", ["BEARISH"])
+            vols    = recipe.get("applicable_volatility", ["NORMAL"])
+            structs = recipe.get("required_structure", ["OPEN_FIELD"])
+            if not structs:
+                structs = ["OPEN_FIELD"]
+
+            gap_state = {
+                "trend":      trends[0],
+                "structure":  structs[0],
+                "volume":     "HEALTHY",
+                "volatility": vols[0],
+            }
+
+            template_data = self._build_template_from_recipe(recipe_id, recipe, gap_state, gen_cfg)
+
+            if self._is_duplicate(template_data):
+                report["skipped_duplicate"].append(recipe_id)
+                logger.info(f"[GENERATE-BOOTSTRAP] Skipped {recipe_id} — duplicate")
+                continue
+
+            test_template = SetupTemplate(template_data)
+            is_valid, errors = test_template.validate()
+            if not is_valid:
+                report["validation_failed"].append({"recipe": recipe_id, "errors": errors})
+                logger.warning(f"[GENERATE-BOOTSTRAP] REJECTED {template_data['id']} — {errors}")
+                continue
+
+            if self.tm.add_template(template_data):
+                report["created"].append(template_data["id"])
+                logger.info(f"[GENERATE-BOOTSTRAP] Created {template_data['id']} | recipe={recipe_id}")
+
+        logger.info(
+            f"[GENERATE-BOOTSTRAP-SUMMARY] created={len(report['created'])} | "
+            f"skipped={len(report['skipped_duplicate'])} | "
+            f"failed={len(report['validation_failed'])}"
+        )
+        return report
+
     def get_generation_report(self):
         """Return summary of all generated templates currently loaded."""
         generated = [

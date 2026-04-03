@@ -1,5 +1,15 @@
 # Changelog
 
+## [2026-04-04] Bootstrap Template Generation for Empty Gaps
+
+### Problem
+Shadow Ledger coverage_gaps was overwritten by a limited 282-bar run (97.9% covered, only DRYING_UP volume states uncovered). `generate_from_gaps()` found no qualifying gaps and created zero GEN_* templates.
+
+### Fix
+- `setup_templates.py`: added `generate_all_recipes()` to `TemplateGenerator` — creates one template per configured recipe using a synthetic gap state derived from the recipe's target conditions; skips duplicates; returns same report format as `generate_from_gaps()` with `"mode": "bootstrap"`
+- `tests/backtest_real_stocks.py`: fallback — if `generate_from_gaps()` creates zero templates, automatically calls `generate_all_recipes()` so GEN_* files always exist before backtest runs
+- Tests TG-21/TG-22: bootstrap creates ≥3 templates; second call skips all as duplicates
+
 ## [2026-04-04] Wire Template Generation into Backtest Runner
 
 ### Problem
