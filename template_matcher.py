@@ -97,6 +97,25 @@ class TemplateMatcher:
             stock_state = {}
             logger.debug(f"[{symbol}] No stock_state provided, matching without state filter")
 
+        # CP-3: Build state key and get suit context (before template evaluation)
+        state_key = self._build_state_key(stock_state)
+        sa_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {}).get("suit_assignment", {})
+        suit = None
+        is_exploration = False
+        if sa_cfg.get("enabled", False):
+            suit = self.get_suit(symbol, state_key)
+            is_exploration = self._is_exploration_bar()
+            # State-mismatch override: log when assigned template's state ≠ current state
+            if suit and suit.get("assigned_template"):
+                assigned_tmpl_obj = self._get_template_by_name(suit["assigned_template"])
+                if assigned_tmpl_obj and not self._template_state_matches(
+                        assigned_tmpl_obj, state_key):
+                    logger.info(
+                        f"[SUIT-OVERRIDE] {symbol}:{state_key} | "
+                        f"assigned={suit['assigned_template']} | "
+                        f"reason=state_mismatch | evaluating_all"
+                    )
+
         # Step 1: Filter templates that match this stock's state
         matching_templates = self.tm.get_for_state(stock_state, symbol=symbol)
 
@@ -134,6 +153,11 @@ class TemplateMatcher:
                         )
                     except Exception as _trust_ex:
                         logger.debug(f"[{symbol}] Trust score failed: {_trust_ex}")
+                    # CP-3: Tag whether this signal is from the assigned (suit) template
+                    signal["is_assigned"] = (
+                        suit is not None
+                        and suit.get("assigned_template") == template.id
+                    )
                     signals.append(signal)
                     if _dl:
                         try: _dl.log_signal(symbol=symbol, template_id=template.id, confidence=float(signal.get('confidence_score', 0)), regime=str(stock_state.get('trend', '') if stock_state else ''))
@@ -149,8 +173,38 @@ class TemplateMatcher:
                 failed = [d['block'] for d in details if not d.get('passed')]
                 logger.debug(f"[{symbol}] {template.id}: FAILED blocks: {failed}")
 
-        # Step 4: Sort by confidence (win_rate + conditions strength)
-        signals.sort(key=lambda s: s.get('confidence_score', 0), reverse=True)
+        # Step 4: Sort and return — suit-aware ranking (CP-3) or confidence fallback
+        if sa_cfg.get("enabled", False) and signals:
+            # Log each signal with its suit tag
+            for sig in signals:
+                assigned_tag = "ASSIGNED" if sig.get("is_assigned") else "NON-ASSIGNED"
+                logger.info(
+                    f"[SUIT-SIGNAL] {symbol}:{state_key} | "
+                    f"template={sig['template_id']} | "
+                    f"trust={sig.get('trust', {}).get('score', 0):.3f} | "
+                    f"lifecycle={sig.get('trust', {}).get('lifecycle', 'N/A')} | "
+                    f"tag={assigned_tag}"
+                )
+
+            if is_exploration:
+                logger.info(
+                    f"[SUIT-EXPLORE] {symbol}:{state_key} | "
+                    f"exploration_bar=True | all_signals={len(signals)} | "
+                    f"best={signals[0]['template_id']}"
+                )
+
+            # Sort by trust score (higher is better); tie-break by total signals
+            signals.sort(key=lambda s: (
+                -s.get('trust', {}).get('score', 0),
+                -s.get('trust', {}).get('total', 0)
+            ))
+
+            # In best_single mode: return only the top-ranked signal
+            mode = sa_cfg.get("mode", "best_single")
+            if mode == "best_single":
+                signals = [signals[0]]
+        else:
+            signals.sort(key=lambda s: s.get('confidence_score', 0), reverse=True)
 
         if signals:
             self.total_signals += len(signals)
@@ -398,8 +452,12 @@ class TemplateMatcher:
     # ========================================
 
     def _disable_combo_key(self, template_id, symbol, stock_state):
-        """Build a string key for a (template, symbol, trend_state) combo."""
-        trend = stock_state.get("trend", "") if stock_state else ""
+        """Build a string key for a (template, symbol, trend_state) combo.
+        Accepts stock_state as dict or as a 'trend:...' state key string."""
+        if isinstance(stock_state, str):
+            trend = stock_state.split(":")[0] if stock_state else ""
+        else:
+            trend = stock_state.get("trend", "") if stock_state else ""
         return f"{template_id}::{symbol}::{trend}"
 
     def _load_disable_list(self):
@@ -586,13 +644,26 @@ class TemplateMatcher:
         volatility = stock_state.get("volatility", "")
         return f"{trend}:{structure}:{volume}:{volatility}"
 
+    def _state_key_to_dict(self, state_key):
+        """Convert 'trend:structure:volume:volatility' string to state dict.
+        Accepts dict (passthrough) or None."""
+        if isinstance(state_key, dict) or state_key is None:
+            return state_key or {}
+        parts = (state_key or "").split(":")
+        keys = ["trend", "structure", "volume", "volatility"]
+        return {keys[i]: parts[i] for i in range(min(len(parts), len(keys)))}
+
     def _get_state_group_keys(self, stock_state):
         """Return (L3, L2, L1) grouping keys for hierarchical fallback.
 
         L3 = full state  "trend:structure:volume:volatility"
         L2 = trend+volatility  "trend:*:*:volatility"
         L1 = trend only  "trend:*:*:*"
+
+        Accepts stock_state as dict or string.
         """
+        if isinstance(stock_state, str):
+            stock_state = self._state_key_to_dict(stock_state)
         trend = stock_state.get("trend", "") if stock_state else ""
         volatility = stock_state.get("volatility", "") if stock_state else ""
         l3 = self._build_state_key(stock_state)
@@ -756,7 +827,8 @@ class TemplateMatcher:
         Args:
             template_id: template ID string
             symbol: stock ticker
-            stock_state: state dict with trend/structure/volume/volatility
+            stock_state: state dict with trend/structure/volume/volatility,
+                         OR a state key string "trend:structure:volume:volatility"
         Returns:
             dict: {
                 "score": float [0,1],
@@ -769,6 +841,10 @@ class TemplateMatcher:
                 "level_used": str ("L3"/"L2"/"L1"/"PRIOR"),
             }
         """
+        # Normalise: accept string state key or dict
+        if isinstance(stock_state, str):
+            stock_state = self._state_key_to_dict(stock_state)
+
         ct_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {}).get("contextual_trust", {})
         if not ct_cfg.get("enabled", False):
             return {
@@ -822,3 +898,369 @@ class TemplateMatcher:
             "ci_upper": ci[1],
             "level_used": level,
         }
+
+    # ========================================
+    # SUIT ASSIGNMENT ENGINE (CP-3)
+    # ========================================
+
+    def _get_ledger_path(self):
+        """Return path to shadow_ledger.json."""
+        evo_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {})
+        return evo_cfg.get("auto_disable", {}).get(
+            "disable_list_path", "data/shadow_ledger.json"
+        )
+
+    def _current_date_iso(self):
+        """Today's date as YYYY-MM-DD string."""
+        return datetime.now().strftime("%Y-%m-%d")
+
+    def _get_template_by_name(self, template_id):
+        """Find template object by ID. Returns None if not found."""
+        return self._get_template_by_id(template_id)
+
+    def _template_state_matches(self, template, state_key):
+        """Return True if template's required_state covers the given state_key string."""
+        parts = state_key.split(":") if isinstance(state_key, str) else []
+        if len(parts) != 4:
+            return True  # Can't determine — allow
+        state_dict = {
+            "trend": parts[0], "structure": parts[1],
+            "volume": parts[2], "volatility": parts[3],
+        }
+        req = getattr(template, 'required_state', {})
+        if not req:
+            return True  # No required state — always matches
+        for axis in ("trend", "structure", "volume", "volatility"):
+            req_vals = req.get(axis, [])
+            if req_vals and state_dict.get(axis, "") not in req_vals:
+                return False
+        return True
+
+    def _state_matches_group(self, state_key, group_key):
+        """Check if state_key matches a group pattern like 'BULLISH:*:*:COMPRESSED'."""
+        s_parts = state_key.split(":")
+        g_parts = group_key.split(":")
+        if len(s_parts) != len(g_parts):
+            return False
+        return all(gp == "*" or gp == sp for gp, sp in zip(g_parts, s_parts))
+
+    def _is_exploration_bar(self):
+        """Return True ~exploration_pct of the time (deterministic per eval counter)."""
+        import hashlib
+        sa_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {}).get("suit_assignment", {})
+        pct = sa_cfg.get("exploration_pct", 0.15)
+        self._eval_counter = getattr(self, '_eval_counter', 0) + 1
+        hash_val = int(
+            hashlib.md5(str(self._eval_counter).encode()).hexdigest()[:8], 16
+        )
+        return (hash_val % 100) < int(pct * 100)
+
+    def _load_assignments(self):
+        """Load suit assignments from shadow_ledger.json['suit_assignments']['assignments']."""
+        try:
+            data = safe_json_read(self._get_ledger_path(), default={})
+            return data.get("suit_assignments", {}).get("assignments", {})
+        except Exception:
+            return {}
+
+    def _save_assignments(self, assignments):
+        """Persist suit assignments — writes only the suit_assignments key."""
+        try:
+            data = safe_json_read(self._get_ledger_path(), default={})
+            if "suit_assignments" not in data:
+                data["suit_assignments"] = {}
+            data["suit_assignments"]["assignments"] = assignments
+            data["suit_assignments"]["last_assignment"] = self._current_date_iso()
+            safe_json_write(self._get_ledger_path(), data)
+        except Exception as e:
+            logger.error(f"[Suit] Failed to save assignments: {e}")
+
+    def _load_assignment_history(self):
+        """Load assignment history list from shadow_ledger.json."""
+        try:
+            data = safe_json_read(self._get_ledger_path(), default={})
+            return data.get("suit_assignments", {}).get("history", [])
+        except Exception:
+            return []
+
+    def _record_assignment_changes(self, changes):
+        """Append assignment changes to history, capped at max_history_entries × 13."""
+        sa_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {}).get("suit_assignment", {})
+        max_entries = sa_cfg.get("max_history_entries", 52) * 13
+        try:
+            data = safe_json_read(self._get_ledger_path(), default={})
+            if "suit_assignments" not in data:
+                data["suit_assignments"] = {}
+            history = data["suit_assignments"].get("history", [])
+            history.extend(changes)
+            if len(history) > max_entries:
+                history = history[-max_entries:]
+            data["suit_assignments"]["history"] = history
+            safe_json_write(self._get_ledger_path(), data)
+        except Exception as e:
+            logger.error(f"[Suit] Failed to record assignment changes: {e}")
+
+    def _find_suit_clusters(self, assignments):
+        """Find groups of symbols that share identical sets of assigned templates."""
+        suit_fingerprints = {}
+        for symbol, sym_data in assignments.items():
+            templates = sorted(set(
+                a.get("assigned_template", "NONE")
+                for a in sym_data.get("by_state", {}).values()
+                if a.get("assigned_template")
+            ))
+            if templates:
+                fingerprint = "|".join(templates)
+                suit_fingerprints.setdefault(fingerprint, []).append(symbol)
+        return [
+            {"templates": fp.split("|"), "symbols": syms}
+            for fp, syms in suit_fingerprints.items()
+            if len(syms) > 1
+        ]
+
+    def get_suit_sharing_report(self):
+        """Cross-stock analysis: template usage counts and clusters of similar symbols."""
+        assignments = self._load_assignments()
+        template_usage = {}
+        symbol_suits = {}
+
+        for symbol, sym_data in assignments.items():
+            symbol_suits[symbol] = set()
+            for state_key, assignment in sym_data.get("by_state", {}).items():
+                tmpl = assignment.get("assigned_template")
+                if tmpl:
+                    template_usage.setdefault(tmpl, set()).add(symbol)
+                    symbol_suits[symbol].add(tmpl)
+
+        clusters = self._find_suit_clusters(assignments)
+        return {
+            "template_usage": {t: sorted(list(s)) for t, s in template_usage.items()},
+            "symbol_diversity": {s: len(t) for s, t in symbol_suits.items()},
+            "clusters": clusters,
+        }
+
+    def _log_suit_summary(self, assignments, changes):
+        """Log [SUIT-SUMMARY], [SUIT-ASSIGN/GAP], [SUIT-CHANGE], [SUIT-CLUSTER] lines."""
+        total = len(assignments)
+        assigned_count = sum(
+            1 for s in assignments.values()
+            if any(a.get("assigned_template") for a in s.get("by_state", {}).values())
+        )
+        gap_count = total - assigned_count
+        logger.info(
+            f"[SUIT-SUMMARY] symbols={total} | "
+            f"with_suit={assigned_count} | gaps={gap_count} | changes={len(changes)}"
+        )
+        for symbol, sym_data in assignments.items():
+            for state_key, assignment in sym_data.get("by_state", {}).items():
+                tmpl = assignment.get("assigned_template")
+                if tmpl:
+                    logger.info(
+                        f"[SUIT-ASSIGN] {symbol}:{state_key} | "
+                        f"template={tmpl} | score={assignment.get('score', 0):.3f} | "
+                        f"wr={assignment.get('wr', 0):.1%} | "
+                        f"lifecycle={assignment.get('lifecycle', 'N/A')} | "
+                        f"confidence={assignment.get('confidence', 'N/A')} | "
+                        f"runner_up={assignment.get('runner_up', 'NONE')} | "
+                        f"candidates={assignment.get('candidates_count', 0)}"
+                    )
+                else:
+                    logger.warning(
+                        f"[SUIT-GAP] {symbol}:{state_key} | "
+                        f"assigned=NONE | reason={assignment.get('reason', 'unknown')}"
+                    )
+        for change in changes:
+            logger.info(
+                f"[SUIT-CHANGE] {change['symbol']}:{change['state']} | "
+                f"from={change['from_template']} | to={change['to_template']} | "
+                f"reason={change['reason']} | "
+                f"old_score={change.get('old_score', 0):.3f} | "
+                f"new_score={change.get('new_score', 0):.3f}"
+            )
+        # Cluster report
+        sharing = self.get_suit_sharing_report()
+        for cluster in sharing.get("clusters", []):
+            logger.info(
+                f"[SUIT-CLUSTER] templates={cluster['templates']} | "
+                f"symbols={cluster['symbols']}"
+            )
+
+    def get_suit(self, symbol, state_key):
+        """Get assigned template for symbol+state. Returns assignment dict or None.
+
+        Lookup order: exact state → L2 group → L1 group → default.
+        """
+        sa_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {}).get("suit_assignment", {})
+        if not sa_cfg.get("enabled", False):
+            return None
+
+        assignments = self._load_assignments()
+        sym_data = assignments.get(symbol, {})
+
+        # Exact state match
+        state_assignment = sym_data.get("by_state", {}).get(state_key)
+        if state_assignment and state_assignment.get("assigned_template"):
+            return state_assignment
+
+        # Grouped fallback: L2 then L1
+        l3, l2, l1 = self._get_state_group_keys(self._state_key_to_dict(state_key))
+        for group_key in (l2, l1):
+            for assigned_state, assignment in sym_data.get("by_state", {}).items():
+                if (self._state_matches_group(assigned_state, group_key)
+                        and assignment.get("assigned_template")):
+                    return assignment
+
+        # Default suit fallback
+        default_template = sym_data.get("default")
+        if default_template:
+            return {
+                "assigned_template": default_template,
+                "score": 0.0,
+                "source": "default",
+                "confidence": "LOW",
+            }
+
+        return None
+
+    def assign_suits(self):
+        """Weekly: assign best template per symbol+state based on trust scores.
+
+        Returns:
+            dict: assignments by symbol
+        """
+        sa_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {}).get("suit_assignment", {})
+        if not sa_cfg.get("enabled", False):
+            return {}
+
+        matrix = self._load_trust_matrix()
+        old_assignments = self._load_assignments()
+        disabled_set = self._load_disable_list()
+
+        min_score = sa_cfg.get("min_trust_score_to_assign", 0.20)
+        min_signals = sa_cfg.get("min_signals_to_assign", 10)
+        min_confidence_signals = sa_cfg.get("min_signals_for_high_confidence", 20)
+        default_min_lifecycle = sa_cfg.get("default_min_lifecycle", "MONITORING")
+        lifecycle_rank = {
+            "PROVEN": 4, "MONITORING": 3, "DEGRADED": 2, "BURN_IN": 1, "DISABLED": 0
+        }
+
+        # Collect all template IDs and symbols from trust_matrix
+        all_templates = set(matrix.keys())
+        all_symbols = set()
+        for sym_dict in matrix.values():
+            all_symbols.update(sym_dict.keys())
+
+        assignments = {}
+        changes = []
+
+        for symbol in sorted(all_symbols):
+            assignments[symbol] = {"by_state": {}, "default": None}
+
+            # Collect all state keys seen for this symbol across all templates
+            all_states = set()
+            for template_id in all_templates:
+                all_states.update(matrix.get(template_id, {}).get(symbol, {}).keys())
+
+            for state_key in sorted(all_states):
+                candidates = []
+                for template_id in all_templates:
+                    # Exclude disabled combos
+                    trend = state_key.split(":")[0] if state_key else ""
+                    combo_key = f"{template_id}::{symbol}::{trend}"
+                    if combo_key in disabled_set:
+                        continue
+
+                    trust = self.get_trust_score(template_id, symbol, state_key)
+                    if trust["total"] >= min_signals and trust["score"] >= min_score:
+                        candidates.append({
+                            "template": template_id,
+                            "score": trust["score"],
+                            "wr": trust["decayed_wr"],
+                            "signals": trust["total"],
+                            "lifecycle": trust["lifecycle"],
+                            "ci": (trust["ci_lower"], trust["ci_upper"]),
+                            "source": trust["level_used"],
+                        })
+
+                if candidates:
+                    candidates.sort(key=lambda c: (-c["score"], -c["signals"]))
+                    best = candidates[0]
+                    runner_up = candidates[1] if len(candidates) > 1 else None
+                    confidence = (
+                        "HIGH" if best["signals"] >= min_confidence_signals else "LOW"
+                    )
+                    assignment = {
+                        "assigned_template": best["template"],
+                        "score": best["score"],
+                        "wr": best["wr"],
+                        "signals": best["signals"],
+                        "lifecycle": best["lifecycle"],
+                        "ci": best["ci"],
+                        "confidence": confidence,
+                        "runner_up": runner_up["template"] if runner_up else None,
+                        "runner_up_score": runner_up["score"] if runner_up else None,
+                        "candidates_count": len(candidates),
+                        "assigned_at": self._current_date_iso(),
+                    }
+                    # Track template swaps
+                    old = (old_assignments.get(symbol, {})
+                           .get("by_state", {}).get(state_key, {}))
+                    old_tmpl = old.get("assigned_template")
+                    if old_tmpl and old_tmpl != best["template"]:
+                        changes.append({
+                            "date": self._current_date_iso(),
+                            "symbol": symbol,
+                            "state": state_key,
+                            "from_template": old_tmpl,
+                            "to_template": best["template"],
+                            "reason": "score_improvement",
+                            "old_score": old.get("score", 0),
+                            "new_score": best["score"],
+                        })
+                    assignments[symbol]["by_state"][state_key] = assignment
+                else:
+                    assignments[symbol]["by_state"][state_key] = {
+                        "assigned_template": None,
+                        "score": 0.0,
+                        "reason": "NO_QUALIFIED_CANDIDATE",
+                        "candidates_count": 0,
+                        "assigned_at": self._current_date_iso(),
+                    }
+
+            # Default suit: best template for this symbol with lifecycle >= default_min_lifecycle
+            global_candidates = []
+            for template_id in all_templates:
+                sym_cells = matrix.get(template_id, {}).get(symbol, {})
+                if not sym_cells:
+                    continue
+                total_wins = sum(c.get("wins", 0) for c in sym_cells.values())
+                total_sigs = sum(c.get("total", 0) for c in sym_cells.values())
+                if total_sigs < min_signals:
+                    continue
+                global_wr = total_wins / total_sigs
+                lifecycles = [
+                    c.get("lifecycle", "BURN_IN")
+                    for c in sym_cells.values() if c.get("total", 0) > 0
+                ]
+                dominant_lc = (
+                    max(lifecycles, key=lambda lc: lifecycle_rank.get(lc, 0))
+                    if lifecycles else "BURN_IN"
+                )
+                if lifecycle_rank.get(dominant_lc, 0) >= lifecycle_rank.get(default_min_lifecycle, 0):
+                    global_candidates.append({
+                        "template": template_id,
+                        "score": global_wr,
+                        "signals": total_sigs,
+                        "lifecycle": dominant_lc,
+                    })
+
+            if global_candidates:
+                global_candidates.sort(key=lambda c: (-c["score"], -c["signals"]))
+                assignments[symbol]["default"] = global_candidates[0]["template"]
+
+        self._save_assignments(assignments)
+        if changes and sa_cfg.get("track_assignment_history", True):
+            self._record_assignment_changes(changes)
+        self._log_suit_summary(assignments, changes)
+
+        return assignments

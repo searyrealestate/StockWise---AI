@@ -549,6 +549,20 @@ TEMPLATE_EVOLUTION_CONFIG = {
         "use_decayed_wr": True,              # Use exponentially decayed WR (recent = more weight)
         "decay_rate": 0.95,                  # Per-signal decay factor (0.95 = 5% fade per signal)
         "state_grouping_levels": 3,          # Fallback levels: L3=full, L2=trend+vol, L1=trend
+    },
+    "suit_assignment": {
+        "enabled": True,
+        "mode": "best_single",               # "best_single" → return top signal; "top_n" → return all ranked
+        "min_trust_score_to_assign": 0.20,   # Candidate excluded if score < this
+        "min_signals_to_assign": 10,         # Candidate excluded if total signals < this
+        "reassign_interval": "weekly",       # How often assign_suits() should run
+        "allow_shared_suits": True,          # Allow same template as suit for multiple symbols
+        "exploration_pct": 0.15,             # ~15% of bars: all templates run for data collection
+        "min_signals_for_high_confidence": 20,  # < this → confidence="LOW" tag on assignment
+        "default_min_lifecycle": "MONITORING",  # Default suit requires lifecycle >= this
+        "log_assignment_changes": True,      # Log [SUIT-CHANGE] when template swaps
+        "track_assignment_history": True,    # Append changes to history list
+        "max_history_entries": 52,           # Rolling cap (× 13 symbols = max history length)
     }
 }
 
@@ -630,6 +644,24 @@ def validate_template_evolution_config():
         "contextual_trust.decay_rate must be float in (0, 1)"
     assert isinstance(ct.get("state_grouping_levels", None), int) and ct["state_grouping_levels"] in [1, 2, 3], \
         "contextual_trust.state_grouping_levels must be int in {1, 2, 3}"
+    sa = TEMPLATE_EVOLUTION_CONFIG.get("suit_assignment", {})
+    _sa_score = sa.get("min_trust_score_to_assign", None)
+    assert isinstance(_sa_score, float) and 0.0 <= _sa_score <= 1.0, \
+        "suit_assignment.min_trust_score_to_assign must be float in [0, 1]"
+    assert isinstance(sa.get("min_signals_to_assign", None), int) and sa["min_signals_to_assign"] > 0, \
+        "suit_assignment.min_signals_to_assign must be int > 0"
+    _sa_expl = sa.get("exploration_pct", None)
+    assert isinstance(_sa_expl, float) and 0.0 <= _sa_expl <= 1.0, \
+        "suit_assignment.exploration_pct must be float in [0, 1]"
+    _sa_hc = sa.get("min_signals_for_high_confidence", None)
+    assert isinstance(_sa_hc, int) and _sa_hc > 0 and _sa_hc >= sa["min_signals_to_assign"], \
+        "suit_assignment.min_signals_for_high_confidence must be int >= min_signals_to_assign"
+    assert sa.get("default_min_lifecycle") in ("PROVEN", "MONITORING", "DEGRADED", "BURN_IN"), \
+        "suit_assignment.default_min_lifecycle must be one of PROVEN/MONITORING/DEGRADED/BURN_IN"
+    assert sa.get("mode") in ("best_single", "top_n"), \
+        "suit_assignment.mode must be 'best_single' or 'top_n'"
+    assert isinstance(sa.get("max_history_entries", None), int) and sa["max_history_entries"] > 0, \
+        "suit_assignment.max_history_entries must be int > 0"
     return True
 
 

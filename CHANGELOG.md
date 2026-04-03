@@ -1,5 +1,46 @@
 # Changelog
 
+## [2026-04-04] Suit Assignment Engine (CP-3)
+
+### Problem
+TemplateMatcher fired all templates equally regardless of per-symbol, per-state historical performance. There was no mechanism to prioritize battle-tested templates over untested ones for a given market context, no exploration budget to discover new winners, and no cross-stock clustering to share assignment intelligence.
+
+### Fix
+- Added `suit_assignment` section to `TEMPLATE_EVOLUTION_CONFIG` in `system_config.py` (12 keys: `enabled`, `mode="best_single"`, `min_trust_score_to_assign=0.20`, `min_signals_to_assign=10`, `reassign_interval="weekly"`, `allow_shared_suits=True`, `exploration_pct=0.15`, `min_signals_for_high_confidence=20`, `default_min_lifecycle="MONITORING"`, `log_assignment_changes=True`, `track_assignment_history=True`, `max_history_entries=52`); `validate_template_evolution_config()` asserts all 7 structural checks
+- Added 18 methods to `TemplateMatcher` in `template_matcher.py`:
+  - `_get_ledger_path()` / `_current_date_iso()` — storage helpers
+  - `_get_template_by_name(name)` — template lookup by id string
+  - `_template_state_matches(template, state_key)` — checks template `required_state` vs current state_key
+  - `_state_matches_group(state_key, group_key)` — wildcard `"*"` matching for L2/L1 group keys
+  - `_is_exploration_bar()` — deterministic MD5 hash of `_eval_counter`; returns True ~15% of bars
+  - `_load_assignments()` / `_save_assignments()` — targeted read/write of `suit_assignments` key (never clobbers sibling keys)
+  - `_load_assignment_history()` / `_record_assignment_changes(changes)` — rolling cap at `max_history_entries × 13` entries
+  - `_find_suit_clusters(assignments)` — groups symbols sharing the same assigned template per state
+  - `get_suit_sharing_report()` — returns cluster report dict `{template_id: {state_key: [symbols]}}`
+  - `_log_suit_summary(assignments, changes)` — logs `[SUIT-ASSIGN]` lines for all changes
+  - `get_suit(symbol, state_key)` — L3→L2→L1→default fallback lookup; returns `{assigned_template, confidence, source, runner_up}`
+  - `assign_suits()` — weekly batch: reads trust_matrix, iterates all symbol×state cells, ranks by `(-score, -signals)`, assigns best candidate meeting `min_trust_score_to_assign` + `min_signals_to_assign` + `default_min_lifecycle` gates, tracks runner_up, records changes, writes assignments
+- Integrated suit assignment in `scan_ticker()` (template_matcher.py):
+  - Per-bar: queries `get_suit()` and `_is_exploration_bar()`; marks each signal with `is_assigned` flag
+  - Logs `[SUIT-SIGNAL]` (assigned template firing), `[SUIT-EXPLORE]` (exploration bar), `[SUIT-OVERRIDE]` (state mismatch)
+  - In `best_single` mode: sorts by `(-trust.score, -trust.total)` and returns `[signals[0]]`; suit is PRIORITIZATION not FILTERING — non-assigned templates can still produce the best signal
+  - Falls back to original `confidence_score` sort when suit assignment disabled
+
+### Tests
+- 35 new tests (SA-01→SA-35) in `tests/test_template_system.py` (`TestSuitAssignment` class):
+  - SA-01→03: `assign_suits` assigns highest trust template, respects `min_trust_score_to_assign` gate, respects `min_signals_to_assign` gate
+  - SA-04→06: ranking tiebreaker by signal count, runner_up stored, DISABLED lifecycle excluded from assignment
+  - SA-07→09: `get_suit` returns assigned template at L3, falls back L2 then L1, returns None when no match
+  - SA-10→12: `get_suit` default fallback, disabled config returns None, confidence tagged LOW when below `min_signals_for_high_confidence`
+  - SA-13→15: prioritization-not-filtering (all templates evaluated), non-assigned template can fire, multiple signals ranked by trust score
+  - SA-16→18: ~15% exploration rate (5–60/200), exploration deterministic per counter, state mismatch logs `[SUIT-OVERRIDE]`
+  - SA-19→21: cross-stock clustering report, shared-suit symbols grouped, cluster report structure
+  - SA-22→24: assignment history written, history rolling cap at `max_history_entries × 13`, changes-only recorded
+  - SA-25→27: `default_min_lifecycle` gate (DEGRADED excluded), `allow_shared_suits` enforcement, config validation passes
+  - SA-28→30: config disabled → `get_suit` returns None, backward compat (no suit_assignment key → graceful), empty trust_matrix → no assignments
+  - SA-31→33: open position safety (suit change mid-position not applied), regression get_suit with string state_key, assignment I/O round-trip
+  - SA-34→35: `assign_suits` writes `suit_assignments` key without clobbering `trust_matrix`/`attributions`/`coverage_gaps`
+
 ## [2026-04-03] Contextual Trust System (CP-2)
 
 ### Problem
