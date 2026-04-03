@@ -1,5 +1,36 @@
 # Changelog
 
+## [2026-04-04] Walk-Forward Validator — 70/30 Split, CP-2 Checkpoint (CP-5)
+
+### Problem
+All templates trained and tested on the same data. No mechanism to verify that template performance generalises to unseen bars. Generated templates (GEN_*) are especially at risk of overfitting since their recipes were designed knowing gap characteristics.
+
+### Fix
+- Added `WALK_FORWARD_CONFIG` top-level dict in `system_config.py` (8 keys: `enabled`, `train_pct=0.70`, `test_pct=0.30`, `min_test_trades=5`, `cp2_min_wr_generated=0.25`, `cp2_min_pf=1.50`, `cp2_min_wr_seed=0.35`, `flag_overfit_threshold=0.20`)
+- Added `WalkForwardValidator` class to `backtest_engine.py` (between BacktestEngine and CLI):
+  - `validate()` — main entry: loads data via BacktestEngine._ensure_data(), splits train/test, runs two BacktestEngine instances with `feed_shadow_ledger=False`, compares per-template, evaluates CP-2, detects overfitting, logs full report
+  - `_split_data(full_data)` — finds global date range across all symbols (after warmup strip), splits at `train_pct` percentile; test window includes warmup bars before split for valid indicator values; train ends at or before split_date (no look-ahead)
+  - `_compare_per_template(train_trades, test_trades)` — groups by template_id, computes WR/PF/PNL for each period, calculates `wr_delta`, tags `is_generated` (GEN_ prefix), sets `overfit_flag` when `wr_delta > flag_overfit_threshold` and `train_trades >= 5`
+  - `_evaluate_cp2(per_template)` — aggregates generated vs seed stats on test period; PASS if generated WR ≥ 25% and PF ≥ 1.50; vacuously PASS if zero generated templates traded; FAIL with reason if < min_test_trades
+  - `_detect_overfitting(per_template)` — returns warning strings for flagged templates
+  - `_log_report(report)` — structured logging with `[WF-TMPL]`, `[CP-2]`, `[WF-OVERFIT]` tags
+- Added `--walk-forward` CLI flag to `main()`: runs `WalkForwardValidator`, prints CP-2 verdict, saves `*_walkforward.json`, exits 0 (PASS) or 1 (FAIL)
+- New test file `tests/test_walk_forward.py` with `TestWalkForwardValidator` (12 tests WF-01→WF-12)
+
+### Tests
+- WF-01: 70% split ratio is within ±5pp of target
+- WF-02: train max date ≤ split_date (no look-ahead)
+- WF-03: split_date present in split_info as YYYY-MM-DD string
+- WF-04: empty data returns (None, None, {}) gracefully
+- WF-05: per-template WR and trade counts calculated correctly
+- WF-06: CP-2 PASS when generated WR≥25% and PF≥1.50
+- WF-07: CP-2 FAIL when generated WR=10% < 25%
+- WF-08: overfit detection flags GEN_OVERFIT with [OVERFIT] in warning
+- WF-09: train_pct sourced from WALK_FORWARD_CONFIG (not hardcoded)
+- WF-10: seed and generated templates counted separately in CP-2
+- WF-11: no generated templates active → CP-2 passes vacuously
+- WF-12: 2 test trades → reason "only 2 test trades" in cp2["reasons"]
+
 ## [2026-04-04] Hotfix: Signal Direction Icons (commit 91c6027)
 
 ### Problem

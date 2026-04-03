@@ -1711,6 +1711,391 @@ class BacktestEngine:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Walk-Forward Validator
+# ═══════════════════════════════════════════════════════════════════════════
+
+class WalkForwardValidator:
+    """
+    Walk-Forward Validation: 70/30 train/test split with no look-ahead.
+
+    Runs BacktestEngine separately on train and test periods,
+    then compares per-template performance to detect overfitting
+    and validate generated templates meet CP-2 criteria.
+
+    Usage:
+        validator = WalkForwardValidator(symbols=["AAPL", "NVDA"])
+        report = validator.validate()
+        print(report["verdict"])  # "PASS" or "FAIL"
+    """
+
+    def __init__(self, symbols=None, initial_capital=None,
+                 use_risk_gates=True, data_cache=None):
+        wf_cfg = getattr(cfg, 'WALK_FORWARD_CONFIG', {})
+        self.symbols = symbols or list(getattr(cfg, "DEFAULT_TRAINING_SYMBOLS", []))
+        self.initial_capital = initial_capital or BACKTEST_CONFIG["initial_capital"]
+        self.use_risk_gates = use_risk_gates
+        self.train_pct = wf_cfg.get("train_pct", 0.70)
+        self.data_cache = data_cache  # optional pre-loaded data
+        self.config = wf_cfg
+
+    def validate(self) -> dict:
+        """
+        Main entry point. Returns full walk-forward report with CP-2 verdict.
+
+        Returns:
+            dict with keys: split_date, train_days, test_days, train_summary,
+            test_summary, per_template, cp2, overfit_warnings, verdict
+        """
+        logger.info("=" * 60)
+        logger.info("WALK-FORWARD VALIDATION START")
+        logger.info(f"Train/Test split: {self.train_pct:.0%} / {1-self.train_pct:.0%}")
+        logger.info("=" * 60)
+
+        # Step 1: Load data via BacktestEngine's loader
+        loader = BacktestEngine(
+            symbols=self.symbols,
+            initial_capital=self.initial_capital,
+            use_risk_gates=self.use_risk_gates,
+            data_cache=self.data_cache,
+        )
+        loader._ensure_data()
+        full_data = loader.data_cache
+
+        if not full_data:
+            logger.error("[WF] No data available")
+            return {"error": "No data available", "verdict": "FAIL"}
+
+        # Step 2: Split data by date
+        train_data, test_data, split_info = self._split_data(full_data)
+
+        if not train_data or not test_data:
+            logger.error("[WF] Insufficient data for split")
+            return {"error": "Insufficient data for train/test split", "verdict": "FAIL"}
+
+        logger.info(
+            f"[WF] Split at {split_info['split_date']} | "
+            f"Train: {split_info['train_days']} days | "
+            f"Test: {split_info['test_days']} days"
+        )
+
+        # Step 3: Run BacktestEngine on TRAIN period
+        logger.info("[WF] === TRAIN PERIOD ===")
+        train_engine = BacktestEngine(
+            symbols=self.symbols,
+            initial_capital=self.initial_capital,
+            use_risk_gates=self.use_risk_gates,
+            data_cache=train_data,
+        )
+        train_engine.feed_shadow_ledger = False  # Don't pollute ledger with partial data
+        train_results = train_engine.run()
+
+        # Step 4: Run BacktestEngine on TEST period
+        logger.info("[WF] === TEST PERIOD ===")
+        test_engine = BacktestEngine(
+            symbols=self.symbols,
+            initial_capital=self.initial_capital,
+            use_risk_gates=self.use_risk_gates,
+            data_cache=test_data,
+        )
+        test_engine.feed_shadow_ledger = False
+        test_results = test_engine.run()
+
+        # Step 5: Compare per-template
+        per_template = self._compare_per_template(
+            train_results.get("trades", train_engine.closed_trades),
+            test_results.get("trades", test_engine.closed_trades),
+        )
+
+        # Step 6: Evaluate CP-2
+        cp2 = self._evaluate_cp2(per_template)
+
+        # Step 7: Detect overfit warnings
+        overfit_warnings = self._detect_overfitting(per_template)
+
+        verdict = cp2["verdict"]
+        if overfit_warnings:
+            for w in overfit_warnings:
+                logger.warning(f"[WF-OVERFIT] {w}")
+
+        report = {
+            "split_date":      split_info["split_date"],
+            "train_days":      split_info["train_days"],
+            "test_days":       split_info["test_days"],
+            "train_summary":   train_results.get("summary", {}),
+            "test_summary":    test_results.get("summary", {}),
+            "per_template":    per_template,
+            "cp2":             cp2,
+            "overfit_warnings": overfit_warnings,
+            "verdict":         verdict,
+        }
+
+        self._log_report(report)
+        return report
+
+    def _split_data(self, full_data):
+        """Split each symbol's DataFrame into train/test by global split date.
+
+        Finds the global date range across all symbols, calculates
+        split_date at train_pct of the range, then slices each DataFrame.
+        Test data includes warmup bars before split_date so indicators are valid.
+
+        Returns:
+            (train_data, test_data, split_info)
+        """
+        warmup = BACKTEST_CONFIG.get("min_candles_warmup", 200)
+
+        # Collect all tradeable dates (after warmup strip)
+        all_dates = set()
+        for df in full_data.values():
+            if len(df) > warmup:
+                all_dates.update(df.index[warmup:])
+
+        if not all_dates:
+            return None, None, {}
+
+        sorted_dates = sorted(all_dates)
+        split_idx = int(len(sorted_dates) * self.train_pct)
+
+        if split_idx < 1 or split_idx >= len(sorted_dates) - 1:
+            return None, None, {}
+
+        split_date = sorted_dates[split_idx]
+
+        train_data = {}
+        test_data = {}
+
+        for symbol, df in full_data.items():
+            # Train: all rows up to and including split_date
+            train_mask = df.index <= split_date
+            train_df = df.loc[train_mask]
+
+            # Test: include warmup bars before split_date so indicators are valid
+            test_start_pos = max(
+                0,
+                df.index.get_indexer([split_date], method='ffill')[0] - warmup
+            )
+            test_df = df.iloc[test_start_pos:]
+
+            if len(train_df) >= warmup:
+                train_data[symbol] = train_df
+            if len(test_df) >= warmup:
+                test_data[symbol] = test_df
+
+        split_info = {
+            "split_date": (
+                str(split_date.date()) if hasattr(split_date, 'date') else str(split_date)
+            ),
+            "train_days": split_idx,
+            "test_days":  len(sorted_dates) - split_idx,
+        }
+
+        return train_data, test_data, split_info
+
+    def _compare_per_template(self, train_trades, test_trades):
+        """Compare per-template performance between train and test periods.
+
+        Args:
+            train_trades: list of trade dicts from train BacktestEngine
+            test_trades:  list of trade dicts from test BacktestEngine
+        Returns:
+            dict: template_id → performance comparison dict
+        """
+        def _calc_stats(trades):
+            if not trades:
+                return {"trades": 0, "wr": 0.0, "pf": 0.0, "total_pnl": 0.0}
+            wins = sum(1 for t in trades if t.get("pnl_pct", 0) > 0)
+            gross_profit = sum(t["pnl_pct"] for t in trades if t.get("pnl_pct", 0) > 0)
+            gross_loss   = abs(sum(t["pnl_pct"] for t in trades if t.get("pnl_pct", 0) <= 0))
+            wr = wins / len(trades)
+            pf = (gross_profit / gross_loss) if gross_loss > 0 else (
+                float('inf') if gross_profit > 0 else 0.0
+            )
+            return {
+                "trades":    len(trades),
+                "wr":        round(wr, 4),
+                "pf":        round(pf, 2),
+                "total_pnl": round(sum(t.get("pnl_pct", 0) for t in trades), 2),
+            }
+
+        train_by_tmpl = {}
+        for t in train_trades:
+            tid = t.get("template_id", "UNKNOWN")
+            train_by_tmpl.setdefault(tid, []).append(t)
+
+        test_by_tmpl = {}
+        for t in test_trades:
+            tid = t.get("template_id", "UNKNOWN")
+            test_by_tmpl.setdefault(tid, []).append(t)
+
+        all_templates = set(train_by_tmpl.keys()) | set(test_by_tmpl.keys())
+        overfit_threshold = self.config.get("flag_overfit_threshold", 0.20)
+
+        result = {}
+        for tid in sorted(all_templates):
+            tr = _calc_stats(train_by_tmpl.get(tid, []))
+            te = _calc_stats(test_by_tmpl.get(tid, []))
+            wr_delta = tr["wr"] - te["wr"]
+            is_gen   = tid.startswith("GEN_")
+
+            result[tid] = {
+                "train_trades": tr["trades"],
+                "train_wr":     tr["wr"],
+                "train_pf":     tr["pf"],
+                "train_pnl":    tr["total_pnl"],
+                "test_trades":  te["trades"],
+                "test_wr":      te["wr"],
+                "test_pf":      te["pf"],
+                "test_pnl":     te["total_pnl"],
+                "wr_delta":     round(wr_delta, 4),
+                "is_generated": is_gen,
+                "overfit_flag": wr_delta > overfit_threshold and tr["trades"] >= 5,
+            }
+
+        return result
+
+    def _evaluate_cp2(self, per_template):
+        """Evaluate CP-2 pass/fail for generated templates vs seed baseline.
+
+        CP-2 criteria:
+        - Generated templates test WR > cp2_min_wr_generated (default 25%)
+        - Generated templates test PF >= cp2_min_pf (default 1.50)
+        - If zero generated templates traded → pass vacuously
+        - If < min_test_trades → soft fail with reason
+        """
+        min_test_trades = self.config.get("min_test_trades", 5)
+        cp2_min_wr = self.config.get("cp2_min_wr_generated", 0.25)
+        cp2_min_pf = self.config.get("cp2_min_pf", 1.50)
+
+        gen_trades = gen_wins = 0
+        gen_profit = gen_loss = 0.0
+        seed_trades = seed_wins = 0
+        seed_profit = seed_loss = 0.0
+
+        for tid, stats in per_template.items():
+            tt = stats["test_trades"]
+            tw = stats["test_wr"]
+            tp = stats["test_pnl"]
+            wins_est = int(round(tw * tt)) if tt > 0 else 0
+
+            if stats["is_generated"]:
+                gen_trades += tt
+                gen_wins   += wins_est
+                if tp > 0: gen_profit += tp
+                else:      gen_loss   += abs(tp)
+            else:
+                seed_trades += tt
+                seed_wins   += wins_est
+                if tp > 0: seed_profit += tp
+                else:      seed_loss   += abs(tp)
+
+        gen_wr  = gen_wins  / gen_trades  if gen_trades  > 0 else 0.0
+        gen_pf  = (gen_profit  / gen_loss)  if gen_loss  > 0 else (
+            float('inf') if gen_profit  > 0 else 0.0)
+        seed_wr = seed_wins / seed_trades if seed_trades > 0 else 0.0
+        seed_pf = (seed_profit / seed_loss) if seed_loss > 0 else (
+            float('inf') if seed_profit > 0 else 0.0)
+
+        reasons  = []
+        pass_wr  = True
+        pass_pf  = True
+
+        if gen_trades == 0:
+            # No generated templates active — pass vacuously
+            pass
+        elif gen_trades < min_test_trades:
+            reasons.append(
+                f"Generated templates had only {gen_trades} test trades (min={min_test_trades})"
+            )
+            pass_wr = False
+            pass_pf = False
+        else:
+            if gen_wr < cp2_min_wr:
+                pass_wr = False
+                reasons.append(f"Generated WR={gen_wr:.1%} < {cp2_min_wr:.0%}")
+            if gen_pf != float('inf') and gen_pf < cp2_min_pf:
+                pass_pf = False
+                reasons.append(f"Generated PF={gen_pf:.2f} < {cp2_min_pf:.2f}")
+
+        verdict = "PASS" if (pass_wr and pass_pf) else "FAIL"
+
+        return {
+            "generated_test_trades": gen_trades,
+            "generated_test_wr":     round(gen_wr, 4),
+            "generated_test_pf":     round(gen_pf, 2) if gen_pf != float('inf') else "inf",
+            "seed_test_trades":      seed_trades,
+            "seed_test_wr":          round(seed_wr, 4),
+            "seed_test_pf":          round(seed_pf, 2) if seed_pf != float('inf') else "inf",
+            "pass_wr":               pass_wr,
+            "pass_pf":               pass_pf,
+            "verdict":               verdict,
+            "reasons":               reasons,
+        }
+
+    def _detect_overfitting(self, per_template):
+        """Return warning strings for templates where train WR >> test WR."""
+        threshold = self.config.get("flag_overfit_threshold", 0.20)
+        warnings = []
+        for tid, stats in per_template.items():
+            if stats["overfit_flag"]:
+                warnings.append(
+                    f"{tid}: train_wr={stats['train_wr']:.1%} → test_wr={stats['test_wr']:.1%} "
+                    f"(Δ={stats['wr_delta']:.1%} > {threshold:.0%}) [OVERFIT]"
+                )
+        return warnings
+
+    def _log_report(self, report):
+        """Log walk-forward results summary."""
+        logger.info("=" * 60)
+        logger.info("WALK-FORWARD RESULTS")
+        logger.info("=" * 60)
+        logger.info(
+            f"Split: {report.get('split_date')} | "
+            f"Train: {report.get('train_days')}d | "
+            f"Test: {report.get('test_days')}d"
+        )
+
+        train_s = report.get("train_summary", {})
+        test_s  = report.get("test_summary",  {})
+        logger.info(
+            f"[TRAIN] Trades={train_s.get('total_trades', 0)} | "
+            f"WR={train_s.get('win_rate', 0):.1f}% | "
+            f"PF={train_s.get('profit_factor', 0):.2f} | "
+            f"Return={train_s.get('total_return_pct', 0):.2f}%"
+        )
+        logger.info(
+            f"[TEST]  Trades={test_s.get('total_trades', 0)} | "
+            f"WR={test_s.get('win_rate', 0):.1f}% | "
+            f"PF={test_s.get('profit_factor', 0):.2f} | "
+            f"Return={test_s.get('total_return_pct', 0):.2f}%"
+        )
+
+        for tid, stats in report.get("per_template", {}).items():
+            flag    = " [OVERFIT]" if stats.get("overfit_flag") else ""
+            gen_tag = " [GEN]" if stats.get("is_generated") else ""
+            logger.info(
+                f"[WF-TMPL] {tid}{gen_tag} | "
+                f"train={stats['train_trades']}t/{stats['train_wr']:.0%}wr/{stats['train_pf']:.1f}pf | "
+                f"test={stats['test_trades']}t/{stats['test_wr']:.0%}wr/{stats['test_pf']:.1f}pf | "
+                f"Δwr={stats['wr_delta']:+.0%}{flag}"
+            )
+
+        cp2 = report.get("cp2", {})
+        logger.info(
+            f"[CP-2] Generated: WR={cp2.get('generated_test_wr', 0):.1%} | "
+            f"PF={cp2.get('generated_test_pf', 0)}"
+        )
+        logger.info(
+            f"[CP-2] Seed:      WR={cp2.get('seed_test_wr', 0):.1%} | "
+            f"PF={cp2.get('seed_test_pf', 0)}"
+        )
+        logger.info(f"[CP-2] VERDICT: {cp2.get('verdict', 'N/A')}")
+        for r in cp2.get("reasons", []):
+            logger.info(f"[CP-2] Reason: {r}")
+        for w in report.get("overfit_warnings", []):
+            logger.warning(f"[WF-OVERFIT] {w}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # CLI
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -1726,7 +2111,38 @@ def main():
     parser.add_argument("--no-feed-shadow-ledger", action="store_true", default=False,
                         help="Skip feeding results into shadow_ledger.json")
     parser.add_argument("--output",        default=BACKTEST_RESULTS_PATH)
+    parser.add_argument("--walk-forward",  action="store_true",
+                        help="Run Walk-Forward Validation (70/30 split, CP-2 checkpoint)")
     args = parser.parse_args()
+
+    if args.walk_forward:
+        wf = WalkForwardValidator(
+            symbols=args.symbols,
+            initial_capital=args.capital,
+            use_risk_gates=not args.no_risk_gates,
+        )
+        report = wf.validate()
+
+        cp2 = report.get("cp2", {})
+        print(f"\n{'='*55}")
+        print(f"WALK-FORWARD CP-2 VERDICT: {cp2.get('verdict', 'N/A')}")
+        print(f"{'='*55}")
+        print(f"Generated test WR : {cp2.get('generated_test_wr', 0):.1%}")
+        print(f"Generated test PF : {cp2.get('generated_test_pf', 0)}")
+        print(f"Seed test WR      : {cp2.get('seed_test_wr', 0):.1%}")
+        print(f"Seed test PF      : {cp2.get('seed_test_pf', 0)}")
+        if cp2.get("reasons"):
+            for r in cp2["reasons"]:
+                print(f"  → {r}")
+        for w in report.get("overfit_warnings", []):
+            print(f"  ⚠️  {w}")
+
+        wf_path = args.output.replace(".json", "_walkforward.json")
+        safe_json_write(wf_path, report)
+        print(f"\nReport saved: {wf_path}")
+        print("=" * 55)
+
+        sys.exit(0 if cp2.get("verdict") == "PASS" else 1)
 
     engine = BacktestEngine(
         symbols=args.symbols,

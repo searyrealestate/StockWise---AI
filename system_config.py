@@ -678,6 +678,18 @@ TEMPLATE_GENERATION_RECIPES = {
 }
 
 
+WALK_FORWARD_CONFIG = {
+    "enabled":                True,
+    "train_pct":              0.70,       # Fraction of timeline used for training
+    "test_pct":               0.30,       # Fraction reserved for out-of-sample test
+    "min_test_trades":        5,          # Min trades needed to judge generated templates
+    "cp2_min_wr_generated":   0.25,       # Generated templates must hit ≥ 25% WR on test
+    "cp2_min_pf":             1.50,       # Generated templates must hit ≥ 1.50 PF on test
+    "cp2_min_wr_seed":        0.35,       # Seed template WR baseline (informational)
+    "flag_overfit_threshold": 0.20,       # Flag if train_WR - test_WR > 20 percentage points
+}
+
+
 def validate_template_evolution_config():
     """Validate TEMPLATE_EVOLUTION_CONFIG has required keys and sane values."""
     ad = TEMPLATE_EVOLUTION_CONFIG.get("auto_disable", {})
