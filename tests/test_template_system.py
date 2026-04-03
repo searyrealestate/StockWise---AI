@@ -3094,19 +3094,21 @@ class TestTemplateGenerator:
 class TestSignalDirection:
     """Tests for signal direction context icons and reversal warnings (CP-4)."""
 
-    # SD-01: BEARISH state gets 📉 icon
+    # SD-01: BEARISH state gets 📉⬇️ icon (downward arrow, not upward)
     def test_sd01_bearish_signal_has_reversal_icon(self):
         dir_cfg = cfg.TEMPLATE_EVOLUTION_CONFIG.get("signal_direction", {})
         icons = dir_cfg.get("icons", {})
         assert "BEARISH" in icons
         assert "📉" in icons["BEARISH"]["icon"]
+        assert "⬇️" in icons["BEARISH"]["icon"]
 
-    # SD-02: BULLISH state gets 📈 icon
+    # SD-02: BULLISH state gets 📈⬆️ icon
     def test_sd02_bullish_signal_has_trend_icon(self):
         dir_cfg = cfg.TEMPLATE_EVOLUTION_CONFIG.get("signal_direction", {})
         icons = dir_cfg.get("icons", {})
         assert "BULLISH" in icons
-        assert icons["BULLISH"]["icon"] == "📈"
+        assert "📈" in icons["BULLISH"]["icon"]
+        assert "⬆️" in icons["BULLISH"]["icon"]
 
     # SD-03: reversal_warning_text is configured and non-empty
     def test_sd03_reversal_warning_text_exists(self):

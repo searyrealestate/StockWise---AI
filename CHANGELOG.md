@@ -1,5 +1,14 @@
 # Changelog
 
+## [2026-04-04] Hotfix: Signal Direction Icons (commit 91c6027)
+
+### Problem
+Bear market icon showed upward arrow (`📉↗️`) — opposite of intended direction. Bull market icon was missing the upward arrow. Sideways icon had an unnecessary upward arrow.
+
+### Fix
+- `system_config.py` `signal_direction.icons`: `BULLISH → "📈⬆️"`, `BEARISH → "📉⬇️"`, `SIDEWAYS → "↔️"`
+- `tests/test_template_system.py` SD-01/SD-02: assert `"⬇️"` in BEARISH icon and `"⬆️"` in BULLISH icon
+
 ## [2026-04-04] Template Generator Engine + Signal Direction (CP-4)
 
 ### Problem

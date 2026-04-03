@@ -581,9 +581,9 @@ TEMPLATE_EVOLUTION_CONFIG = {
     "signal_direction": {
         "enabled": True,
         "icons": {
-            "BULLISH":  {"icon": "📈",    "label": "Trend Signal"},
-            "BEARISH":  {"icon": "📉↗️",  "label": "Reversal Signal (Bear Market)"},
-            "SIDEWAYS": {"icon": "↔️↗️",  "label": "Breakout Signal (Sideways)"},
+            "BULLISH":  {"icon": "📈⬆️", "label": "Bull Market Signal"},
+            "BEARISH":  {"icon": "📉⬇️", "label": "Reversal Signal (Bear Market ⬇️)"},
+            "SIDEWAYS": {"icon": "↔️",   "label": "Sideways Signal"},
         },
         "show_warning_for_reversal": True,
         "reversal_warning_text": "⚠️ Mean reversion — buying against the trend",
