@@ -319,6 +319,26 @@ if __name__ == "__main__":
     sl._finalize_coverage_gaps()   # coverage_gaps (merged into existing file)
     print("[Shadow Ledger] Data written to data/shadow_ledger.json")
 
+    # ── CP-1.5: Generate templates from coverage gaps ─────────────────────
+    print("\n[Template Generation] Creating templates from coverage gaps...")
+    try:
+        from setup_templates import TemplateGenerator
+        gen = TemplateGenerator()
+        gen_report = gen.generate_from_gaps()
+        created = gen_report.get("created", [])
+        print(f"[Template Generation] Created {len(created)} templates: {created}")
+        if gen_report.get("skipped_duplicate"):
+            print(f"[Template Generation] Skipped duplicates: {gen_report['skipped_duplicate']}")
+        if gen_report.get("validation_failed"):
+            print(f"[Template Generation] Validation failed: {gen_report['validation_failed']}")
+        # Reload matcher so it picks up the new templates
+        matcher = TemplateMatcher()
+        print(f"[Template Generation] Matcher reloaded: {len(matcher.tm.templates)} templates active")
+    except Exception as e:
+        print(f"[Template Generation] Failed: {e}")
+        import traceback
+        traceback.print_exc()
+
     # Step B: evaluate auto-disable for each unique template+symbol+trend combo
     print("\n[Auto-Disable] Evaluating combos from shadow_ledger stats...")
     shadow_stats = safe_json_read('data/shadow_ledger.json', default={}).get('template_stats', {})

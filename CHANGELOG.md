@@ -1,5 +1,13 @@
 # Changelog
 
+## [2026-04-04] Wire Template Generation into Backtest Runner
+
+### Problem
+`TemplateGenerator` existed but was never called. Zero `GEN_*.json` files were created in `data/templates/`. Backtest ran with only the 4 seed templates despite coverage gap analysis identifying BEARISH/SIDEWAYS gaps.
+
+### Fix
+- `tests/backtest_real_stocks.py`: inserted CP-1.5 block between Shadow Ledger write and Auto-Disable section; calls `TemplateGenerator().generate_from_gaps()`, prints created/skipped/failed counts, reloads `TemplateMatcher` so newly written JSON files are active for subsequent steps
+
 ## [2026-04-04] Walk-Forward Validator — 70/30 Split, CP-2 Checkpoint (CP-5)
 
 ### Problem
