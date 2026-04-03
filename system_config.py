@@ -563,7 +563,118 @@ TEMPLATE_EVOLUTION_CONFIG = {
         "log_assignment_changes": True,      # Log [SUIT-CHANGE] when template swaps
         "track_assignment_history": True,    # Append changes to history list
         "max_history_entries": 52,           # Rolling cap (× 13 symbols = max history length)
-    }
+    },
+    "generation": {
+        "enabled": True,
+        "max_templates_per_gap": 2,          # Max new templates to create per coverage gap
+        "max_total_generated": 10,           # Hard cap on total templates generated per run
+        "min_opportunity_score": 0.30,       # Skip gaps with opportunity_score below this
+        "min_bars_for_generation": 30,       # Skip gaps with fewer observed bars
+        "source_label": "generated",         # source field value for generated templates
+        "default_stop_method": "atr",        # Stop loss method for generated templates
+        "default_stop_atr_mult": 1.5,        # Default ATR multiplier for stops
+        "default_target_atr_mult": 2.5,      # Default ATR multiplier for targets
+        "default_confirmation_candles": 1,   # Default entry confirmation candles
+        "use_runner_for_reversal": False,     # Mean reversion templates: no runner mode
+        "use_runner_for_breakout": True,      # Breakout templates: use runner mode
+    },
+    "signal_direction": {
+        "enabled": True,
+        "icons": {
+            "BULLISH":  {"icon": "📈",    "label": "Trend Signal"},
+            "BEARISH":  {"icon": "📉↗️",  "label": "Reversal Signal (Bear Market)"},
+            "SIDEWAYS": {"icon": "↔️↗️",  "label": "Breakout Signal (Sideways)"},
+        },
+        "show_warning_for_reversal": True,
+        "reversal_warning_text": "⚠️ Mean reversion — buying against the trend",
+    },
+}
+
+
+TEMPLATE_GENERATION_RECIPES = {
+    "BEARISH_REVERSAL": {
+        "description": "Mean reversion from oversold bearish",
+        "category": "mean_reversion",
+        "applicable_trends": ["BEARISH"],
+        "applicable_volatility": ["NORMAL", "VOLATILE"],
+        "excluded_structure": [],
+        "conditions": [
+            {"block": "rsi_below",     "params": [35]},
+            {"block": "bullish_candle","params": []},
+            {"block": "volume_surge",  "params": [1.3]},
+        ],
+        "stop_atr_mult": 1.5,
+        "target_atr_mult": 2.5,
+        "confirmation_candles": 1,
+        "use_runner": False,
+    },
+    "BEARISH_SQUEEZE_BREAK": {
+        "description": "Squeeze breakout from bearish compression",
+        "category": "breakout",
+        "applicable_trends": ["BEARISH", "SIDEWAYS"],
+        "applicable_volatility": ["COMPRESSED"],
+        "excluded_structure": [],
+        "conditions": [
+            {"block": "squeeze_active",              "params": []},
+            {"block": "squeeze_momentum_positive",   "params": []},
+            {"block": "rsi_above",                   "params": [40]},
+            {"block": "bullish_candle",              "params": []},
+        ],
+        "stop_atr_mult": 2.0,
+        "target_atr_mult": 3.5,
+        "confirmation_candles": 0,
+        "use_runner": True,
+    },
+    "SUPPORT_BOUNCE_STRONG": {
+        "description": "Strong bounce from support with volume",
+        "category": "mean_reversion",
+        "applicable_trends": ["BEARISH", "SIDEWAYS"],
+        "applicable_volatility": ["NORMAL", "VOLATILE"],
+        "required_structure": ["NEAR_SUPPORT"],
+        "excluded_structure": [],
+        "conditions": [
+            {"block": "rsi_below",     "params": [30]},
+            {"block": "bullish_candle","params": []},
+            {"block": "volume_surge",  "params": [1.5]},
+        ],
+        "stop_atr_mult": 1.5,
+        "target_atr_mult": 2.0,
+        "confirmation_candles": 1,
+        "use_runner": False,
+    },
+    "SIDEWAYS_ACCUMULATION": {
+        "description": "Quiet accumulation in sideways market",
+        "category": "momentum",
+        "applicable_trends": ["SIDEWAYS"],
+        "applicable_volatility": ["NORMAL", "COMPRESSED"],
+        "excluded_structure": [],
+        "conditions": [
+            {"block": "obv_rising",    "params": [20]},
+            {"block": "cmf_positive",  "params": []},
+            {"block": "rsi_between",   "params": [40, 60]},
+            {"block": "bullish_candle","params": []},
+        ],
+        "stop_atr_mult": 1.5,
+        "target_atr_mult": 2.5,
+        "confirmation_candles": 1,
+        "use_runner": False,
+    },
+    "TREND_EXHAUSTION_BOUNCE": {
+        "description": "Bearish trend weakening with momentum shift",
+        "category": "mean_reversion",
+        "applicable_trends": ["BEARISH"],
+        "applicable_volatility": ["NORMAL"],
+        "excluded_structure": [],
+        "conditions": [
+            {"block": "rsi_between",             "params": [30, 45]},
+            {"block": "macd_histogram_positive", "params": []},
+            {"block": "close_above_ema",         "params": [12]},
+        ],
+        "stop_atr_mult": 1.5,
+        "target_atr_mult": 2.5,
+        "confirmation_candles": 1,
+        "use_runner": False,
+    },
 }
 
 

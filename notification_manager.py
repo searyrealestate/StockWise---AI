@@ -138,11 +138,11 @@ class NotificationManager:
                     self.send_message(f"System Error: Failed to update ledger for {ticker}.Check logs.")
 
     def send_signal_alert(self, symbol, template_id, entry_price, stop_loss,
-                          take_profit, rr_ratio, trust_info=None):
+                          take_profit, rr_ratio, trust_info=None, signal=None):
         """
-        [CP-2: Contextual Trust]
+        [CP-2: Contextual Trust] [CP-4: Signal Direction]
         Send a formatted signal alert to Telegram, including the trust status line
-        when trust_info is provided.
+        when trust_info is provided, and direction header/reversal warning from signal dict.
 
         Args:
             symbol: Stock ticker
@@ -153,9 +153,15 @@ class NotificationManager:
             rr_ratio: Risk/reward ratio
             trust_info: Optional dict from get_trust_score() —
                         keys: lifecycle, score, decayed_wr, total, ci_lower, ci_upper
+            signal: Optional signal dict — keys: direction_icon, direction_label, reversal_warning
         """
         timestamp = datetime.now().strftime("%H:%M:%S")
+
+        # CP-4: Direction header at the top of the message
+        direction_icon = (signal or {}).get("direction_icon", "📈")
+        direction_label = (signal or {}).get("direction_label", "Trend Signal")
         lines = [
+            f"{direction_icon} {direction_label.upper()}",
             f"[SIGNAL] {symbol} — {template_id}",
             f"Time: {timestamp}",
             f"Entry: ${entry_price:.2f} | Stop: ${stop_loss:.2f} | Target: ${take_profit:.2f}",
@@ -174,6 +180,10 @@ class NotificationManager:
                 f"Score={score:.3f} | WR={decayed_wr:.1%} | "
                 f"n={total} | CI=[{ci_lower:.2f},{ci_upper:.2f}]"
             )
+        # CP-4: Reversal warning at the bottom
+        reversal_warning = (signal or {}).get("reversal_warning", "")
+        if reversal_warning:
+            lines.append(reversal_warning)
         msg = "\n".join(lines)
         lifecycle_label = trust_info.get("lifecycle", "N/A") if trust_info else "N/A"
         logger.info(

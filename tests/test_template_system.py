@@ -22,7 +22,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
 from setup_templates import (
-    TemplateManager, SetupTemplate,
+    TemplateManager, SetupTemplate, TemplateGenerator,
     CONDITION_BLOCKS, STOP_BLOCKS, TARGET_BLOCKS,
 )
 from template_matcher import TemplateMatcher
@@ -2878,3 +2878,237 @@ class TestSuitAssignment:
             "attributions must be preserved"
         assert written.get("coverage_gaps") == existing["coverage_gaps"], \
             "coverage_gaps must be preserved"
+
+
+# ── CP-4: Template Generator Tests ───────────────────────────────────────────
+
+class TestTemplateGenerator:
+    """Tests for recipe-based template generation from coverage gaps (CP-4)."""
+
+    def setup_method(self):
+        """Fresh TemplateManager + TemplateGenerator for each test."""
+        import tempfile
+        self.tmpdir = tempfile.mkdtemp()
+        self.tm = TemplateManager.__new__(TemplateManager)
+        self.tm.templates_dir = self.tmpdir
+        self.tm.templates = {}
+        self.gen = TemplateGenerator(template_manager=self.tm)
+
+    # ── Gap filtering ────────────────────────────────────────────────────────
+
+    # TG-01: high score + enough bars → template created
+    def test_tg01_creates_from_gap(self):
+        gaps = [{"state": "BEARISH:OPEN_FIELD:HEALTHY:COMPRESSED",
+                 "bar_count": 100, "opportunity_score": 0.8, "gap_type": "TRUE_GAP"}]
+        result = self.gen.generate_from_gaps(coverage_gaps=gaps)
+        assert len(result["created"]) >= 1
+        assert result["created"][0].startswith("GEN_")
+
+    # TG-02: score below threshold → skipped_low_score
+    def test_tg02_respects_min_score(self):
+        gaps = [{"state": "BEARISH:OPEN_FIELD:HEALTHY:NORMAL",
+                 "bar_count": 100, "opportunity_score": 0.1, "gap_type": "TRUE_GAP"}]
+        result = self.gen.generate_from_gaps(coverage_gaps=gaps)
+        assert len(result["created"]) == 0
+        assert len(result["skipped_low_score"]) == 1
+
+    # TG-03: too few bars → skipped_low_bars
+    def test_tg03_respects_min_bars(self):
+        gaps = [{"state": "BEARISH:OPEN_FIELD:HEALTHY:NORMAL",
+                 "bar_count": 10, "opportunity_score": 0.8, "gap_type": "TRUE_GAP"}]
+        result = self.gen.generate_from_gaps(coverage_gaps=gaps)
+        assert len(result["created"]) == 0
+        assert len(result["skipped_low_bars"]) == 1
+
+    # TG-04: max_templates_per_gap enforced
+    def test_tg04_max_per_gap(self):
+        gaps = [{"state": "BEARISH:OPEN_FIELD:HEALTHY:NORMAL",
+                 "bar_count": 100, "opportunity_score": 0.9, "gap_type": "TRUE_GAP"}]
+        result = self.gen.generate_from_gaps(coverage_gaps=gaps)
+        assert len(result["created"]) <= 2
+
+    # TG-05: max_total_generated enforced across all gaps
+    def test_tg05_max_total(self):
+        gaps = [
+            {"state": "BEARISH:OPEN_FIELD:HEALTHY:NORMAL",
+             "bar_count": 100, "opportunity_score": 0.9 - i * 0.01, "gap_type": "TRUE_GAP"}
+            for i in range(20)
+        ]
+        result = self.gen.generate_from_gaps(coverage_gaps=gaps)
+        assert len(result["created"]) <= 10
+
+    # ── Recipe matching ──────────────────────────────────────────────────────
+
+    # TG-06: BEARISH+NORMAL → BEARISH_REVERSAL and TREND_EXHAUSTION_BOUNCE matched
+    def test_tg06_recipe_match_bearish_normal(self):
+        gap_state = {"trend": "BEARISH", "structure": "OPEN_FIELD",
+                     "volume": "HEALTHY", "volatility": "NORMAL"}
+        matched = self.gen._match_recipes_to_gap(gap_state, cfg.TEMPLATE_GENERATION_RECIPES)
+        recipe_ids = [m[0] for m in matched]
+        assert "BEARISH_REVERSAL" in recipe_ids
+        assert "TREND_EXHAUSTION_BOUNCE" in recipe_ids
+
+    # TG-07: BEARISH+COMPRESSED → BEARISH_SQUEEZE_BREAK, NOT BEARISH_REVERSAL
+    def test_tg07_recipe_match_bearish_compressed(self):
+        gap_state = {"trend": "BEARISH", "structure": "OPEN_FIELD",
+                     "volume": "HEALTHY", "volatility": "COMPRESSED"}
+        matched = self.gen._match_recipes_to_gap(gap_state, cfg.TEMPLATE_GENERATION_RECIPES)
+        recipe_ids = [m[0] for m in matched]
+        assert "BEARISH_SQUEEZE_BREAK" in recipe_ids
+        assert "BEARISH_REVERSAL" not in recipe_ids
+
+    # TG-08: SIDEWAYS+NORMAL → SIDEWAYS_ACCUMULATION matched
+    def test_tg08_recipe_match_sideways(self):
+        gap_state = {"trend": "SIDEWAYS", "structure": "OPEN_FIELD",
+                     "volume": "HEALTHY", "volatility": "NORMAL"}
+        matched = self.gen._match_recipes_to_gap(gap_state, cfg.TEMPLATE_GENERATION_RECIPES)
+        recipe_ids = [m[0] for m in matched]
+        assert "SIDEWAYS_ACCUMULATION" in recipe_ids
+
+    # TG-09: BEARISH+NEAR_SUPPORT → SUPPORT_BOUNCE_STRONG matched
+    def test_tg09_recipe_match_support(self):
+        gap_state = {"trend": "BEARISH", "structure": "NEAR_SUPPORT",
+                     "volume": "HEALTHY", "volatility": "NORMAL"}
+        matched = self.gen._match_recipes_to_gap(gap_state, cfg.TEMPLATE_GENERATION_RECIPES)
+        recipe_ids = [m[0] for m in matched]
+        assert "SUPPORT_BOUNCE_STRONG" in recipe_ids
+
+    # TG-10: BULLISH gap → no recipe matched (already covered by seeds)
+    def test_tg10_no_recipe_for_bullish(self):
+        gap_state = {"trend": "BULLISH", "structure": "OPEN_FIELD",
+                     "volume": "HEALTHY", "volatility": "NORMAL"}
+        matched = self.gen._match_recipes_to_gap(gap_state, cfg.TEMPLATE_GENERATION_RECIPES)
+        assert len(matched) == 0
+
+    # ── Template structure ───────────────────────────────────────────────────
+
+    # TG-11: generated template passes SetupTemplate.validate()
+    def test_tg11_generated_template_validates(self):
+        gaps = [{"state": "BEARISH:OPEN_FIELD:HEALTHY:COMPRESSED",
+                 "bar_count": 100, "opportunity_score": 0.8, "gap_type": "TRUE_GAP"}]
+        result = self.gen.generate_from_gaps(coverage_gaps=gaps)
+        assert len(result["validation_failed"]) == 0
+        assert len(result["created"]) >= 1
+
+    # TG-12: generated templates have source='generated'
+    def test_tg12_generated_template_source(self):
+        gaps = [{"state": "BEARISH:OPEN_FIELD:HEALTHY:COMPRESSED",
+                 "bar_count": 100, "opportunity_score": 0.8, "gap_type": "TRUE_GAP"}]
+        self.gen.generate_from_gaps(coverage_gaps=gaps)
+        for t in self.tm.templates.values():
+            assert t.source == "generated"
+
+    # TG-13: generated template IDs start with 'GEN_'
+    def test_tg13_generated_id_prefix(self):
+        gaps = [{"state": "BEARISH:OPEN_FIELD:HEALTHY:COMPRESSED",
+                 "bar_count": 100, "opportunity_score": 0.8, "gap_type": "TRUE_GAP"}]
+        result = self.gen.generate_from_gaps(coverage_gaps=gaps)
+        for tid in result["created"]:
+            assert tid.startswith("GEN_")
+
+    # TG-14: all condition blocks exist in CONDITION_BLOCKS registry
+    def test_tg14_generated_conditions_in_registry(self):
+        gaps = [{"state": "BEARISH:OPEN_FIELD:HEALTHY:NORMAL",
+                 "bar_count": 100, "opportunity_score": 0.8, "gap_type": "TRUE_GAP"}]
+        self.gen.generate_from_gaps(coverage_gaps=gaps)
+        for t in self.tm.templates.values():
+            for cond in t.conditions:
+                assert cond["block"] in CONDITION_BLOCKS, \
+                    f"Block {cond['block']} not in registry"
+
+    # TG-15: duplicate detection — same blocks+trend as existing → skipped
+    def test_tg15_duplicate_detection(self):
+        existing = SetupTemplate({
+            "id": "EXISTING_TEST", "name": "test", "source": "seed", "enabled": True,
+            "required_state": {"trend": ["BEARISH"]},
+            "conditions": [
+                {"block": "rsi_below",     "params": [30]},
+                {"block": "bullish_candle","params": []},
+                {"block": "volume_surge",  "params": [1.5]},
+            ],
+            "stop_loss":   {"method": "atr", "atr_multiplier": 1.5},
+            "take_profit": {"method": "atr", "atr_multiplier": 2.0},
+        })
+        self.tm.templates["EXISTING_TEST"] = existing
+        gaps = [{"state": "BEARISH:NEAR_SUPPORT:HEALTHY:NORMAL",
+                 "bar_count": 100, "opportunity_score": 0.8, "gap_type": "TRUE_GAP"}]
+        result = self.gen.generate_from_gaps(coverage_gaps=gaps)
+        assert "SUPPORT_BOUNCE_STRONG" in result["skipped_duplicate"]
+
+    # TG-16: stop ATR multiplier comes from recipe config
+    def test_tg16_stop_from_recipe(self):
+        gaps = [{"state": "BEARISH:OPEN_FIELD:HEALTHY:COMPRESSED",
+                 "bar_count": 100, "opportunity_score": 0.8, "gap_type": "TRUE_GAP"}]
+        self.gen.generate_from_gaps(coverage_gaps=gaps)
+        for t in self.tm.templates.values():
+            if "SQUEEZE" in t.id:
+                assert t.stop_loss["atr_multiplier"] == 2.0
+
+    # TG-17: generated templates have category field set from recipe
+    def test_tg17_generated_category_set(self):
+        gaps = [{"state": "BEARISH:OPEN_FIELD:HEALTHY:COMPRESSED",
+                 "bar_count": 100, "opportunity_score": 0.8, "gap_type": "TRUE_GAP"}]
+        self.gen.generate_from_gaps(coverage_gaps=gaps)
+        for t in self.tm.templates.values():
+            assert t.get_category() in ("mean_reversion", "breakout", "momentum", "default")
+
+    # TG-18: mean_reversion → runner=False, breakout → runner=True
+    def test_tg18_runner_mode_per_recipe(self):
+        gaps = [
+            {"state": "BEARISH:OPEN_FIELD:HEALTHY:NORMAL",
+             "bar_count": 100, "opportunity_score": 0.9, "gap_type": "TRUE_GAP"},
+            {"state": "BEARISH:OPEN_FIELD:HEALTHY:COMPRESSED",
+             "bar_count": 100, "opportunity_score": 0.8, "gap_type": "TRUE_GAP"},
+        ]
+        self.gen.generate_from_gaps(coverage_gaps=gaps)
+        for t in self.tm.templates.values():
+            if t.get_category() == "mean_reversion":
+                assert t.take_profit.get("use_runner_mode") is False
+            elif t.get_category() == "breakout":
+                assert t.take_profit.get("use_runner_mode") is True
+
+    # TG-19: generation disabled → nothing created
+    def test_tg19_generation_disabled(self):
+        original = cfg.TEMPLATE_EVOLUTION_CONFIG.get("generation", {}).get("enabled", True)
+        cfg.TEMPLATE_EVOLUTION_CONFIG.setdefault("generation", {})["enabled"] = False
+        try:
+            gaps = [{"state": "BEARISH:OPEN_FIELD:HEALTHY:NORMAL",
+                     "bar_count": 100, "opportunity_score": 0.9, "gap_type": "TRUE_GAP"}]
+            result = self.gen.generate_from_gaps(coverage_gaps=gaps)
+            assert len(result["created"]) == 0
+        finally:
+            cfg.TEMPLATE_EVOLUTION_CONFIG["generation"]["enabled"] = original
+
+    # TG-20: get_generation_report returns correct summary
+    def test_tg20_generation_report(self):
+        gaps = [{"state": "BEARISH:OPEN_FIELD:HEALTHY:COMPRESSED",
+                 "bar_count": 100, "opportunity_score": 0.8, "gap_type": "TRUE_GAP"}]
+        self.gen.generate_from_gaps(coverage_gaps=gaps)
+        report = self.gen.get_generation_report()
+        assert report["total_generated"] >= 1
+        assert all(t["id"].startswith("GEN_") for t in report["templates"])
+
+
+# ── CP-4: Signal Direction Tests ─────────────────────────────────────────────
+
+class TestSignalDirection:
+    """Tests for signal direction context icons and reversal warnings (CP-4)."""
+
+    # SD-01: BEARISH state gets 📉 icon
+    def test_sd01_bearish_signal_has_reversal_icon(self):
+        dir_cfg = cfg.TEMPLATE_EVOLUTION_CONFIG.get("signal_direction", {})
+        icons = dir_cfg.get("icons", {})
+        assert "BEARISH" in icons
+        assert "📉" in icons["BEARISH"]["icon"]
+
+    # SD-02: BULLISH state gets 📈 icon
+    def test_sd02_bullish_signal_has_trend_icon(self):
+        dir_cfg = cfg.TEMPLATE_EVOLUTION_CONFIG.get("signal_direction", {})
+        icons = dir_cfg.get("icons", {})
+        assert "BULLISH" in icons
+        assert icons["BULLISH"]["icon"] == "📈"
+
+    # SD-03: reversal_warning_text is configured and non-empty
+    def test_sd03_reversal_warning_text_exists(self):
+        dir_cfg = cfg.TEMPLATE_EVOLUTION_CONFIG.get("signal_direction", {})
+        assert dir_cfg.get("reversal_warning_text", "") != ""

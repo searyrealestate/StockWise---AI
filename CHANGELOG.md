@@ -1,5 +1,32 @@
 # Changelog
 
+## [2026-04-04] Template Generator Engine + Signal Direction (CP-4)
+
+### Problem
+Zero coverage for BEARISH and SIDEWAYS states (60%+ of bars for many symbols, top gap BEARISH:OPEN_FIELD:HEALTHY:COMPRESSED at score=0.809). All 4 seed templates require BULLISH trend. Telegram alerts gave no indication of whether a signal was a trend-following entry or a mean-reversion buy against a falling market.
+
+### Fix
+- Added `"generation"` section to `TEMPLATE_EVOLUTION_CONFIG` in `system_config.py` (12 keys: `enabled`, `max_templates_per_gap=2`, `max_total_generated=10`, `min_opportunity_score=0.30`, `min_bars_for_generation=30`, `source_label="generated"`, `default_stop_method="atr"`, `default_stop_atr_mult=1.5`, `default_target_atr_mult=2.5`, `default_confirmation_candles=1`, `use_runner_for_reversal=False`, `use_runner_for_breakout=True`)
+- Added `"signal_direction"` section to `TEMPLATE_EVOLUTION_CONFIG` in `system_config.py` (4 keys: `enabled`, `icons` dict with BULLISH/BEARISH/SIDEWAYS icons, `show_warning_for_reversal`, `reversal_warning_text`)
+- Added `TEMPLATE_GENERATION_RECIPES` top-level dict in `system_config.py` with 5 recipes: `BEARISH_REVERSAL` (mean reversion from oversold), `BEARISH_SQUEEZE_BREAK` (compression breakout), `SUPPORT_BOUNCE_STRONG` (near support with volume), `SIDEWAYS_ACCUMULATION` (OBV+CMF accumulation), `TREND_EXHAUSTION_BOUNCE` (MACD momentum shift); recipes target only BEARISH/SIDEWAYS — no BULLISH recipe (already covered by seeds)
+- Added `TemplateGenerator` class to `setup_templates.py` (after `TemplateManager`, no existing code modified):
+  - `generate_from_gaps(coverage_gaps)` — main entry: sort gaps by score, filter by `min_opportunity_score` + `min_bars_for_generation`, match recipes, build template dicts, validate via `SetupTemplate.validate()`, save via `TemplateManager.add_template()`; enforces `max_templates_per_gap` and `max_total_generated`
+  - `_load_coverage_gaps()` — reads `coverage_gaps.gaps_by_state` from shadow_ledger.json via `safe_json_read`
+  - `_parse_gap_state(state_str)` — parses `"BEARISH:OPEN_FIELD:HEALTHY:COMPRESSED"` into dict
+  - `_match_recipes_to_gap(gap_state, recipes)` — filters by `applicable_trends`, `applicable_volatility`, `required_structure`, `excluded_structure`
+  - `_build_template_from_recipe(recipe_id, recipe, gap_state, gen_cfg)` — constructs full template dict; volume always `["HEALTHY","SURGING"]`; structure inferred by `_infer_structures()` when not in recipe
+  - `_generate_template_id(recipe_id)` — produces `GEN_{RECIPE}` or `GEN_{RECIPE}_{NNN}`, collision-safe
+  - `_is_duplicate(new_template)` — checks same block set + same trend set as any existing template
+  - `get_generation_report()` — returns `{total_generated, templates}` for all `source=="generated"` templates
+- Added `self.category` attribute and `get_category()` method to `SetupTemplate`; added `"category"` field to `to_dict()` (preserves backward compat via `data.get('category', 'default')`)
+- Added signal direction context in `_build_signal()` (template_matcher.py): sets `signal["direction_icon"]`, `signal["direction_label"]`, `signal["is_reversal"]`, and `signal["reversal_warning"]` (only when BEARISH); all values from `signal_direction` config — zero hardcoding
+- Updated `send_signal_alert()` (notification_manager.py): added optional `signal` parameter; prepends direction header (`📉↗️ REVERSAL SIGNAL (BEAR MARKET)`) at top; appends reversal warning at bottom after trust line; all existing formatting preserved
+
+### Tests
+- 23 new tests in `tests/test_template_system.py`:
+  - `TestTemplateGenerator` (TG-01→TG-20): gap filtering (min score, min bars, max per gap, max total), recipe matching (BEARISH+NORMAL, BEARISH+COMPRESSED, SIDEWAYS, NEAR_SUPPORT, BULLISH→none), template structure (validates, source=generated, GEN_ prefix, all blocks in registry), duplicate detection, ATR mult from recipe, category field, runner mode per category, disabled config, generation report
+  - `TestSignalDirection` (SD-01→SD-03): BEARISH icon contains 📉, BULLISH icon is 📈, reversal warning text non-empty
+
 ## [2026-04-04] Suit Assignment Engine (CP-3)
 
 ### Problem

@@ -274,7 +274,7 @@ class TemplateMatcher:
 
             confidence = round(min(confidence, 100.0), 1)
 
-            return {
+            signal = {
                 "symbol": symbol,
                 "template_id": template.id,
                 "template_name": template.name,
@@ -294,6 +294,22 @@ class TemplateMatcher:
                 "confirmation_candles": template.entry.get('confirmation_candles', 0),
                 "timestamp": datetime.now().isoformat()
             }
+
+            # Signal direction context — shows market regime in Telegram (CP-4)
+            dir_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {}).get("signal_direction", {})
+            if dir_cfg.get("enabled", True):
+                trend = stock_state.get("trend", "BULLISH") if stock_state else "BULLISH"
+                direction_info = dir_cfg.get("icons", {}).get(trend, {"icon": "📈", "label": "Signal"})
+                signal["direction_icon"] = direction_info.get("icon", "📈")
+                signal["direction_label"] = direction_info.get("label", "Signal")
+                signal["is_reversal"] = trend in ("BEARISH",)
+                if signal["is_reversal"] and dir_cfg.get("show_warning_for_reversal", True):
+                    signal["reversal_warning"] = dir_cfg.get(
+                        "reversal_warning_text",
+                        "⚠️ Mean reversion — buying against the trend"
+                    )
+
+            return signal
 
         except Exception as e:
             logger.error(f"[{symbol}] Failed to build signal from {template.id}: {e}")

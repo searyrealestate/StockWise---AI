@@ -406,6 +406,7 @@ class SetupTemplate:
         self.name = data.get('name', 'Unnamed Template')
         self.enabled = data.get('enabled', True)
         self.source = data.get('source', 'seed')
+        self.category = data.get('category', 'default')
         self.required_state = data.get('required_state', {})
         self.conditions = data.get('conditions', [])
         self.entry = data.get('entry', {"type": "close", "confirmation_candles": 0})
@@ -576,6 +577,10 @@ class SetupTemplate:
                     )
 
         return len(errors) == 0, errors
+
+    def get_category(self):
+        """Return the template's strategy category (e.g. 'mean_reversion', 'breakout')."""
+        return self.category
 
     def get_win_rate(self):
         """Returns win rate as a percentage."""
@@ -1025,6 +1030,7 @@ class SetupTemplate:
             "description": self.data.get('description', ''),
             "version": self.data.get('version', 1),
             "source": self.source,
+            "category": self.category,
             "enabled": self.enabled,
             "required_state": self.required_state,
             "conditions": self.conditions,
@@ -1167,3 +1173,312 @@ class TemplateManager:
                 "avg_profit": t.statistics.get('avg_profit_pct', 0.0),
             })
         return sorted(summary, key=lambda x: x['win_rate'], reverse=True)
+
+
+# ── TEMPLATE GENERATOR (CP-4) ────────────────────────────────────────────────
+
+class TemplateGenerator:
+    """
+    Generate new templates from coverage gaps using recipe-based approach.
+
+    Each recipe is a predefined trading strategy (mean reversion, squeeze breakout, etc.)
+    mapped to specific market states. The generator:
+    1. Reads coverage_gaps from shadow_ledger.json
+    2. Matches recipes to gap states
+    3. Builds template dicts from recipes
+    4. Validates via SetupTemplate.validate()
+    5. Saves via TemplateManager.add_template()
+
+    All templates created with source="generated" and start in BURN_IN lifecycle.
+    """
+
+    def __init__(self, template_manager=None):
+        self.tm = template_manager or TemplateManager()
+        self._gen_counter = {}  # recipe_id -> count for unique ID generation
+
+    def generate_from_gaps(self, coverage_gaps=None):
+        """Main entry: read gaps → match recipes → create templates → validate → save.
+
+        Args:
+            coverage_gaps: list of gap dicts from shadow_ledger. If None, loads from file.
+
+        Returns:
+            dict: {
+                "created": [list of template IDs created],
+                "skipped_duplicate": [list of recipe IDs skipped],
+                "skipped_low_score": [list],
+                "skipped_low_bars": [list],
+                "validation_failed": [list],
+                "total_gaps_evaluated": int,
+            }
+        """
+        gen_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {}).get("generation", {})
+        if not gen_cfg.get("enabled", True):
+            logger.info("[GENERATE] Template generation is disabled in config")
+            return {"created": [], "skipped_duplicate": [], "skipped_low_score": [],
+                    "skipped_low_bars": [], "validation_failed": [], "total_gaps_evaluated": 0}
+
+        if coverage_gaps is None:
+            coverage_gaps = self._load_coverage_gaps()
+
+        if not coverage_gaps:
+            logger.info("[GENERATE] No coverage gaps found — nothing to generate")
+            return {"created": [], "skipped_duplicate": [], "skipped_low_score": [],
+                    "skipped_low_bars": [], "validation_failed": [], "total_gaps_evaluated": 0}
+
+        min_score = gen_cfg.get("min_opportunity_score", 0.30)
+        min_bars = gen_cfg.get("min_bars_for_generation", 30)
+        max_per_gap = gen_cfg.get("max_templates_per_gap", 2)
+        max_total = gen_cfg.get("max_total_generated", 10)
+        recipes = getattr(cfg, 'TEMPLATE_GENERATION_RECIPES', {})
+
+        report = {
+            "created": [],
+            "skipped_duplicate": [],
+            "skipped_low_score": [],
+            "skipped_low_bars": [],
+            "validation_failed": [],
+            "total_gaps_evaluated": len(coverage_gaps),
+        }
+
+        # Sort gaps by opportunity_score descending (prioritize biggest opportunities)
+        sorted_gaps = sorted(coverage_gaps, key=lambda g: g.get("opportunity_score", 0), reverse=True)
+
+        for gap in sorted_gaps:
+            if len(report["created"]) >= max_total:
+                logger.info(f"[GENERATE] Reached max_total_generated={max_total} — stopping")
+                break
+
+            score = gap.get("opportunity_score", 0)
+            bars = gap.get("bar_count", gap.get("bars", 0))
+            state_str = gap.get("state", "")
+
+            logger.info(f"[GENERATE] Evaluating gap: {state_str} | bars={bars} | score={score:.3f}")
+
+            if score < min_score:
+                report["skipped_low_score"].append(state_str)
+                logger.debug(f"[GENERATE] Skipped {state_str} — score {score:.3f} < min {min_score}")
+                continue
+
+            if bars < min_bars:
+                report["skipped_low_bars"].append(state_str)
+                logger.debug(f"[GENERATE] Skipped {state_str} — bars {bars} < min {min_bars}")
+                continue
+
+            # Parse gap state into dict
+            gap_state = self._parse_gap_state(state_str)
+
+            # Find matching recipes
+            matched_recipes = self._match_recipes_to_gap(gap_state, recipes)
+
+            created_for_gap = 0
+            for recipe_id, recipe in matched_recipes:
+                if created_for_gap >= max_per_gap:
+                    break
+                if len(report["created"]) >= max_total:
+                    break
+
+                # Build template from recipe
+                template_data = self._build_template_from_recipe(recipe_id, recipe, gap_state, gen_cfg)
+
+                # Check for functional duplicate
+                if self._is_duplicate(template_data):
+                    report["skipped_duplicate"].append(recipe_id)
+                    logger.info(f"[GENERATE] Skipped recipe {recipe_id} — duplicate of existing template")
+                    continue
+
+                # Validate
+                test_template = SetupTemplate(template_data)
+                is_valid, errors = test_template.validate()
+                if not is_valid:
+                    report["validation_failed"].append({"recipe": recipe_id, "errors": errors})
+                    logger.warning(f"[GENERATE] REJECTED {template_data['id']} — validation errors: {errors}")
+                    continue
+
+                # Save via TemplateManager
+                success = self.tm.add_template(template_data)
+                if success:
+                    report["created"].append(template_data["id"])
+                    created_for_gap += 1
+                    logger.info(
+                        f"[GENERATE] Created {template_data['id']} | "
+                        f"recipe={recipe_id} | state={state_str} | "
+                        f"blocks={len(template_data['conditions'])} | "
+                        f"source=generated | category={template_data.get('category', 'unknown')}"
+                    )
+
+        # Summary log
+        logger.info(
+            f"[GENERATE-SUMMARY] gaps_evaluated={report['total_gaps_evaluated']} | "
+            f"templates_created={len(report['created'])} | "
+            f"duplicates_skipped={len(report['skipped_duplicate'])} | "
+            f"low_score_skipped={len(report['skipped_low_score'])} | "
+            f"low_bars_skipped={len(report['skipped_low_bars'])} | "
+            f"validation_failed={len(report['validation_failed'])}"
+        )
+
+        return report
+
+    def _load_coverage_gaps(self):
+        """Load gaps_by_state from shadow_ledger.json."""
+        evo_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {})
+        path = evo_cfg.get("auto_disable", {}).get("disable_list_path", "data/shadow_ledger.json")
+        try:
+            data = safe_json_read(path, default={})
+            return data.get("coverage_gaps", {}).get("gaps_by_state", [])
+        except Exception as e:
+            logger.error(f"[GENERATE] Failed to load coverage gaps: {e}")
+            return []
+
+    def _parse_gap_state(self, state_str):
+        """Parse 'BEARISH:OPEN_FIELD:HEALTHY:COMPRESSED' into state dict."""
+        parts = state_str.split(":") if state_str else []
+        keys = ["trend", "structure", "volume", "volatility"]
+        return {keys[i]: parts[i] for i in range(min(len(parts), len(keys)))}
+
+    def _match_recipes_to_gap(self, gap_state, recipes):
+        """Return list of (recipe_id, recipe_dict) that apply to this gap state.
+
+        A recipe matches if:
+        - gap trend is in recipe's applicable_trends
+        - gap volatility is in recipe's applicable_volatility
+        - gap structure is NOT in recipe's excluded_structure
+        - IF recipe has required_structure: gap structure must be in it
+        """
+        matched = []
+        gap_trend = gap_state.get("trend", "")
+        gap_vol = gap_state.get("volatility", "")
+        gap_struct = gap_state.get("structure", "")
+
+        for recipe_id, recipe in recipes.items():
+            # Trend match
+            if gap_trend not in recipe.get("applicable_trends", []):
+                continue
+            # Volatility match
+            if gap_vol not in recipe.get("applicable_volatility", []):
+                continue
+            # Required structure (if specified)
+            req_struct = recipe.get("required_structure", [])
+            if req_struct and gap_struct not in req_struct:
+                continue
+            # Excluded structure
+            excl_struct = recipe.get("excluded_structure", [])
+            if excl_struct and gap_struct in excl_struct:
+                continue
+
+            matched.append((recipe_id, recipe))
+
+        if not matched:
+            logger.debug(f"[GENERATE] No recipe matched gap state: {gap_state}")
+
+        return matched
+
+    def _build_template_from_recipe(self, recipe_id, recipe, gap_state, gen_cfg):
+        """Construct full template dict from recipe + gap state."""
+        template_id = self._generate_template_id(recipe_id)
+
+        # Build required_state from recipe applicable values + gap specifics
+        required_state = {}
+        if recipe.get("applicable_trends"):
+            required_state["trend"] = list(recipe["applicable_trends"])
+        if recipe.get("required_structure"):
+            required_state["structure"] = list(recipe["required_structure"])
+        elif gap_state.get("structure"):
+            required_state["structure"] = self._infer_structures(gap_state)
+        if recipe.get("applicable_volatility"):
+            required_state["volatility"] = list(recipe["applicable_volatility"])
+        # Volume: always require HEALTHY or SURGING for generated templates
+        required_state["volume"] = ["HEALTHY", "SURGING"]
+
+        stop_mult = recipe.get("stop_atr_mult", gen_cfg.get("default_stop_atr_mult", 1.5))
+        target_mult = recipe.get("target_atr_mult", gen_cfg.get("default_target_atr_mult", 2.5))
+        confirmation = recipe.get("confirmation_candles", gen_cfg.get("default_confirmation_candles", 1))
+        use_runner = recipe.get("use_runner", gen_cfg.get("use_runner_for_reversal", False))
+
+        return {
+            "id": template_id,
+            "name": f"{recipe.get('description', recipe_id)} (Generated)",
+            "description": recipe.get("description", f"Auto-generated from recipe {recipe_id}"),
+            "version": 1,
+            "source": gen_cfg.get("source_label", "generated"),
+            "category": recipe.get("category", "default"),
+            "enabled": True,
+            "required_state": required_state,
+            "conditions": [dict(c) for c in recipe.get("conditions", [])],
+            "entry": {
+                "type": "close",
+                "confirmation_candles": confirmation,
+            },
+            "stop_loss": {
+                "method": gen_cfg.get("default_stop_method", "atr"),
+                "atr_multiplier": stop_mult,
+                "fallback_pct": 0.02,
+            },
+            "take_profit": {
+                "method": "atr",
+                "atr_multiplier": target_mult,
+                "use_runner_mode": use_runner,
+            },
+            "statistics": SetupTemplate({})._empty_stats(),
+        }
+
+    def _infer_structures(self, gap_state):
+        """Infer reasonable structure values based on trend.
+
+        For BEARISH: OPEN_FIELD, NEAR_RESISTANCE (common bearish structures).
+        For SIDEWAYS: OPEN_FIELD, NEAR_SUPPORT, NEAR_RESISTANCE.
+        """
+        trend = gap_state.get("trend", "")
+        if trend == "BEARISH":
+            return ["OPEN_FIELD", "NEAR_RESISTANCE"]
+        elif trend == "SIDEWAYS":
+            return ["OPEN_FIELD", "NEAR_SUPPORT", "NEAR_RESISTANCE"]
+        return ["OPEN_FIELD"]
+
+    def _generate_template_id(self, recipe_id):
+        """Generate unique ID: GEN_{RECIPE} or GEN_{RECIPE}_{NNN}."""
+        count = self._gen_counter.get(recipe_id, 0) + 1
+        self._gen_counter[recipe_id] = count
+
+        base_id = f"GEN_{recipe_id}"
+        candidate = base_id if count == 1 else f"{base_id}_{count:03d}"
+
+        existing_ids = set(self.tm.templates.keys())
+        while candidate in existing_ids:
+            count += 1
+            self._gen_counter[recipe_id] = count
+            candidate = f"{base_id}_{count:03d}"
+
+        return candidate
+
+    def _is_duplicate(self, new_template):
+        """Check if a functionally equivalent template already exists.
+
+        Two templates are duplicates if they have:
+        - Same set of block names (order doesn't matter)
+        - Any overlapping trend values (covers same market regime)
+        """
+        new_blocks = set(c.get("block", "") for c in new_template.get("conditions", []))
+        new_trends = set(new_template.get("required_state", {}).get("trend", []))
+
+        for existing in self.tm.templates.values():
+            existing_blocks = set(c.get("block", "") for c in existing.conditions)
+            existing_trends = set(existing.required_state.get("trend", []))
+
+            if new_blocks == existing_blocks and bool(new_trends & existing_trends):
+                return True
+
+        return False
+
+    def get_generation_report(self):
+        """Return summary of all generated templates currently loaded."""
+        generated = [
+            {"id": t.id, "name": t.name, "category": t.get_category(),
+             "conditions": len(t.conditions), "enabled": t.enabled}
+            for t in self.tm.templates.values()
+            if t.source == "generated"
+        ]
+        return {
+            "total_generated": len(generated),
+            "templates": generated,
+        }
