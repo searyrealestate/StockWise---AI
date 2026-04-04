@@ -63,7 +63,14 @@ def safe_json_write(filepath, data, cls=None, indent=4):
                 json.dump(data, f, cls=cls, indent=indent)
 
             # Atomic replace: either fully succeeds or fully fails
-            os.replace(tmp_path, filepath)
+            try:
+                os.replace(tmp_path, filepath)
+            except OSError:
+                # Windows fallback: os.replace can fail with WinError 5
+                # even when file is not locked. Remove dest first, then rename.
+                if os.path.exists(filepath):
+                    os.unlink(filepath)
+                os.rename(tmp_path, filepath)
 
         except Exception:
             # Clean up temp file on error

@@ -1,23 +1,368 @@
 {
-  "id": "OVERSOLD_BOUNCE",
-  "name": "Oversold Bounce (Mean Reversion)",
-  "description": "RSI oversold near support with volume = short-term reversal",
-  "version": 1,
-  "source": "seed",
-  "enabled": true,
-  "required_state": {
-    "trend": ["SIDEWAYS", "BEARISH"],
-    "structure": ["NEAR_SUPPORT"],
-    "volume": ["HEALTHY", "SURGING"],
-    "volatility": ["NORMAL", "VOLATILE"]
-  },
-  "conditions": [
-    {"block": "rsi_below", "params": [30]},
-    {"block": "bullish_candle", "params": []},
-    {"block": "volume_surge", "params": [1.3]}
-  ],
-  "entry": {"type": "close", "confirmation_candles": 1},
-  "stop_loss": {"method": "swing_low", "atr_multiplier": 0.3, "fallback_pct": 0.015},
-  "take_profit": {"method": "atr", "atr_multiplier": 2.0, "use_runner_mode": false},
-  "statistics": {"total_activations": 0, "wins": 0, "losses": 0, "avg_profit_pct": 0.0, "avg_loss_pct": 0.0, "win_rate": 0.0, "last_activated": null, "best_tickers": {}, "worst_tickers": {}, "best_conditions": [], "created_at": "2026-03-10T00:00:00", "updated_at": "2026-03-10T00:00:00"}
+    "id": "OVERSOLD_BOUNCE",
+    "name": "Oversold Bounce (Mean Reversion)",
+    "description": "RSI oversold near support with volume = short-term reversal",
+    "version": 1,
+    "source": "seed",
+    "category": "default",
+    "enabled": true,
+    "required_state": {
+        "trend": [
+            "SIDEWAYS",
+            "BEARISH"
+        ],
+        "structure": [
+            "NEAR_SUPPORT"
+        ],
+        "volume": [
+            "HEALTHY",
+            "SURGING"
+        ],
+        "volatility": [
+            "NORMAL",
+            "VOLATILE"
+        ]
+    },
+    "conditions": [
+        {
+            "block": "rsi_below",
+            "params": [
+                30
+            ]
+        },
+        {
+            "block": "bullish_candle",
+            "params": []
+        },
+        {
+            "block": "volume_surge",
+            "params": [
+                1.3
+            ]
+        }
+    ],
+    "entry": {
+        "type": "close",
+        "confirmation_candles": 1
+    },
+    "stop_loss": {
+        "method": "swing_low",
+        "atr_multiplier": 0.3,
+        "fallback_pct": 0.015
+    },
+    "take_profit": {
+        "method": "atr",
+        "atr_multiplier": 2.0,
+        "use_runner_mode": false
+    },
+    "statistics": {
+        "total_activations": 0,
+        "wins": 0,
+        "losses": 0,
+        "avg_profit_pct": 0.0,
+        "avg_loss_pct": 0.0,
+        "win_rate": 0.0,
+        "last_activated": null,
+        "best_tickers": {},
+        "worst_tickers": {},
+        "best_conditions": [],
+        "created_at": "2026-03-10T00:00:00",
+        "updated_at": "2026-03-10T00:00:00",
+        "block_stats": {
+            "rsi_below": {
+                "evaluated": 12125,
+                "passed": 268,
+                "failed": 11857,
+                "pass_rate": 2.2,
+                "was_the_blocker": 1031,
+                "blocker_rate": 8.7,
+                "when_passed": {
+                    "total_trades": 32,
+                    "wins": 7,
+                    "losses": 25,
+                    "wr": 21.9,
+                    "avg_pnl": -2.43,
+                    "total_pnl": -77.75999999999999
+                },
+                "per_symbol": {
+                    "NVDA": {
+                        "evaluated": 140,
+                        "passed": 0,
+                        "pass_rate": 0.0,
+                        "trades_when_passed": 0,
+                        "wins_when_passed": 0,
+                        "wr_when_passed": 0.0
+                    },
+                    "MSFT": {
+                        "evaluated": 140,
+                        "passed": 0,
+                        "pass_rate": 0.0,
+                        "trades_when_passed": 0,
+                        "wins_when_passed": 0,
+                        "wr_when_passed": 0.0
+                    },
+                    "AAPL": {
+                        "evaluated": 140,
+                        "passed": 4,
+                        "pass_rate": 2.9,
+                        "trades_when_passed": 0,
+                        "wins_when_passed": 0,
+                        "wr_when_passed": 0.0
+                    },
+                    "AMZN": {
+                        "evaluated": 116,
+                        "passed": 8,
+                        "pass_rate": 6.9,
+                        "trades_when_passed": 4,
+                        "wins_when_passed": 0,
+                        "wr_when_passed": 0.0
+                    },
+                    "META": {
+                        "evaluated": 140,
+                        "passed": 0,
+                        "pass_rate": 0.0,
+                        "trades_when_passed": 0,
+                        "wins_when_passed": 0,
+                        "wr_when_passed": 0.0
+                    },
+                    "GOOGL": {
+                        "evaluated": 1964,
+                        "passed": 32,
+                        "pass_rate": 1.6,
+                        "trades_when_passed": 0,
+                        "wins_when_passed": 0,
+                        "wr_when_passed": 0.0
+                    },
+                    "TSLA": {
+                        "evaluated": 1769,
+                        "passed": 128,
+                        "pass_rate": 7.2,
+                        "trades_when_passed": 16,
+                        "wins_when_passed": 3,
+                        "wr_when_passed": 18.8
+                    },
+                    "AMD": {
+                        "evaluated": 2572,
+                        "passed": 68,
+                        "pass_rate": 2.6,
+                        "trades_when_passed": 4,
+                        "wins_when_passed": 0,
+                        "wr_when_passed": 0.0
+                    },
+                    "NFLX": {
+                        "evaluated": 2496,
+                        "passed": 20,
+                        "pass_rate": 0.8,
+                        "trades_when_passed": 8,
+                        "wins_when_passed": 4,
+                        "wr_when_passed": 50.0
+                    },
+                    "AVGO": {
+                        "evaluated": 2648,
+                        "passed": 8,
+                        "pass_rate": 0.3,
+                        "trades_when_passed": 0,
+                        "wins_when_passed": 0,
+                        "wr_when_passed": 0.0
+                    }
+                }
+            },
+            "bullish_candle": {
+                "evaluated": 12125,
+                "passed": 6139,
+                "failed": 5986,
+                "pass_rate": 50.6,
+                "was_the_blocker": 108,
+                "blocker_rate": 1.8,
+                "when_passed": {
+                    "total_trades": 32,
+                    "wins": 7,
+                    "losses": 25,
+                    "wr": 21.9,
+                    "avg_pnl": -2.43,
+                    "total_pnl": -77.75999999999999
+                },
+                "per_symbol": {
+                    "NVDA": {
+                        "evaluated": 140,
+                        "passed": 84,
+                        "pass_rate": 60.0,
+                        "trades_when_passed": 0,
+                        "wins_when_passed": 0,
+                        "wr_when_passed": 0.0
+                    },
+                    "MSFT": {
+                        "evaluated": 140,
+                        "passed": 84,
+                        "pass_rate": 60.0,
+                        "trades_when_passed": 0,
+                        "wins_when_passed": 0,
+                        "wr_when_passed": 0.0
+                    },
+                    "AAPL": {
+                        "evaluated": 140,
+                        "passed": 76,
+                        "pass_rate": 54.3,
+                        "trades_when_passed": 0,
+                        "wins_when_passed": 0,
+                        "wr_when_passed": 0.0
+                    },
+                    "AMZN": {
+                        "evaluated": 116,
+                        "passed": 64,
+                        "pass_rate": 55.2,
+                        "trades_when_passed": 4,
+                        "wins_when_passed": 0,
+                        "wr_when_passed": 0.0
+                    },
+                    "META": {
+                        "evaluated": 140,
+                        "passed": 76,
+                        "pass_rate": 54.3,
+                        "trades_when_passed": 0,
+                        "wins_when_passed": 0,
+                        "wr_when_passed": 0.0
+                    },
+                    "GOOGL": {
+                        "evaluated": 1964,
+                        "passed": 1060,
+                        "pass_rate": 54.0,
+                        "trades_when_passed": 0,
+                        "wins_when_passed": 0,
+                        "wr_when_passed": 0.0
+                    },
+                    "TSLA": {
+                        "evaluated": 1769,
+                        "passed": 847,
+                        "pass_rate": 47.9,
+                        "trades_when_passed": 16,
+                        "wins_when_passed": 3,
+                        "wr_when_passed": 18.8
+                    },
+                    "AMD": {
+                        "evaluated": 2572,
+                        "passed": 1288,
+                        "pass_rate": 50.1,
+                        "trades_when_passed": 4,
+                        "wins_when_passed": 0,
+                        "wr_when_passed": 0.0
+                    },
+                    "NFLX": {
+                        "evaluated": 2496,
+                        "passed": 1268,
+                        "pass_rate": 50.8,
+                        "trades_when_passed": 8,
+                        "wins_when_passed": 4,
+                        "wr_when_passed": 50.0
+                    },
+                    "AVGO": {
+                        "evaluated": 2648,
+                        "passed": 1292,
+                        "pass_rate": 48.8,
+                        "trades_when_passed": 0,
+                        "wins_when_passed": 0,
+                        "wr_when_passed": 0.0
+                    }
+                }
+            },
+            "volume_surge": {
+                "evaluated": 12125,
+                "passed": 2303,
+                "failed": 9822,
+                "pass_rate": 19.0,
+                "was_the_blocker": 40,
+                "blocker_rate": 0.4,
+                "when_passed": {
+                    "total_trades": 32,
+                    "wins": 7,
+                    "losses": 25,
+                    "wr": 21.9,
+                    "avg_pnl": -2.43,
+                    "total_pnl": -77.75999999999999
+                },
+                "per_symbol": {
+                    "NVDA": {
+                        "evaluated": 140,
+                        "passed": 40,
+                        "pass_rate": 28.6,
+                        "trades_when_passed": 0,
+                        "wins_when_passed": 0,
+                        "wr_when_passed": 0.0
+                    },
+                    "MSFT": {
+                        "evaluated": 140,
+                        "passed": 24,
+                        "pass_rate": 17.1,
+                        "trades_when_passed": 0,
+                        "wins_when_passed": 0,
+                        "wr_when_passed": 0.0
+                    },
+                    "AAPL": {
+                        "evaluated": 140,
+                        "passed": 20,
+                        "pass_rate": 14.3,
+                        "trades_when_passed": 0,
+                        "wins_when_passed": 0,
+                        "wr_when_passed": 0.0
+                    },
+                    "AMZN": {
+                        "evaluated": 116,
+                        "passed": 28,
+                        "pass_rate": 24.1,
+                        "trades_when_passed": 4,
+                        "wins_when_passed": 0,
+                        "wr_when_passed": 0.0
+                    },
+                    "META": {
+                        "evaluated": 140,
+                        "passed": 36,
+                        "pass_rate": 25.7,
+                        "trades_when_passed": 0,
+                        "wins_when_passed": 0,
+                        "wr_when_passed": 0.0
+                    },
+                    "GOOGL": {
+                        "evaluated": 1964,
+                        "passed": 383,
+                        "pass_rate": 19.5,
+                        "trades_when_passed": 0,
+                        "wins_when_passed": 0,
+                        "wr_when_passed": 0.0
+                    },
+                    "TSLA": {
+                        "evaluated": 1769,
+                        "passed": 316,
+                        "pass_rate": 17.9,
+                        "trades_when_passed": 16,
+                        "wins_when_passed": 3,
+                        "wr_when_passed": 18.8
+                    },
+                    "AMD": {
+                        "evaluated": 2572,
+                        "passed": 472,
+                        "pass_rate": 18.4,
+                        "trades_when_passed": 4,
+                        "wins_when_passed": 0,
+                        "wr_when_passed": 0.0
+                    },
+                    "NFLX": {
+                        "evaluated": 2496,
+                        "passed": 460,
+                        "pass_rate": 18.4,
+                        "trades_when_passed": 8,
+                        "wins_when_passed": 4,
+                        "wr_when_passed": 50.0
+                    },
+                    "AVGO": {
+                        "evaluated": 2648,
+                        "passed": 524,
+                        "pass_rate": 19.8,
+                        "trades_when_passed": 0,
+                        "wins_when_passed": 0,
+                        "wr_when_passed": 0.0
+                    }
+                }
+            }
+        }
+    }
 }

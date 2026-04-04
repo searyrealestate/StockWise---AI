@@ -1,5 +1,19 @@
 # Changelog
 
+## [2026-04-05] Clean GEN_* Templates + Fix 3 Pipeline Bugs (DDR #14)
+
+### Fixed
+- **Deleted** all 6 GEN_* template JSON files — born from contaminated pipeline runs, blocked `_is_duplicate` detection, were re-enabled by crashed concurrent runs. Only 5 seed templates remain: SQUEEZE_BREAKOUT, OVERSOLD_BOUNCE, TREND_PULLBACK_EMA, MOMENTUM_BREAKOUT, VSA_INSTITUTIONAL
+- **`safe_json_io.py`**: Windows `os.replace` fallback — catches `OSError` (WinError 5), does `os.unlink(dest)` + `os.rename(tmp, dest)`. Allows pipeline to write `shadow_ledger.json` without requiring the file to not exist first
+- **`backtest_engine.py` (`run_full_pipeline`)**: `stock_state_fn` now initialized via `StockHunter.classify_stock_state` and passed to `sl.evaluate_history()`. Without it, coverage gaps were never recorded → Generator always found nothing → 0 templates generated
+- **`shadow_ledger.py` (`run_full_evaluation`)**: Added `stock_state_fn=None` parameter, passed through to `evaluate_history()`. Also added to CLI `__main__` block with StockHunter initialization
+
+### Added
+- 3 unit tests in `TestPipelineBugFixes`: no GEN files on disk, safe_json_write double-write, stock_state_fn in pipeline source
+
+### Result
+133 passed, 0 failed
+
 ## [2026-04-04] Full Pipeline Orchestrator — SL→Generate→QG→Test with 3-Way Data Separation (DDR #14)
 
 ### Added

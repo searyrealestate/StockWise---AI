@@ -1771,6 +1771,47 @@ class TestFullPipeline:
             "--full-pipeline flag not found in CLI --help output"
 
 
+class TestPipelineBugFixes:
+    """Tests for pipeline bug fixes — GEN cleanup, safe_json_write, stock_state_fn (DDR #14)."""
+
+    def test_no_gen_templates_on_disk(self):
+        """No GEN_* template files should exist after cleanup."""
+        templates_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "data", "templates"
+        )
+        if os.path.exists(templates_dir):
+            gen_files = [
+                f for f in os.listdir(templates_dir)
+                if f.startswith("GEN_") and f.endswith(".json")
+            ]
+            assert len(gen_files) == 0, f"GEN files should be deleted: {gen_files}"
+
+    def test_safe_json_write_windows_compatible(self):
+        """safe_json_write should handle os.replace failure gracefully (double write)."""
+        import tempfile
+        from safe_json_io import safe_json_write, safe_json_read
+        test_path = os.path.join(tempfile.gettempdir(), "test_safe_write_compat.json")
+        try:
+            safe_json_write(test_path, {"test": 1})
+            safe_json_write(test_path, {"test": 2})
+            data = safe_json_read(test_path)
+            assert data.get("test") == 2, f"Expected 2, got {data.get('test')}"
+        finally:
+            if os.path.exists(test_path):
+                os.unlink(test_path)
+
+    def test_pipeline_has_stock_state_fn(self):
+        """run_full_pipeline must initialize and use stock_state_fn."""
+        import inspect
+        from backtest_engine import WalkForwardValidator
+        source = inspect.getsource(WalkForwardValidator.run_full_pipeline)
+        assert "stock_state_fn" in source, \
+            "run_full_pipeline must use stock_state_fn"
+        assert "classify_stock_state" in source, \
+            "run_full_pipeline must reference classify_stock_state"
+
+
 # ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
@@ -1779,7 +1820,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

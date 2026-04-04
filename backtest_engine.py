@@ -1932,8 +1932,23 @@ class WalkForwardValidator:
 
         try:
             sl = ShadowLedger()
+
+            # Create stock_state_fn for coverage gap detection
+            stock_state_fn = None
+            try:
+                from stock_hunter import StockHunter
+                class _MockDM:
+                    stock_client = None
+                hunter = StockHunter(_MockDM())
+                stock_state_fn = lambda df_slice: hunter.classify_stock_state(df_slice)
+                logger.info("[PIPELINE] stock_state_fn initialized via StockHunter")
+            except Exception as e:
+                logger.warning(
+                    f"[PIPELINE] StockHunter unavailable — coverage gaps won't be detected: {e}"
+                )
+
             for symbol, df in full_data.items():
-                sl.evaluate_history(symbol, df, max_date=split_date_1)
+                sl.evaluate_history(symbol, df, stock_state_fn=stock_state_fn, max_date=split_date_1)
 
             sl.apply_decay()
             sl._finalize_coverage_gaps()

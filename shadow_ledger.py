@@ -1709,7 +1709,7 @@ class ShadowLedger:
             f"{periods:.1f} periods (rates by category)"
         )
 
-    def run_full_evaluation(self, data_source_manager, symbols=None, feature_engine=None, max_date=None):
+    def run_full_evaluation(self, data_source_manager, symbols=None, feature_engine=None, max_date=None, stock_state_fn=None):
         """
         Batch evaluation: run candle-by-candle for all symbols.
         Intended for OFFLINE/weekend execution per DDR Part C.
@@ -1720,6 +1720,7 @@ class ShadowLedger:
             feature_engine: FeatureEngine instance for indicator calculation. Optional.
             max_date: Optional str — restrict evaluation to bars on or before this date.
                       Used for TRAIN-only mode in the 3-way split pipeline (DDR #14).
+            stock_state_fn: Callable(df_slice) → state dict for coverage gap detection.
         """
         if symbols is None:
             symbols = list(getattr(cfg, 'DEFAULT_TRAINING_SYMBOLS', []))
@@ -1753,7 +1754,7 @@ class ShadowLedger:
                 if feature_engine is not None:
                     df = feature_engine.calculate_features(df)
 
-                self.evaluate_history(symbol, df, max_date=max_date)
+                self.evaluate_history(symbol, df, stock_state_fn=stock_state_fn, max_date=max_date)
                 evaluated += 1
                 # Log per-symbol summary
                 sym_stats = self.ledger.get("template_stats", {}).get(symbol, {})
@@ -1983,6 +1984,18 @@ if __name__ == "__main__":
         print(f"[ShadowLedger] ERROR: Failed to initialize dependencies: {e}")
         sys.exit(1)
 
+    # ── Create stock_state_fn for coverage gap detection ─────
+    stock_state_fn = None
+    try:
+        from stock_hunter import StockHunter
+        class _MockDM:
+            stock_client = None
+        hunter = StockHunter(_MockDM())
+        stock_state_fn = lambda df_slice: hunter.classify_stock_state(df_slice)
+        print(f"  State fn: StockHunter.classify_stock_state")
+    except Exception as e:
+        print(f"  State fn: UNAVAILABLE ({e}) — coverage gaps won't be detected")
+
     # ── Run evaluation ───────────────────────────────────────
     start_time = time.time()
 
@@ -1990,7 +2003,8 @@ if __name__ == "__main__":
         data_source_manager=dsm,
         symbols=symbols,
         feature_engine=fe,
-        max_date=args.max_date
+        max_date=args.max_date,
+        stock_state_fn=stock_state_fn
     )
 
     elapsed = time.time() - start_time
