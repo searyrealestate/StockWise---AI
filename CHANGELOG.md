@@ -1,5 +1,15 @@
 # Changelog
 
+## [2026-04-04] Tune TREND_PULLBACK_EMA + MOMENTUM_BREAKOUT stop/target
+
+### Problem
+TREND_PULLBACK_EMA PF=0.78 (swing_low stop too tight, R:R=1.29). MOMENTUM_BREAKOUT PF=0.55 (AvgLoss=4.10% > AvgWin=3.37%, R:R inverted at 0.82).
+
+### Fix
+- TREND_PULLBACK_EMA: stop changed from `swing_low×0.5` to `ATR×1.5`, target from `ATR×2.5` to `ATR×3.5`, version 3→4, re-enabled
+- MOMENTUM_BREAKOUT: stop changed from `ATR×1.5` to `ATR×1.2`, target from `ATR×3.0` to `ATR×4.0`, version 1→2, re-enabled
+- Active template set: SQUEEZE_BREAKOUT + OVERSOLD_BOUNCE + TREND_PULLBACK_EMA + MOMENTUM_BREAKOUT (4 templates)
+
 ## [2026-04-04] Disable Losing Seed Templates TREND_PULLBACK_EMA + MOMENTUM_BREAKOUT
 
 ### Problem
