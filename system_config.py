@@ -565,7 +565,7 @@ TEMPLATE_EVOLUTION_CONFIG = {
         "max_history_entries": 52,           # Rolling cap (× 13 symbols = max history length)
     },
     "generation": {
-        "enabled": False,
+        "enabled": True,
         "max_templates_per_gap": 2,          # Max new templates to create per coverage gap
         "max_total_generated": 10,           # Hard cap on total templates generated per run
         "min_opportunity_score": 0.30,       # Skip gaps with opportunity_score below this

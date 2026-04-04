@@ -1,5 +1,11 @@
 # Changelog
 
+## [2026-04-04] Re-enable Template Generation with Quality Gate Protection
+
+### Fix
+- `system_config.py`: `generation.enabled` set back to `True`
+- Quality Gate (WF PF ≥ 1.0, Prompt #5) now prevents bad templates from staying active — GEN_* that fail validation are auto-disabled before backtest runs
+
 ## [2026-04-04] Add 3 BULLISH/SIDEWAYS Recipes to TEMPLATE_GENERATION_RECIPES
 
 ### Problem
