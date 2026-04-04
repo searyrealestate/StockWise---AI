@@ -1,5 +1,24 @@
 # Changelog
 
+## [2026-04-04] 3-Way Train/Val/Test Split for Walk-Forward Validation (DDR #14)
+
+### Problem
+Walk-Forward Quality Gate used a 70/30 split but the Shadow Ledger trained on the entire data pool,
+so the "test" 30% was contaminated. GEN_SA showed QG PF=2.65 on "test" data but real PF=0.61 in
+production — a false pass caused by train/test data overlap.
+
+### Fix
+- `system_config.py` (`WALK_FORWARD_CONFIG`): `train_pct: 0.70→0.60`, added `val_pct: 0.20`, `test_pct: 0.30→0.20`
+- `backtest_engine.py` (`WalkForwardValidator._split_data`): rewritten to return 4 values `(train_data, val_data, test_data, split_info)` with chronological 60/20/20 split at `split_date_1` and `split_date_2`; each period includes warmup bars before its trading window
+- `backtest_engine.py` (`validate`): unpacks 4 values, runs separate engines for train/val/test; report includes `val_summary`
+- `backtest_engine.py` (`_compare_per_template`): added optional `val_trades` param; result includes `val_trades`, `val_wr`, `val_pf`, `val_pnl`
+- `backtest_engine.py` (`validate_single_template`): Quality Gate now uses `val_data` (true held-out period); `test_data` reserved for final evaluation only
+- `tests/test_walk_forward.py`: WF-01–WF-04 updated to unpack 4 values and check new split_info keys (`split_date_1`, `split_date_2`)
+- `tests/unit_tests.py`: +5 tests in `TestThreeWaySplit` — returns 4 values, chronological order, ~60/20/20 proportions, warmup in val/test, config has `val_pct` summing to 1.0
+
+### Result
+136 passed, 0 failed (unit_tests.py + test_walk_forward.py)
+
 ## [2026-04-04] Disable All GEN_* Templates — Pipeline Overfitting (DDR #14)
 
 ### Changed

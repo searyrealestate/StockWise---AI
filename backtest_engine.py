@@ -1734,7 +1734,8 @@ class WalkForwardValidator:
         self.symbols = symbols or list(getattr(cfg, "DEFAULT_TRAINING_SYMBOLS", []))
         self.initial_capital = initial_capital or BACKTEST_CONFIG["initial_capital"]
         self.use_risk_gates = use_risk_gates
-        self.train_pct = wf_cfg.get("train_pct", 0.70)
+        self.train_pct = wf_cfg.get("train_pct", 0.60)
+        self.val_pct   = wf_cfg.get("val_pct",   0.20)
         self.data_cache = data_cache  # optional pre-loaded data
         self.config = wf_cfg
 
@@ -1747,8 +1748,12 @@ class WalkForwardValidator:
             test_summary, per_template, cp2, overfit_warnings, verdict
         """
         logger.info("=" * 60)
-        logger.info("WALK-FORWARD VALIDATION START")
-        logger.info(f"Train/Test split: {self.train_pct:.0%} / {1-self.train_pct:.0%}")
+        logger.info("WALK-FORWARD VALIDATION START (3-Way Split)")
+        logger.info(
+            f"Train/Val/Test split: {self.train_pct:.0%} / "
+            f"{self.val_pct:.0%} / "
+            f"{1 - self.train_pct - self.val_pct:.0%}"
+        )
         logger.info("=" * 60)
 
         # Step 1: Load data via BacktestEngine's loader
@@ -1765,17 +1770,19 @@ class WalkForwardValidator:
             logger.error("[WF] No data available")
             return {"error": "No data available", "verdict": "FAIL"}
 
-        # Step 2: Split data by date
-        train_data, test_data, split_info = self._split_data(full_data)
+        # Step 2: 3-way split by date
+        train_data, val_data, test_data, split_info = self._split_data(full_data)
 
-        if not train_data or not test_data:
-            logger.error("[WF] Insufficient data for split")
-            return {"error": "Insufficient data for train/test split", "verdict": "FAIL"}
+        if not train_data or not val_data or not test_data:
+            logger.error("[WF] Insufficient data for 3-way split")
+            return {"error": "Insufficient data for train/val/test split", "verdict": "FAIL"}
 
         logger.info(
-            f"[WF] Split at {split_info['split_date']} | "
-            f"Train: {split_info['train_days']} days | "
-            f"Test: {split_info['test_days']} days"
+            f"[WF] Train→{split_info['split_date_1']} | "
+            f"Val→{split_info['split_date_2']} | "
+            f"Train: {split_info['train_days']}d | "
+            f"Val: {split_info['val_days']}d | "
+            f"Test: {split_info['test_days']}d"
         )
 
         # Step 3: Run BacktestEngine on TRAIN period
@@ -1789,8 +1796,19 @@ class WalkForwardValidator:
         train_engine.feed_shadow_ledger = False  # Don't pollute ledger with partial data
         train_results = train_engine.run()
 
-        # Step 4: Run BacktestEngine on TEST period
-        logger.info("[WF] === TEST PERIOD ===")
+        # Step 4: Run BacktestEngine on VAL period
+        logger.info("[WF] === VALIDATION PERIOD ===")
+        val_engine = BacktestEngine(
+            symbols=self.symbols,
+            initial_capital=self.initial_capital,
+            use_risk_gates=self.use_risk_gates,
+            data_cache=val_data,
+        )
+        val_engine.feed_shadow_ledger = False
+        val_results = val_engine.run()
+
+        # Step 5: Run BacktestEngine on TEST period (reserved — final out-of-sample)
+        logger.info("[WF] === TEST PERIOD (reserved) ===")
         test_engine = BacktestEngine(
             symbols=self.symbols,
             initial_capital=self.initial_capital,
@@ -1800,16 +1818,17 @@ class WalkForwardValidator:
         test_engine.feed_shadow_ledger = False
         test_results = test_engine.run()
 
-        # Step 5: Compare per-template
+        # Step 6: Compare per-template across all 3 periods
         per_template = self._compare_per_template(
             train_results.get("trades", train_engine.closed_trades),
             test_results.get("trades", test_engine.closed_trades),
+            val_results.get("trades", val_engine.closed_trades),
         )
 
-        # Step 6: Evaluate CP-2
+        # Step 7: Evaluate CP-2 (uses test_* fields — final out-of-sample)
         cp2 = self._evaluate_cp2(per_template)
 
-        # Step 7: Detect overfit warnings
+        # Step 8: Detect overfit warnings
         overfit_warnings = self._detect_overfitting(per_template)
 
         verdict = cp2["verdict"]
@@ -1818,10 +1837,13 @@ class WalkForwardValidator:
                 logger.warning(f"[WF-OVERFIT] {w}")
 
         report = {
-            "split_date":      split_info["split_date"],
+            "split_date_1":    split_info["split_date_1"],
+            "split_date_2":    split_info["split_date_2"],
             "train_days":      split_info["train_days"],
+            "val_days":        split_info["val_days"],
             "test_days":       split_info["test_days"],
             "train_summary":   train_results.get("summary", {}),
+            "val_summary":     val_results.get("summary", {}),
             "test_summary":    test_results.get("summary", {}),
             "per_template":    per_template,
             "cp2":             cp2,
@@ -1833,14 +1855,17 @@ class WalkForwardValidator:
         return report
 
     def _split_data(self, full_data):
-        """Split each symbol's DataFrame into train/test by global split date.
+        """3-Way chronological split: Train / Val / Test.
 
-        Finds the global date range across all symbols, calculates
-        split_date at train_pct of the range, then slices each DataFrame.
-        Test data includes warmup bars before split_date so indicators are valid.
+        Train  = first train_pct of tradeable dates  (default 60%)
+        Val    = next  val_pct  of tradeable dates   (default 20%)
+        Test   = remaining      tradeable dates      (default 20%)
+
+        Val and Test include warmup bars so indicators are valid.
+        Train ends at or before split_date_1 (no look-ahead).
 
         Returns:
-            (train_data, test_data, split_info)
+            (train_data, val_data, test_data, split_info)
         """
         warmup = BACKTEST_CONFIG.get("min_candles_warmup", 200)
 
@@ -1851,54 +1876,81 @@ class WalkForwardValidator:
                 all_dates.update(df.index[warmup:])
 
         if not all_dates:
-            return None, None, {}
+            return None, None, None, {}
 
         sorted_dates = sorted(all_dates)
-        split_idx = int(len(sorted_dates) * self.train_pct)
+        n = len(sorted_dates)
+        split_idx_1 = int(n * self.train_pct)
+        split_idx_2 = int(n * (self.train_pct + self.val_pct))
 
-        if split_idx < 1 or split_idx >= len(sorted_dates) - 1:
-            return None, None, {}
+        if split_idx_1 < 1 or split_idx_2 >= n - 1:
+            return None, None, None, {}
 
-        split_date = sorted_dates[split_idx]
+        split_date_1 = sorted_dates[split_idx_1]
+        split_date_2 = sorted_dates[split_idx_2]
 
         train_data = {}
-        test_data = {}
+        val_data   = {}
+        test_data  = {}
 
         for symbol, df in full_data.items():
-            # Train: all rows up to and including split_date
-            train_mask = df.index <= split_date
-            train_df = df.loc[train_mask]
+            # Train: all rows up to and including split_date_1
+            train_mask = df.index <= split_date_1
+            train_df   = df.loc[train_mask]
 
-            # Test: include warmup bars before split_date so indicators are valid
+            # Val: include warmup bars before split_date_1, trade until split_date_2
+            val_start_pos = max(
+                0,
+                df.index.get_indexer([split_date_1], method='ffill')[0] - warmup
+            )
+            val_df = df.iloc[val_start_pos:
+                             df.index.get_indexer([split_date_2], method='ffill')[0] + 1]
+
+            # Test: include warmup bars before split_date_2, trade from split_date_2 onward
             test_start_pos = max(
                 0,
-                df.index.get_indexer([split_date], method='ffill')[0] - warmup
+                df.index.get_indexer([split_date_2], method='ffill')[0] - warmup
             )
             test_df = df.iloc[test_start_pos:]
 
             if len(train_df) >= warmup:
                 train_data[symbol] = train_df
+            if len(val_df) >= warmup:
+                val_data[symbol] = val_df
             if len(test_df) >= warmup:
                 test_data[symbol] = test_df
 
+        train_days = split_idx_1
+        val_days   = split_idx_2 - split_idx_1
+        test_days  = n - split_idx_2
+
         split_info = {
-            "split_date": (
-                str(split_date.date()) if hasattr(split_date, 'date') else str(split_date)
+            "split_date_1": (
+                str(split_date_1.date()) if hasattr(split_date_1, 'date') else str(split_date_1)
             ),
-            "train_days": split_idx,
-            "test_days":  len(sorted_dates) - split_idx,
+            "split_date_2": (
+                str(split_date_2.date()) if hasattr(split_date_2, 'date') else str(split_date_2)
+            ),
+            "train_days": train_days,
+            "val_days":   val_days,
+            "test_days":  test_days,
         }
 
-        return train_data, test_data, split_info
+        logger.info(
+            f"[WF] 3-Way Split: train={train_days}d | val={val_days}d | test={test_days}d"
+        )
 
-    def _compare_per_template(self, train_trades, test_trades):
-        """Compare per-template performance between train and test periods.
+        return train_data, val_data, test_data, split_info
+
+    def _compare_per_template(self, train_trades, test_trades, val_trades=None):
+        """Compare per-template performance across train / val / test periods.
 
         Args:
             train_trades: list of trade dicts from train BacktestEngine
             test_trades:  list of trade dicts from test BacktestEngine
+            val_trades:   list of trade dicts from val BacktestEngine (optional)
         Returns:
-            dict: template_id → performance comparison dict
+            dict: template_id → performance comparison dict (includes val_* fields)
         """
         def _calc_stats(trades):
             if not trades:
@@ -1927,13 +1979,21 @@ class WalkForwardValidator:
             tid = t.get("template_id", "UNKNOWN")
             test_by_tmpl.setdefault(tid, []).append(t)
 
-        all_templates = set(train_by_tmpl.keys()) | set(test_by_tmpl.keys())
+        val_by_tmpl = {}
+        for t in (val_trades or []):
+            tid = t.get("template_id", "UNKNOWN")
+            val_by_tmpl.setdefault(tid, []).append(t)
+
+        all_templates = (
+            set(train_by_tmpl.keys()) | set(test_by_tmpl.keys()) | set(val_by_tmpl.keys())
+        )
         overfit_threshold = self.config.get("flag_overfit_threshold", 0.20)
 
         result = {}
         for tid in sorted(all_templates):
             tr = _calc_stats(train_by_tmpl.get(tid, []))
             te = _calc_stats(test_by_tmpl.get(tid, []))
+            va = _calc_stats(val_by_tmpl.get(tid, []))
             wr_delta = tr["wr"] - te["wr"]
             is_gen   = tid.startswith("GEN_")
 
@@ -1942,6 +2002,10 @@ class WalkForwardValidator:
                 "train_wr":     tr["wr"],
                 "train_pf":     tr["pf"],
                 "train_pnl":    tr["total_pnl"],
+                "val_trades":   va["trades"],
+                "val_wr":       va["wr"],
+                "val_pf":       va["pf"],
+                "val_pnl":      va["total_pnl"],
                 "test_trades":  te["trades"],
                 "test_wr":      te["wr"],
                 "test_pf":      te["pf"],
@@ -2049,18 +2113,25 @@ class WalkForwardValidator:
         logger.info("WALK-FORWARD RESULTS")
         logger.info("=" * 60)
         logger.info(
-            f"Split: {report.get('split_date')} | "
-            f"Train: {report.get('train_days')}d | "
+            f"Splits: train→{report.get('split_date_1')} | val→{report.get('split_date_2')} | "
+            f"Train: {report.get('train_days')}d | Val: {report.get('val_days')}d | "
             f"Test: {report.get('test_days')}d"
         )
 
         train_s = report.get("train_summary", {})
+        val_s   = report.get("val_summary",   {})
         test_s  = report.get("test_summary",  {})
         logger.info(
             f"[TRAIN] Trades={train_s.get('total_trades', 0)} | "
             f"WR={train_s.get('win_rate', 0):.1f}% | "
             f"PF={train_s.get('profit_factor', 0):.2f} | "
             f"Return={train_s.get('total_return_pct', 0):.2f}%"
+        )
+        logger.info(
+            f"[VAL]   Trades={val_s.get('total_trades', 0)} | "
+            f"WR={val_s.get('win_rate', 0):.1f}% | "
+            f"PF={val_s.get('profit_factor', 0):.2f} | "
+            f"Return={val_s.get('total_return_pct', 0):.2f}%"
         )
         logger.info(
             f"[TEST]  Trades={test_s.get('total_trades', 0)} | "
@@ -2075,6 +2146,7 @@ class WalkForwardValidator:
             logger.info(
                 f"[WF-TMPL] {tid}{gen_tag} | "
                 f"train={stats['train_trades']}t/{stats['train_wr']:.0%}wr/{stats['train_pf']:.1f}pf | "
+                f"val={stats.get('val_trades', 0)}t/{stats.get('val_wr', 0):.0%}wr/{stats.get('val_pf', 0):.1f}pf | "
                 f"test={stats['test_trades']}t/{stats['test_wr']:.0%}wr/{stats['test_pf']:.1f}pf | "
                 f"Δwr={stats['wr_delta']:+.0%}{flag}"
             )
@@ -2119,17 +2191,18 @@ class WalkForwardValidator:
                     "train_pf": 0.0, "train_trades": 0,
                     "reason": "no data — BURN_IN"}
 
-        train_data, test_data, _ = self._split_data(all_data_dict)
-        if not train_data or not test_data:
+        train_data, val_data, test_data, _ = self._split_data(all_data_dict)
+        if not train_data or not val_data:
             return {"passed": True, "test_pf": 0.0, "test_trades": 0,
                     "train_pf": 0.0, "train_trades": 0,
-                    "reason": "insufficient data for split — BURN_IN"}
+                    "reason": "insufficient data for 3-way split — BURN_IN"}
 
+        logger.info(f"[QG] {template_id}: using VALIDATION split for quality gate (test reserved)")
         train_trades = self._run_engine_and_filter(train_data, template_id)
-        test_trades  = self._run_engine_and_filter(test_data,  template_id)
+        val_trades   = self._run_engine_and_filter(val_data,   template_id)
 
         return self._evaluate_quality_gate(
-            template_id, train_trades, test_trades, min_trades, min_pf
+            template_id, train_trades, val_trades, min_trades, min_pf
         )
 
     def _run_engine_and_filter(self, data_cache, template_id):

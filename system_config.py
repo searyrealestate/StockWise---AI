@@ -731,8 +731,9 @@ TEMPLATE_GENERATION_RECIPES = {
 
 WALK_FORWARD_CONFIG = {
     "enabled":                True,
-    "train_pct":              0.70,       # Fraction of timeline used for training
-    "test_pct":               0.30,       # Fraction reserved for out-of-sample test
+    "train_pct":              0.60,       # Train period: Shadow Ledger & Generator
+    "val_pct":                0.20,       # NEW: Validation period for Quality Gate
+    "test_pct":               0.20,       # Final out-of-sample verification (untouched)
     "min_test_trades":        5,          # Min trades needed to judge generated templates
     "cp2_min_wr_generated":   0.25,       # Generated templates must hit ≥ 25% WR on test
     "cp2_min_pf":             1.50,       # Generated templates must hit ≥ 1.50 PF on test

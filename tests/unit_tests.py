@@ -1636,6 +1636,68 @@ class TestQualityGate:
         assert result["test_trades"] == 1
 
 
+class TestThreeWaySplit:
+    """Tests for the 3-way Train/Val/Test chronological split (DDR #14)."""
+
+    def setup_method(self):
+        import sys, os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+        import numpy as np
+        import pandas as pd
+        from backtest_engine import WalkForwardValidator, BACKTEST_CONFIG
+        self.WalkForwardValidator = WalkForwardValidator
+        self.BACKTEST_CONFIG = BACKTEST_CONFIG
+        self.wfv = WalkForwardValidator(symbols=["TEST"], initial_capital=100000, use_risk_gates=False)
+        dates = pd.date_range("2020-01-01", periods=1000, freq="B")
+        rng = np.random.default_rng(42)
+        df = pd.DataFrame({
+            "open":   rng.uniform(90, 110, 1000),
+            "high":   rng.uniform(100, 120, 1000),
+            "low":    rng.uniform(80, 100, 1000),
+            "close":  rng.uniform(90, 110, 1000),
+            "volume": rng.integers(1_000_000, 5_000_000, 1000).astype(float),
+        }, index=dates)
+        self.test_data = {"TEST": df}
+
+    def test_split_returns_four_values(self):
+        result = self.wfv._split_data(self.test_data)
+        assert len(result) == 4, "Expected 4 return values from _split_data"
+
+    def test_split_chronological_order(self):
+        train, val, test, info = self.wfv._split_data(self.test_data)
+        if train and val and test:
+            assert info.get("split_date_1") is not None
+            assert info.get("split_date_2") is not None
+            assert info["split_date_1"] < info["split_date_2"], \
+                "split_date_1 must precede split_date_2"
+
+    def test_split_proportions(self):
+        _, _, _, info = self.wfv._split_data(self.test_data)
+        total = info.get("train_days", 0) + info.get("val_days", 0) + info.get("test_days", 0)
+        if total > 0:
+            train_ratio = info["train_days"] / total
+            val_ratio   = info["val_days"]   / total
+            test_ratio  = info["test_days"]  / total
+            assert 0.55 <= train_ratio <= 0.65, f"Train ratio {train_ratio:.2%} not ~60%"
+            assert 0.15 <= val_ratio   <= 0.25, f"Val ratio {val_ratio:.2%} not ~20%"
+            assert 0.15 <= test_ratio  <= 0.25, f"Test ratio {test_ratio:.2%} not ~20%"
+
+    def test_val_and_test_have_warmup(self):
+        train, val, test, info = self.wfv._split_data(self.test_data)
+        warmup = self.BACKTEST_CONFIG.get("min_candles_warmup", 200)
+        if val and "TEST" in val:
+            assert len(val["TEST"]) > warmup, "Val split must include warmup bars"
+        if test and "TEST" in test:
+            assert len(test["TEST"]) > warmup, "Test split must include warmup bars"
+
+    def test_config_has_val_pct(self):
+        import system_config as cfg
+        wf = cfg.WALK_FORWARD_CONFIG
+        assert "val_pct" in wf, "WALK_FORWARD_CONFIG must include val_pct"
+        total = wf.get("train_pct", 0) + wf.get("val_pct", 0) + wf.get("test_pct", 0)
+        assert abs(total - 1.0) < 0.01, f"train+val+test must sum to 1.0, got {total}"
+
+
 # ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
@@ -1644,7 +1706,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

@@ -60,36 +60,40 @@ class TestWalkForwardValidator:
     def setup_method(self):
         self.wf = WalkForwardValidator(symbols=["TEST"])
 
-    # WF-01: Data splits at ~70% of timeline
+    # WF-01: Data splits at ~60/20/20 of timeline
     def test_wf01_split_70_30(self):
         data = {"TEST": _make_dummy_data(500)}
-        train, test, info = self.wf._split_data(data)
+        train, val, test, info = self.wf._split_data(data)
         assert train is not None, "train data must not be None"
+        assert val is not None, "val data must not be None"
         assert test is not None, "test data must not be None"
-        total = info["train_days"] + info["test_days"]
+        total = info["train_days"] + info["val_days"] + info["test_days"]
         ratio = info["train_days"] / total
-        assert 0.65 <= ratio <= 0.75, f"Expected ~70% train split, got {ratio:.2%}"
+        assert 0.55 <= ratio <= 0.65, f"Expected ~60% train split, got {ratio:.2%}"
 
-    # WF-02: Train data ends at or before split_date (no look-ahead)
+    # WF-02: Train data ends at or before split_date_1 (no look-ahead)
     def test_wf02_no_lookahead(self):
         data = {"TEST": _make_dummy_data(500)}
-        train, test, info = self.wf._split_data(data)
-        split_str = info["split_date"]
+        train, val, test, info = self.wf._split_data(data)
+        split_str = info["split_date_1"]
         train_max = str(train["TEST"].index.max().date())
         assert train_max <= split_str, \
-            f"Train data leaks into test: train_max={train_max} > split={split_str}"
+            f"Train data leaks into val/test: train_max={train_max} > split={split_str}"
 
-    # WF-03: split_date present in split_info (needed for audit)
+    # WF-03: split_date_1 and split_date_2 present in split_info (needed for audit)
     def test_wf03_split_date_in_info(self):
         data = {"TEST": _make_dummy_data(500)}
-        _, _, info = self.wf._split_data(data)
-        assert info.get("split_date") is not None
-        assert len(info["split_date"]) == 10  # "YYYY-MM-DD"
+        _, _, _, info = self.wf._split_data(data)
+        assert info.get("split_date_1") is not None
+        assert info.get("split_date_2") is not None
+        assert len(info["split_date_1"]) == 10  # "YYYY-MM-DD"
+        assert len(info["split_date_2"]) == 10
 
-    # WF-04: empty data → returns (None, None, {})
+    # WF-04: empty data → returns (None, None, None, {})
     def test_wf04_empty_data_graceful(self):
-        train, test, info = self.wf._split_data({})
+        train, val, test, info = self.wf._split_data({})
         assert train is None
+        assert val is None
         assert test is None
 
     # WF-05: per-template comparison calculates WR and trade counts correctly
