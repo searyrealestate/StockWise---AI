@@ -1,5 +1,16 @@
 # Changelog
 
+## [2026-04-04] Add 3 BULLISH/SIDEWAYS Recipes to TEMPLATE_GENERATION_RECIPES
+
+### Problem
+No recipes existed for BULLISH or SIDEWAYS+NORMAL states. Generator could not create templates for 83% of META's bars (BULLISH+OPEN_FIELD+NORMAL) or 54% of AMD's bars (SIDEWAYS+OPEN_FIELD+NORMAL).
+
+### Fix
+Added 3 entries to `TEMPLATE_GENERATION_RECIPES` in `system_config.py` (5→8 total):
+- `BULLISH_TREND_RIDE`: momentum, BULLISH, ATR×1.8 stop / ATR×3.5 target, runner=True
+- `BULLISH_BREAKOUT_VOLUME`: breakout, BULLISH, ATR×1.5 stop / ATR×4.0 target, runner=True
+- `SIDEWAYS_BREAKOUT_CLEAN`: momentum, SIDEWAYS+NORMAL, ATR×1.5 stop / ATR×3.0 target, runner=False
+
 ## [2026-04-04] Walk-Forward Quality Gate for Generated Templates
 
 ### Problem
