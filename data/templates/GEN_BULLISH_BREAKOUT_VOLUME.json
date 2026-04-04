@@ -1,0 +1,91 @@
+{
+    "id": "GEN_BULLISH_BREAKOUT_VOLUME",
+    "name": "Bullish breakout with strong volume confirmation (Generated)",
+    "description": "Bullish breakout with strong volume confirmation",
+    "version": 1,
+    "source": "generated",
+    "category": "breakout",
+    "enabled": false,
+    "required_state": {
+        "trend": [
+            "BULLISH"
+        ],
+        "structure": [
+            "OPEN_FIELD"
+        ],
+        "volatility": [
+            "NORMAL",
+            "COMPRESSED"
+        ],
+        "volume": [
+            "HEALTHY",
+            "SURGING"
+        ]
+    },
+    "conditions": [
+        {
+            "block": "close_above_sma",
+            "params": [
+                50
+            ]
+        },
+        {
+            "block": "volume_surge",
+            "params": [
+                1.5
+            ]
+        },
+        {
+            "block": "rsi_above",
+            "params": [
+                50
+            ]
+        },
+        {
+            "block": "bullish_candle",
+            "params": []
+        }
+    ],
+    "entry": {
+        "type": "close",
+        "confirmation_candles": 0
+    },
+    "stop_loss": {
+        "method": "atr",
+        "atr_multiplier": 1.5,
+        "fallback_pct": 0.02
+    },
+    "take_profit": {
+        "method": "atr",
+        "atr_multiplier": 4.0,
+        "use_runner_mode": true
+    },
+    "statistics": {
+        "total_activations": 0,
+        "wins": 0,
+        "losses": 0,
+        "win_rate": 0.0,
+        "avg_profit_pct": 0.0,
+        "avg_loss_pct": 0.0,
+        "max_profit_pct": 0.0,
+        "max_loss_pct": 0.0,
+        "avg_hold_duration_hours": 0.0,
+        "ticker_stats": {},
+        "volume_range_stats": {},
+        "trend_stats": {},
+        "volatility_stats": {},
+        "regime_stats": {},
+        "month_stats": {},
+        "day_of_week_stats": {},
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_consecutive_wins": 0,
+        "max_consecutive_losses": 0,
+        "last_activated": null,
+        "last_win_ticker": null,
+        "last_loss_ticker": null,
+        "created_at": "2026-04-04T16:04:44.780711",
+        "updated_at": "2026-04-04T16:04:44.780711",
+        "block_stats": {}
+    }
+}

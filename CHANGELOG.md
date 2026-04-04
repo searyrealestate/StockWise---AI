@@ -1,5 +1,13 @@
 # Changelog
 
+## [2026-04-04] Disable All GEN_* Templates — Pipeline Overfitting (DDR #14)
+
+### Changed
+- Disabled all remaining GEN_* templates (GEN_SA, GEN_SBC, GEN_TEB, GEN_BBV, GEN_BTR) — pipeline overfitting (DDR #14)
+- All 6 GEN_* templates now disabled pending 3-Way Train/Val/Test split implementation
+- Files preserved for analysis — not deleted
+- Baseline returns to seed-only: SQUEEZE_BREAKOUT + OVERSOLD_BOUNCE
+
 ## [2026-04-04] Re-enable Template Generation with Quality Gate Protection
 
 ### Fix
