@@ -1,5 +1,14 @@
 # Changelog
 
+## [2026-04-04] Re-disable TREND_PULLBACK_EMA + MOMENTUM_BREAKOUT
+
+### Problem
+Tuning stop/target improved PF slightly (0.78→0.82, 0.55→0.60) but both remain < 1.0. AvgWin unchanged despite larger targets — root cause is entry quality, not R:R. These templates enter at points that don't produce sufficient price movement.
+
+### Fix
+- Both templates re-disabled. Active set: SQUEEZE_BREAKOUT + OVERSOLD_BOUNCE (PF=1.89 baseline)
+- Templates preserved for future entry condition redesign
+
 ## [2026-04-04] Tune TREND_PULLBACK_EMA + MOMENTUM_BREAKOUT stop/target
 
 ### Problem
