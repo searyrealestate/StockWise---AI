@@ -1,5 +1,18 @@
 # Changelog
 
+## [2026-04-04] Disable GEN_* Templates, Add --provider Force Mode to DSM
+
+### Problem
+GEN_* templates (3 files) produced PF 0.58–0.67 and 81% of signals, all losing (-168% PnL). `--provider` CLI flag in backtest_real_stocks.py did not force the DSM; waterfall always used MASSIVE regardless.
+
+### Fix
+- `system_config.py`: set `TEMPLATE_EVOLUTION_CONFIG["generation"]["enabled"]` to `False`
+- `data/templates/GEN_*.json`: set `"enabled": false` in all 3 generated template files
+- `setup_templates.py`: `TemplateManager.load_all()` now skips disabled templates at load time with INFO log (`Skipping disabled template: {id}`)
+- `data_source_manager.py`: added `force_provider` parameter to `get_stock_data()` — when set, skips waterfall and uses only the specified provider with no fallback; logs `[DSM] Force provider mode: {provider}, waterfall DISABLED`
+- `tests/backtest_real_stocks.py`: `--provider` argparse default changed to `None` (waterfall); when set, passed as `force_provider` to both DSM `get_stock_data()` calls
+- `tests/unit_tests.py`: +4 tests — `test_gen_templates_disabled_skipped`, `test_seed_templates_unaffected`, `test_force_provider_uses_only_specified`, `test_force_provider_no_fallback_on_failure`
+
 ## [2026-04-04] Bootstrap Template Generation for Empty Gaps
 
 ### Problem

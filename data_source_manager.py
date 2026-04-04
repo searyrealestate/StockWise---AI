@@ -575,7 +575,7 @@ class DataSourceManager:
         return data_map
 
     # --- MAIN DATA METHOD (WATERFALL LOGIC) ---
-    def get_stock_data(self, symbol, start_date=None, end_date=None, days_back=None, interval='1d', source='AUTO', trade_type=None, min_rows=0):
+    def get_stock_data(self, symbol, start_date=None, end_date=None, days_back=None, interval='1d', source='AUTO', trade_type=None, min_rows=0, force_provider=None):
 
         """
         Super-Fetcher.
@@ -608,13 +608,17 @@ class DataSourceManager:
         priority_list = ['MASSIVE', 'ALPACA', 'IBKR', 'YFINANCE']
         # priority_list = ['ALPACA'] # TEST MODE: PHASE 1
 
+        # Force provider mode: skip waterfall entirely, use only the specified provider
+        if force_provider is not None:
+            self._log(f"[DSM] Force provider mode: {force_provider}, waterfall DISABLED", "INFO")
+            priority_list = [force_provider.upper()]
         # If specific source requested
-        if source != 'AUTO' and source in priority_list:
+        elif source != 'AUTO' and source in priority_list:
              priority_list.remove(source)
              priority_list.insert(0, source)
         # elif source == 'AUTO':
         #      pass # keep default order
-             
+
         for provider in priority_list:
             self._log(f"[{clean_symbol}] Trying provider: {provider}...", "INFO")
 

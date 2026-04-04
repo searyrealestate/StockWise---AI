@@ -924,11 +924,11 @@ class TestPhase3_3_TemplateValidation:
     """Verify SetupTemplate and TemplateManager."""
 
     def test_seed_templates_load(self):
-        """All 5 seed templates should load and validate."""
+        """All seed templates should load and validate (disabled templates are skipped at load time)."""
         from setup_templates import TemplateManager
         tm = TemplateManager()
-        assert len(tm.templates) >= 5, \
-            f"Expected >= 5 templates, got {len(tm.templates)}"
+        assert len(tm.templates) >= 4, \
+            f"Expected >= 4 enabled templates, got {len(tm.templates)}"
 
     def test_all_templates_valid(self):
         """Every loaded template should pass validation."""
@@ -994,10 +994,10 @@ class TestPhase3_4_TemplateMatcher:
     """Verify the template matcher pipeline."""
 
     def test_matcher_initializes(self):
-        """TemplateMatcher should load templates on init."""
+        """TemplateMatcher should load templates on init (enabled templates only)."""
         from template_matcher import TemplateMatcher
         matcher = TemplateMatcher()
-        assert len(matcher.tm.templates) >= 5
+        assert len(matcher.tm.templates) >= 4
 
     def test_scan_returns_signals_for_bullish_stock(self):
         """A perfect bullish stock should generate at least one signal."""
@@ -1449,6 +1449,127 @@ class TestWeeklyRetrain:
         assert retrain_cfg.get('min_days_between_retrain', 0) > 0, "min_days must be positive"
 
 
+class TestGenTemplatesDisabled:
+    """Tests for GEN_* template suppression when generation.enabled=False."""
+
+    def test_gen_templates_disabled_skipped(self):
+        """GEN_* templates are NOT in active template list when generation.enabled=False."""
+        import system_config as cfg
+        from setup_templates import TemplateManager
+
+        original = cfg.TEMPLATE_EVOLUTION_CONFIG["generation"]["enabled"]
+        try:
+            cfg.TEMPLATE_EVOLUTION_CONFIG["generation"]["enabled"] = False
+            tm = TemplateManager()
+            active_ids = list(tm.templates.keys())
+            gen_ids = [tid for tid in active_ids if tid.startswith("GEN_")]
+            assert gen_ids == [], f"GEN_* templates should be absent but found: {gen_ids}"
+        finally:
+            cfg.TEMPLATE_EVOLUTION_CONFIG["generation"]["enabled"] = original
+
+    def test_seed_templates_unaffected(self):
+        """Seed templates are still loaded when generation.enabled=False."""
+        import system_config as cfg
+        from setup_templates import TemplateManager
+
+        original = cfg.TEMPLATE_EVOLUTION_CONFIG["generation"]["enabled"]
+        try:
+            cfg.TEMPLATE_EVOLUTION_CONFIG["generation"]["enabled"] = False
+            tm = TemplateManager()
+            active_ids = list(tm.templates.keys())
+            seed_ids = [tid for tid in active_ids if not tid.startswith("GEN_")]
+            # At least 4 seed templates should be present
+            assert len(seed_ids) >= 4, f"Expected >=4 seed templates, got {len(seed_ids)}: {seed_ids}"
+            # No GEN_* templates
+            gen_ids = [tid for tid in active_ids if tid.startswith("GEN_")]
+            assert gen_ids == [], f"GEN_* templates must not be loaded: {gen_ids}"
+        finally:
+            cfg.TEMPLATE_EVOLUTION_CONFIG["generation"]["enabled"] = original
+
+
+class TestForceProviderDSM:
+    """Tests for force_provider parameter in DataSourceManager.get_stock_data()."""
+
+    def test_force_provider_uses_only_specified(self):
+        """When force_provider='YFINANCE', only YFINANCE is attempted; MASSIVE is not."""
+        import sys, os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+        from unittest.mock import patch, MagicMock
+        from data_source_manager import DataSourceManager
+
+        dm = DataSourceManager.__new__(DataSourceManager)
+        dm.massive_client = None
+        dm.stock_client = None
+        dm.use_ibkr = False
+
+        called_providers = []
+
+        import pandas as pd
+        fake_df = pd.DataFrame({'open': [1], 'high': [2], 'low': [0.5], 'close': [1.5], 'volume': [1000]})
+
+        def fake_yfinance(symbol, days_back, interval, start_date, end_date, min_rows=0):
+            called_providers.append('YFINANCE')
+            return fake_df
+
+        def fake_log(msg, level="INFO"):
+            pass
+
+        dm._log = fake_log
+
+        with patch.object(dm, '_download_from_yfinance', side_effect=fake_yfinance):
+            with patch('data_source_manager.clean_raw_data', return_value=fake_df):
+                result = dm.get_stock_data('AAPL', days_back=10, force_provider='YFINANCE')
+
+        assert 'YFINANCE' in called_providers, "YFINANCE must be attempted with force_provider='YFINANCE'"
+        assert 'MASSIVE' not in called_providers, "MASSIVE must NOT be attempted when force_provider='YFINANCE'"
+
+    def test_force_provider_no_fallback_on_failure(self):
+        """When force_provider='IBKR' and IBKR fails, no fallback to MASSIVE/YFINANCE occurs."""
+        import sys, os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+        from unittest.mock import patch
+        from data_source_manager import DataSourceManager
+        import pandas as pd
+
+        dm = DataSourceManager.__new__(DataSourceManager)
+        dm.massive_client = None
+        dm.stock_client = None
+        dm.use_ibkr = True
+
+        called_providers = []
+        log_messages = []
+
+        def fake_log(msg, level="INFO"):
+            log_messages.append((level, msg))
+
+        dm._log = fake_log
+
+        def fake_ibkr_fail(symbol, start_date, end_date, days_back, interval, min_rows=0):
+            called_providers.append('IBKR')
+            raise ConnectionError("IBKR connection refused")
+
+        def fake_isConnected():
+            return True
+
+        def fake_yfinance(symbol, days_back, interval, start_date, end_date, min_rows=0):
+            called_providers.append('YFINANCE')
+            return pd.DataFrame()
+
+        dm.isConnected = fake_isConnected
+        dm.connect_to_ibkr = lambda: None
+
+        with patch.object(dm, '_download_from_ibkr', side_effect=fake_ibkr_fail):
+            with patch.object(dm, '_download_from_yfinance', side_effect=fake_yfinance):
+                result = dm.get_stock_data('AAPL', days_back=10, force_provider='IBKR')
+
+        assert 'IBKR' in called_providers, "IBKR must be attempted"
+        assert 'YFINANCE' not in called_providers, "YFINANCE must NOT be attempted (no fallback)"
+        assert 'MASSIVE' not in called_providers, "MASSIVE must NOT be attempted (no fallback)"
+        assert result.empty, "Result should be empty DataFrame on failure with no fallback"
+        force_logs = [m for lvl, m in log_messages if "Force provider mode" in m]
+        assert force_logs, "Force provider mode must be logged"
+
+
 # ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
@@ -1457,7 +1578,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

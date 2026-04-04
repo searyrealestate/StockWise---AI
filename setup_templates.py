@@ -1070,6 +1070,9 @@ class TemplateManager:
                 template = SetupTemplate(data)
                 is_valid, errors = template.validate()
                 if is_valid:
+                    if not template.enabled:
+                        logger.info(f"Skipping disabled template: {template.id}")
+                        continue
                     self.templates[template.id] = template
                     logger.debug(
                         f"Loaded template: {template.id} ({template.name}), "

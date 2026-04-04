@@ -53,7 +53,7 @@ logger = logging.getLogger("Backtest")
 logger.setLevel(logging.DEBUG)
 
 
-def run_backtest(symbols, days_back=500, provider='YFINANCE'):
+def run_backtest(symbols, days_back=500, provider=None):
     """
     Run the full pipeline on each day of historical data.
     Simulates what would have happened if the system was running.
@@ -80,7 +80,7 @@ def run_backtest(symbols, days_back=500, provider='YFINANCE'):
 
         try:
             # Fetch full history
-            df_raw = dm.get_stock_data(symbol, days_back=days_back)
+            df_raw = dm.get_stock_data(symbol, days_back=days_back, force_provider=provider)
 
             if df_raw is None or len(df_raw) < 200:
                 logger.warning(f"[{symbol}] Insufficient data: {len(df_raw) if df_raw is not None else 0} rows")
@@ -278,7 +278,7 @@ def print_report(results):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="StockWise Backtest")
-    parser.add_argument("--provider", default="YFINANCE", help="Data provider")
+    parser.add_argument("--provider", default=None, help="Data provider (force mode; omit for waterfall)")
     parser.add_argument("--days", type=int, default=500, help="Days of history")
     parser.add_argument("--symbols", default="AAPL,MSFT,NVDA,GOOGL,AMZN",
                         help="Comma-separated symbols")
@@ -304,7 +304,7 @@ if __name__ == "__main__":
 
     for sym in symbols:
         try:
-            df_raw = dm_sl.get_stock_data(sym, days_back=args.days)
+            df_raw = dm_sl.get_stock_data(sym, days_back=args.days, force_provider=args.provider)
             if df_raw is None or len(df_raw) < 200:
                 print(f"  [{sym}] Skipped — insufficient data")
                 continue

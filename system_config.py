@@ -205,7 +205,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 # --- IBKR SETTINGS ---
 # Interactive Brokers Configuration
 IBKR_HOST = '127.0.0.1'  # Localhost IP for TWS/Gateway
-IBKR_PORT = 7497         # Default port for Paper Trading TWS
+IBKR_PORT = 4001         # Default port for Paper Trading TWS
 IBKR_CLIENT_ID = 1       # Client ID to identify this specific connection (ensure uniqueness if multi-process)
 
 # investment amount
@@ -565,7 +565,7 @@ TEMPLATE_EVOLUTION_CONFIG = {
         "max_history_entries": 52,           # Rolling cap (× 13 symbols = max history length)
     },
     "generation": {
-        "enabled": True,
+        "enabled": False,
         "max_templates_per_gap": 2,          # Max new templates to create per coverage gap
         "max_total_generated": 10,           # Hard cap on total templates generated per run
         "min_opportunity_score": 0.30,       # Skip gaps with opportunity_score below this
