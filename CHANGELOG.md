@@ -1,5 +1,17 @@
 # Changelog
 
+## [2026-04-04] Walk-Forward Quality Gate for Generated Templates
+
+### Problem
+Generated templates (GEN_*) entered production without validation, causing -168% PnL. No automated check prevented bad templates from becoming active.
+
+### Fix
+- `system_config.py`: added `quality_gate_min_pf=1.0` and `quality_gate_min_trades=3` to `WALK_FORWARD_CONFIG`
+- `backtest_engine.py` (`WalkForwardValidator`): added `validate_single_template()`, `_run_engine_and_filter()`, and `_evaluate_quality_gate()` — pure logic layer allows unit testing without network I/O
+- `setup_templates.py` (`TemplateManager`): added `disable_template()` — sets `enabled=false` in JSON on disk and removes from in-memory cache
+- `tests/backtest_real_stocks.py`: builds `all_symbol_data` dict in CP-1 loop; after generation runs quality gate for each new template: ✅ PASSED stays enabled, ❌ FAILED calls `disable_template()`
+- `tests/unit_tests.py`: +3 tests in `TestQualityGate` — passes good template (PF=3.0), fails bad template (PF=0.33), BURN_IN for insufficient trades (<3)
+
 ## [2026-04-04] Re-disable TREND_PULLBACK_EMA + MOMENTUM_BREAKOUT
 
 ### Problem

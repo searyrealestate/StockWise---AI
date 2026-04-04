@@ -1100,6 +1100,30 @@ class TemplateManager:
             self.save_template(template)
         logger.info(f"Saved {len(self.templates)} templates to disk")
 
+    def disable_template(self, template_id):
+        """Set enabled=false on a template JSON file and remove it from the active cache.
+
+        Used by the quality gate to disable newly generated templates that fail WF validation.
+        Does NOT delete the file — preserves it for future analysis and re-enabling.
+
+        Returns:
+            True if the file was found and updated, False on error.
+        """
+        filepath = os.path.join(self.templates_dir, f"{template_id}.json")
+        try:
+            data = safe_json_read(filepath, default={})
+            if not data:
+                logger.warning(f"Quality Gate: template file not found for {template_id}")
+                return False
+            data["enabled"] = False
+            safe_json_write(filepath, data)
+            self.templates.pop(template_id, None)
+            logger.info(f"Quality Gate: disabled template {template_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Quality Gate: failed to disable template {template_id}: {e}")
+            return False
+
     def get_enabled(self):
         """Return list of all enabled templates."""
         return [t for t in self.templates.values() if t.enabled]

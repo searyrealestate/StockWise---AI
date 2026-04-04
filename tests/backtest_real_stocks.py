@@ -302,6 +302,8 @@ if __name__ == "__main__":
     sl = ShadowLedger()
     sl._coverage_data = {}
 
+    all_symbol_data = {}   # {symbol: df_features} — passed to quality gate after generation
+
     for sym in symbols:
         try:
             df_raw = dm_sl.get_stock_data(sym, days_back=args.days, force_provider=args.provider)
@@ -309,6 +311,7 @@ if __name__ == "__main__":
                 print(f"  [{sym}] Skipped — insufficient data")
                 continue
             df_f = fe_sl.calculate_features(df_raw)
+            all_symbol_data[sym] = df_f
             state_fn = lambda df_s, _h=hunter_sl: _h.classify_stock_state(df_s)
             sl.evaluate_history(sym, df_f, stock_state_fn=state_fn)
             print(f"  [{sym}] evaluate_history complete")
@@ -338,6 +341,42 @@ if __name__ == "__main__":
         # Reload matcher so it picks up the new templates
         matcher = TemplateMatcher()
         print(f"[Template Generation] Matcher reloaded: {len(matcher.tm.templates)} templates active")
+
+        # ── Quality Gate: WF-validate each newly generated template ──────────
+        if created and all_symbol_data:
+            print(f"\n[Quality Gate] Validating {len(created)} new template(s) via WF split...")
+            try:
+                from backtest_engine import WalkForwardValidator
+                from setup_templates import TemplateManager
+                wf = WalkForwardValidator(symbols=list(all_symbol_data.keys()),
+                                          data_cache=all_symbol_data)
+                tm_qg = TemplateManager()
+                qg_min_pf = cfg.WALK_FORWARD_CONFIG.get("quality_gate_min_pf", 1.0)
+                gate_passed = 0
+                for tid in created:
+                    qg_result = wf.validate_single_template(tid, all_symbol_data)
+                    if qg_result["passed"]:
+                        gate_passed += 1
+                        print(
+                            f"[Quality Gate] \u2705 {tid} PASSED — "
+                            f"test PF={qg_result['test_pf']:.2f}, "
+                            f"{qg_result['test_trades']} trades | {qg_result['reason']}"
+                        )
+                    else:
+                        tm_qg.disable_template(tid)
+                        print(
+                            f"[Quality Gate] \u274c {tid} FAILED — "
+                            f"test PF={qg_result['test_pf']:.2f} < {qg_min_pf}, "
+                            f"disabled | {qg_result['reason']}"
+                        )
+                print(f"[Quality Gate] {gate_passed}/{len(created)} templates passed validation")
+                # Reload matcher to reflect any gates that disabled templates
+                matcher = TemplateMatcher()
+                print(f"[Quality Gate] Matcher reloaded: {len(matcher.tm.templates)} templates active")
+            except Exception as _qg_ex:
+                print(f"[Quality Gate] Error during validation: {_qg_ex}")
+                import traceback
+                traceback.print_exc()
     except Exception as e:
         print(f"[Template Generation] Failed: {e}")
         import traceback

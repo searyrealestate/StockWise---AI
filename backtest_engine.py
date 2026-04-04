@@ -2094,6 +2094,109 @@ class WalkForwardValidator:
         for w in report.get("overfit_warnings", []):
             logger.warning(f"[WF-OVERFIT] {w}")
 
+    # ── Quality Gate ──────────────────────────────────────────────────────────
+
+    def validate_single_template(self, template_id, all_data_dict, config=None):
+        """WF quality gate for a single newly-generated template.
+
+        Splits all_data_dict 70/30, runs the full pipeline on each half,
+        filters trades to template_id only, then evaluates PF threshold.
+
+        Args:
+            template_id:    ID of the template to validate (e.g. "GEN_BEARISH_SQUEEZE_BREAK")
+            all_data_dict:  dict of {symbol: DataFrame} with full historical feature data
+            config:         optional config override (defaults to self.config)
+
+        Returns:
+            dict: {passed, test_pf, test_trades, train_pf, train_trades, reason}
+        """
+        cfg_used = config if config is not None else self.config
+        min_trades = cfg_used.get("quality_gate_min_trades", 3)
+        min_pf     = cfg_used.get("quality_gate_min_pf", 1.0)
+
+        if not all_data_dict:
+            return {"passed": True, "test_pf": 0.0, "test_trades": 0,
+                    "train_pf": 0.0, "train_trades": 0,
+                    "reason": "no data — BURN_IN"}
+
+        train_data, test_data, _ = self._split_data(all_data_dict)
+        if not train_data or not test_data:
+            return {"passed": True, "test_pf": 0.0, "test_trades": 0,
+                    "train_pf": 0.0, "train_trades": 0,
+                    "reason": "insufficient data for split — BURN_IN"}
+
+        train_trades = self._run_engine_and_filter(train_data, template_id)
+        test_trades  = self._run_engine_and_filter(test_data,  template_id)
+
+        return self._evaluate_quality_gate(
+            template_id, train_trades, test_trades, min_trades, min_pf
+        )
+
+    def _run_engine_and_filter(self, data_cache, template_id):
+        """Run BacktestEngine on data_cache and return only trades for template_id."""
+        engine = BacktestEngine(
+            symbols=list(data_cache.keys()),
+            initial_capital=self.initial_capital,
+            use_risk_gates=self.use_risk_gates,
+            data_cache=data_cache,
+        )
+        engine.feed_shadow_ledger = False
+        results = engine.run()
+        trades = results.get("trades", getattr(engine, "closed_trades", []))
+        return [t for t in trades if t.get("template_id") == template_id]
+
+    def _evaluate_quality_gate(self, template_id, train_trades, test_trades,
+                               min_trades, min_pf):
+        """Pure evaluation logic — compute PF from trade lists and apply thresholds.
+
+        Separated from engine calls so it can be unit-tested without network/disk I/O.
+
+        Returns:
+            dict: {passed, test_pf, test_trades, train_pf, train_trades, reason}
+        """
+        def _pf(trades):
+            profit = sum(t["pnl_pct"] for t in trades if t.get("pnl_pct", 0) > 0)
+            loss   = abs(sum(t["pnl_pct"] for t in trades if t.get("pnl_pct", 0) <= 0))
+            if loss > 0:
+                return round(profit / loss, 2)
+            return float("inf") if profit > 0 else 0.0
+
+        test_pf  = _pf(test_trades)
+        train_pf = _pf(train_trades)
+        n_test   = len(test_trades)
+        n_train  = len(train_trades)
+
+        if n_test < min_trades:
+            return {
+                "passed":       True,
+                "test_pf":      test_pf,
+                "test_trades":  n_test,
+                "train_pf":     train_pf,
+                "train_trades": n_train,
+                "reason":       (
+                    f"insufficient test trades ({n_test} < {min_trades}) — BURN_IN"
+                ),
+            }
+
+        if test_pf >= min_pf:
+            return {
+                "passed":       True,
+                "test_pf":      test_pf,
+                "test_trades":  n_test,
+                "train_pf":     train_pf,
+                "train_trades": n_train,
+                "reason":       f"test PF {test_pf:.2f} >= threshold {min_pf}",
+            }
+
+        return {
+            "passed":       False,
+            "test_pf":      test_pf,
+            "test_trades":  n_test,
+            "train_pf":     train_pf,
+            "train_trades": n_train,
+            "reason":       f"test PF {test_pf:.2f} < threshold {min_pf}",
+        }
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CLI

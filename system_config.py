@@ -687,6 +687,8 @@ WALK_FORWARD_CONFIG = {
     "cp2_min_pf":             1.50,       # Generated templates must hit ≥ 1.50 PF on test
     "cp2_min_wr_seed":        0.35,       # Seed template WR baseline (informational)
     "flag_overfit_threshold": 0.20,       # Flag if train_WR - test_WR > 20 percentage points
+    "quality_gate_min_pf":    1.0,        # Minimum PF on test set for newly generated templates to stay enabled
+    "quality_gate_min_trades": 3,         # Minimum test trades to make a decision (below → keep enabled as BURN_IN)
 }
 
 

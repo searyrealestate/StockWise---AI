@@ -1570,6 +1570,72 @@ class TestForceProviderDSM:
         assert force_logs, "Force provider mode must be logged"
 
 
+class TestQualityGate:
+    """Tests for Walk-Forward quality gate — validate_single_template / _evaluate_quality_gate."""
+
+    def _wf(self):
+        """Return a WalkForwardValidator with minimal __init__ state for pure-logic tests."""
+        import sys, os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+        from backtest_engine import WalkForwardValidator
+        import system_config as cfg
+        wf = WalkForwardValidator.__new__(WalkForwardValidator)
+        wf.config = cfg.WALK_FORWARD_CONFIG
+        wf.initial_capital = 100_000
+        wf.use_risk_gates = False
+        wf.train_pct = 0.70
+        return wf
+
+    def test_quality_gate_passes_good_template(self):
+        """_evaluate_quality_gate returns passed=True when test PF >= 1.0."""
+        wf = self._wf()
+        # 3 wins × 2.0%, 2 losses × 1.0% → PF = 6.0/2.0 = 3.0
+        good_trades = [
+            {"template_id": "GEN_T", "pnl_pct": 2.0},
+            {"template_id": "GEN_T", "pnl_pct": 2.0},
+            {"template_id": "GEN_T", "pnl_pct": 2.0},
+            {"template_id": "GEN_T", "pnl_pct": -1.0},
+            {"template_id": "GEN_T", "pnl_pct": -1.0},
+        ]
+        result = wf._evaluate_quality_gate(
+            "GEN_T", train_trades=good_trades, test_trades=good_trades,
+            min_trades=3, min_pf=1.0
+        )
+        assert result["passed"] is True
+        assert result["test_pf"] == 3.0
+        assert result["test_trades"] == 5
+
+    def test_quality_gate_fails_bad_template(self):
+        """_evaluate_quality_gate returns passed=False when test PF < 1.0."""
+        wf = self._wf()
+        # 2 wins × 0.5%, 3 losses × 1.0% → PF = 1.0/3.0 = 0.33
+        bad_trades = [
+            {"template_id": "GEN_T", "pnl_pct": 0.5},
+            {"template_id": "GEN_T", "pnl_pct": 0.5},
+            {"template_id": "GEN_T", "pnl_pct": -1.0},
+            {"template_id": "GEN_T", "pnl_pct": -1.0},
+            {"template_id": "GEN_T", "pnl_pct": -1.0},
+        ]
+        result = wf._evaluate_quality_gate(
+            "GEN_T", train_trades=bad_trades, test_trades=bad_trades,
+            min_trades=3, min_pf=1.0
+        )
+        assert result["passed"] is False
+        assert result["test_pf"] < 1.0
+
+    def test_quality_gate_insufficient_trades_burns_in(self):
+        """_evaluate_quality_gate returns passed=True with BURN_IN reason when trades < min."""
+        wf = self._wf()
+        sparse_trades = [{"template_id": "GEN_T", "pnl_pct": -2.0}]  # 1 trade, PF=0.0
+        result = wf._evaluate_quality_gate(
+            "GEN_T", train_trades=[], test_trades=sparse_trades,
+            min_trades=3, min_pf=1.0
+        )
+        assert result["passed"] is True
+        assert "BURN_IN" in result["reason"]
+        assert result["test_trades"] == 1
+
+
 # ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
@@ -1578,7 +1644,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")
