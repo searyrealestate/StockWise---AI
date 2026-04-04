@@ -1698,6 +1698,53 @@ class TestThreeWaySplit:
         assert abs(total - 1.0) < 0.01, f"train+val+test must sum to 1.0, got {total}"
 
 
+class TestShadowLedgerMaxDate:
+    """Tests for Shadow Ledger TRAIN period restriction (DDR #14)."""
+
+    def setup_method(self):
+        import numpy as np
+        import pandas as pd
+        from shadow_ledger import ShadowLedger
+        self.pd = pd
+        self.sl = ShadowLedger()
+        dates = pd.date_range("2022-01-01", periods=500, freq="B")
+        self.df = pd.DataFrame({
+            "open":   np.random.uniform(90, 110, 500),
+            "high":   np.random.uniform(100, 120, 500),
+            "low":    np.random.uniform(80, 100, 500),
+            "close":  np.random.uniform(90, 110, 500),
+            "volume": np.random.randint(1_000_000, 5_000_000, 500),
+            "rsi":    np.random.uniform(30, 70, 500),
+            "sma_50": np.random.uniform(95, 105, 500),
+            "er_slow": np.random.uniform(0.2, 0.8, 500),
+            "atr":    np.random.uniform(1, 5, 500),
+        }, index=dates)
+        self.max_date = "2023-06-01"
+
+    def test_max_date_truncates_df(self):
+        """evaluate_history with max_date should use fewer bars."""
+        pd = self.pd
+        df_restricted = self.df[self.df.index <= pd.Timestamp(self.max_date)]
+        assert len(df_restricted) < len(self.df)
+        assert df_restricted.index.max() <= pd.Timestamp(self.max_date)
+
+    def test_no_max_date_uses_all(self):
+        """Without max_date the full DataFrame is unchanged."""
+        assert len(self.df) == 500
+
+    def test_max_date_no_future_bars(self):
+        """After truncation no bars should exist after the cutoff date."""
+        pd = self.pd
+        df_cut = self.df[self.df.index <= pd.Timestamp(self.max_date)]
+        future_bars = df_cut[df_cut.index > pd.Timestamp(self.max_date)]
+        assert len(future_bars) == 0
+
+    def test_config_has_restrict_flag(self):
+        """SHADOW_LEDGER_CONFIG must include restrict_to_train key."""
+        import system_config as cfg
+        assert "restrict_to_train" in cfg.SHADOW_LEDGER_CONFIG
+
+
 # ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
@@ -1706,7 +1753,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

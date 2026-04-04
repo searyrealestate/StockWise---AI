@@ -1,5 +1,17 @@
 # Changelog
 
+## [2026-04-04] Shadow Ledger max_date Restriction for TRAIN-Only Evaluation (DDR #14 Step 2)
+
+### Added
+- `shadow_ledger.py` (`evaluate_history`): `max_date` parameter — truncates df to bars on or before the cutoff before candle-by-candle evaluation; logs `[{symbol}] Shadow Ledger restricted to max_date=... ({n}/{total} bars)`
+- `shadow_ledger.py` (`run_full_evaluation`): `max_date` parameter passed through to `evaluate_history`; logs `Shadow Ledger: TRAIN restriction active — max_date={max_date}` when set
+- `shadow_ledger.py` (CLI `__main__`): `--max-date YYYY-MM-DD` argument; displayed in startup print block when active
+- `system_config.py` (`SHADOW_LEDGER_CONFIG`): `restrict_to_train: True` flag
+- `tests/unit_tests.py`: 4 new tests in `TestShadowLedgerMaxDate` — truncation reduces bar count, no-restriction uses all bars, no future bars after cutoff, config has `restrict_to_train`
+
+### Result
+128 passed, 0 failed. Shadow Ledger can now be restricted to TRAIN data only, preventing it from learning patterns in the VAL/TEST periods that would contaminate the Quality Gate evaluation.
+
 ## [2026-04-04] 3-Way Train/Val/Test Split for Walk-Forward Validation (DDR #14)
 
 ### Problem

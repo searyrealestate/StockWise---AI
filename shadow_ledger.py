@@ -63,7 +63,7 @@ class ShadowLedger:
         data["template_stats"] = self.ledger.get("template_stats", {})
         safe_json_write(self.ledger_path, data)
 
-    def evaluate_history(self, symbol, df, stock_state_fn=None):
+    def evaluate_history(self, symbol, df, stock_state_fn=None, max_date=None):
         """
         Walk through df candle-by-candle, evaluate all templates at each bar.
 
@@ -71,10 +71,21 @@ class ShadowLedger:
             symbol: Ticker symbol
             df: Full historical DataFrame with features already calculated
             stock_state_fn: Callable(df_slice) → state dict. If None, skips state filtering.
+            max_date: Optional str/date — restrict evaluation to bars on or before this date.
+                      Used for TRAIN-only mode in the 3-way split pipeline (DDR #14).
 
         Returns:
             dict with per-template stats for this symbol
         """
+        # ═══ TRAIN PERIOD RESTRICTION (DDR #14) ═══
+        if max_date is not None:
+            original_len = len(df)
+            df = df[df.index <= pd.Timestamp(max_date)]
+            logger.info(
+                f"[{symbol}] Shadow Ledger restricted to max_date={max_date} "
+                f"({len(df)}/{original_len} bars)"
+            )
+
         min_candles = self.config.get('min_candles_for_eval', 200)
         if df is None or len(df) < min_candles:
             logger.debug(
@@ -1698,7 +1709,7 @@ class ShadowLedger:
             f"{periods:.1f} periods (rates by category)"
         )
 
-    def run_full_evaluation(self, data_source_manager, symbols=None, feature_engine=None):
+    def run_full_evaluation(self, data_source_manager, symbols=None, feature_engine=None, max_date=None):
         """
         Batch evaluation: run candle-by-candle for all symbols.
         Intended for OFFLINE/weekend execution per DDR Part C.
@@ -1707,6 +1718,8 @@ class ShadowLedger:
             data_source_manager: DSM instance for fetching data
             symbols: List of symbols. Defaults to DEFAULT_TRAINING_SYMBOLS from config.
             feature_engine: FeatureEngine instance for indicator calculation. Optional.
+            max_date: Optional str — restrict evaluation to bars on or before this date.
+                      Used for TRAIN-only mode in the 3-way split pipeline (DDR #14).
         """
         if symbols is None:
             symbols = list(getattr(cfg, 'DEFAULT_TRAINING_SYMBOLS', []))
@@ -1721,6 +1734,8 @@ class ShadowLedger:
             f"Shadow Ledger: Starting full evaluation for "
             f"{len(symbols)} symbols, {days_back} days back"
         )
+        if max_date:
+            logger.info(f"Shadow Ledger: TRAIN restriction active — max_date={max_date}")
 
         evaluated = 0
         skipped = 0
@@ -1738,7 +1753,7 @@ class ShadowLedger:
                 if feature_engine is not None:
                     df = feature_engine.calculate_features(df)
 
-                self.evaluate_history(symbol, df)
+                self.evaluate_history(symbol, df, max_date=max_date)
                 evaluated += 1
                 # Log per-symbol summary
                 sym_stats = self.ledger.get("template_stats", {}).get(symbol, {})
@@ -1919,6 +1934,11 @@ if __name__ == "__main__":
         "--days-back", type=int, default=None,
         help="Days of history to evaluate (default: from SHADOW_LEDGER_CONFIG.eval_days_back)"
     )
+    parser.add_argument(
+        "--max-date", type=str, default=None,
+        help="Restrict evaluation to bars on or before this date (YYYY-MM-DD). "
+             "Used for train-only mode in the 3-way split pipeline."
+    )
     args = parser.parse_args()
 
     # ── Setup logging to console ─────────────────────────────
@@ -1948,6 +1968,8 @@ if __name__ == "__main__":
     print(f"[ShadowLedger] Starting evaluation:")
     print(f"  Symbols:   {len(symbols)} ({', '.join(symbols[:5])}{'...' if len(symbols) > 5 else ''})")
     print(f"  Days back: {days_back}")
+    if args.max_date:
+        print(f"  Max date: {args.max_date} (TRAIN period restriction)")
     print(f"  Output:    {sl.ledger_path}")
     print()
 
@@ -1967,7 +1989,8 @@ if __name__ == "__main__":
     sl.run_full_evaluation(
         data_source_manager=dsm,
         symbols=symbols,
-        feature_engine=fe
+        feature_engine=fe,
+        max_date=args.max_date
     )
 
     elapsed = time.time() - start_time

@@ -453,6 +453,7 @@ SHADOW_LEDGER_CONFIG = {
     "min_candles_for_eval": 200,         # Matches MIN_CANDLES_FOR_PROCESSING — indicator warmup
     "min_bars_between_signals": 20,      # Cooldown: prevent correlated signals from same template
     "run_mode": "offline",               # "offline" = weekend batch only
+    "restrict_to_train": True,           # NEW: pipeline restricts SL to TRAIN period only
 }
 
 # Asset-Specific Optimization (DDR #1)
