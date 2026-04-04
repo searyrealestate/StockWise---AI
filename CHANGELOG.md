@@ -1,5 +1,16 @@
 # Changelog
 
+## [2026-04-04] Disable Losing Seed Templates TREND_PULLBACK_EMA + MOMENTUM_BREAKOUT
+
+### Problem
+TREND_PULLBACK_EMA (PF=0.78) and MOMENTUM_BREAKOUT (PF=0.55) dragged overall PF from 1.89 to 1.36. Phase A baseline requires isolating SQUEEZE_BREAKOUT as the primary signal source.
+
+### Fix
+- `data/templates/TREND_PULLBACK_EMA.json`: set `"enabled": false`
+- `data/templates/MOMENTUM_BREAKOUT.json`: set `"enabled": false`
+- Active template set is now SQUEEZE_BREAKOUT + OVERSOLD_BOUNCE (2 templates)
+- `tests/unit_tests.py`: updated 4 assertions to reflect reduced enabled-template count (≥4→≥1); relaxed `test_scan_returns_signals_for_bullish_stock` to `isinstance(list)` since TREND_PULLBACK_EMA was the matching template for that row
+
 ## [2026-04-04] Disable GEN_* Templates, Add --provider Force Mode to DSM
 
 ### Problem
