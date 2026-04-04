@@ -1745,6 +1745,32 @@ class TestShadowLedgerMaxDate:
         assert "restrict_to_train" in cfg.SHADOW_LEDGER_CONFIG
 
 
+class TestFullPipeline:
+    """Tests for the full Train/Val/Test pipeline orchestrator (DDR #14)."""
+
+    def test_pipeline_method_exists(self):
+        """WalkForwardValidator must have run_full_pipeline method."""
+        from backtest_engine import WalkForwardValidator
+        wfv = WalkForwardValidator(symbols=["AAPL"], initial_capital=100000)
+        assert hasattr(wfv, "run_full_pipeline"), \
+            "WalkForwardValidator must have run_full_pipeline method"
+
+    def test_pipeline_cli_flag_exists(self):
+        """CLI must accept --full-pipeline flag."""
+        import subprocess
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        result = subprocess.run(
+            [sys.executable, "backtest_engine.py", "--help"],
+            capture_output=True, text=True, encoding="utf-8",
+            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            env=env,
+        )
+        output = result.stdout + result.stderr
+        assert "full-pipeline" in output, \
+            "--full-pipeline flag not found in CLI --help output"
+
+
 # ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
@@ -1753,7 +1779,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

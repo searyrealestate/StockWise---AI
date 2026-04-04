@@ -1854,6 +1854,224 @@ class WalkForwardValidator:
         self._log_report(report)
         return report
 
+    def run_full_pipeline(self):
+        """
+        Full Train/Val/Test pipeline orchestrator (DDR #14).
+
+        Ensures complete data separation:
+        - Shadow Ledger sees only TRAIN data
+        - Generator creates templates from TRAIN patterns
+        - Quality Gate validates on VAL data
+        - Final report uses TEST data (never seen before)
+
+        Returns:
+            dict with keys: split_info, shadow_ledger_summary,
+            generation_report, quality_gate_results, final_test_summary
+        """
+        from shadow_ledger import ShadowLedger
+        from setup_templates import TemplateManager, TemplateGenerator
+        from data_source_manager import DataSourceManager
+        from feature_engine import FeatureEngine
+
+        report = {"steps_completed": [], "errors": []}
+
+        # ══════ STEP 1/7: Load data ══════
+        logger.info("[PIPELINE] " + "=" * 50)
+        logger.info("[PIPELINE] STEP 1/7: Loading data and computing features")
+        logger.info("[PIPELINE] " + "=" * 50)
+
+        fe = FeatureEngine()
+        dsm = DataSourceManager()
+        full_data = {}
+
+        for symbol in self.symbols:
+            try:
+                days_back = self.config.get("days_back", 1095)
+                df = dsm.get_stock_data(symbol, days_back=days_back, interval='1d')
+                if df is not None and len(df) >= self.config.get("min_candles_warmup", 200):
+                    df = fe.calculate_features(df)
+                    full_data[symbol] = df
+                    logger.info(f"[PIPELINE] {symbol}: {len(df)} bars loaded")
+                else:
+                    logger.warning(f"[PIPELINE] {symbol}: insufficient data, skipping")
+            except Exception as e:
+                logger.error(f"[PIPELINE] {symbol}: failed to load: {e}")
+
+        if not full_data:
+            report["errors"].append("No data loaded for any symbol")
+            return report
+        report["steps_completed"].append("data_loaded")
+        report["symbols_loaded"] = len(full_data)
+
+        # ══════ STEP 2/7: Compute 3-way split ══════
+        logger.info("[PIPELINE] " + "=" * 50)
+        logger.info("[PIPELINE] STEP 2/7: Computing 3-way split dates")
+        logger.info("[PIPELINE] " + "=" * 50)
+
+        train_data, val_data, test_data, split_info = self._split_data(full_data)
+
+        if not train_data or not val_data or not test_data:
+            report["errors"].append("Failed to compute 3-way split")
+            return report
+
+        split_date_1 = split_info.get("split_date_1", split_info.get("split_date"))
+        split_date_2 = split_info.get("split_date_2")
+
+        logger.info(
+            f"[PIPELINE] Split: TRAIN→{split_date_1} | VAL→{split_date_2} | "
+            f"TEST→end | {split_info.get('train_days', 0)}d/"
+            f"{split_info.get('val_days', 0)}d/{split_info.get('test_days', 0)}d"
+        )
+        report["split_info"] = split_info
+        report["steps_completed"].append("split_computed")
+
+        # ══════ STEP 3/7: Shadow Ledger on TRAIN only ══════
+        logger.info("[PIPELINE] " + "=" * 50)
+        logger.info("[PIPELINE] STEP 3/7: Shadow Ledger evaluation (TRAIN only)")
+        logger.info("[PIPELINE] " + "=" * 50)
+
+        try:
+            sl = ShadowLedger()
+            for symbol, df in full_data.items():
+                sl.evaluate_history(symbol, df, max_date=split_date_1)
+
+            sl.apply_decay()
+            sl._finalize_coverage_gaps()
+            sl._save_ledger()
+            try:
+                sl.tm.save_all()
+            except Exception:
+                pass
+
+            report["shadow_ledger_summary"] = {
+                "symbols_evaluated": len(full_data),
+                "max_date": split_date_1,
+            }
+            report["steps_completed"].append("shadow_ledger_done")
+            logger.info(f"[PIPELINE] Shadow Ledger complete — restricted to {split_date_1}")
+        except Exception as e:
+            report["errors"].append(f"Shadow Ledger failed: {e}")
+            logger.error(f"[PIPELINE] Shadow Ledger error: {e}")
+            return report
+
+        # ══════ STEP 4/7: Template generation ══════
+        logger.info("[PIPELINE] " + "=" * 50)
+        logger.info("[PIPELINE] STEP 4/7: Template generation from coverage gaps")
+        logger.info("[PIPELINE] " + "=" * 50)
+
+        created = []
+        try:
+            tg = TemplateGenerator(sl.tm)
+            gen_report = tg.generate_from_gaps()
+            report["generation_report"] = gen_report
+            report["steps_completed"].append("generation_done")
+            created = gen_report.get("created", [])
+            logger.info(f"[PIPELINE] Generated {len(created)} new templates: {created}")
+        except Exception as e:
+            report["errors"].append(f"Template generation failed: {e}")
+            logger.error(f"[PIPELINE] Generation error: {e}")
+
+        # ══════ STEP 5/7: Quality Gate on VAL ══════
+        logger.info("[PIPELINE] " + "=" * 50)
+        logger.info("[PIPELINE] STEP 5/7: Quality Gate validation (VAL only)")
+        logger.info("[PIPELINE] " + "=" * 50)
+
+        qg_results = {}
+        if created:
+            tm = TemplateManager()
+            for template_id in created:
+                try:
+                    logger.info(f"[PIPELINE-QG] Validating {template_id} on VAL data...")
+                    result = self.validate_single_template(template_id, full_data)
+                    qg_results[template_id] = result
+
+                    if result.get("passed"):
+                        logger.info(
+                            f"[PIPELINE-QG] {template_id}: PASSED "
+                            f"(val_pf={result.get('test_pf', 0):.2f}, "
+                            f"val_trades={result.get('test_trades', 0)})"
+                        )
+                    else:
+                        logger.warning(
+                            f"[PIPELINE-QG] {template_id}: FAILED — "
+                            f"{result.get('reason', 'unknown')}"
+                        )
+                        tm.disable_template(template_id)
+                        logger.info(f"[PIPELINE-QG] {template_id}: disabled")
+                except Exception as e:
+                    logger.error(f"[PIPELINE-QG] {template_id}: error — {e}")
+                    qg_results[template_id] = {"passed": False, "reason": f"error: {e}"}
+        else:
+            logger.info("[PIPELINE-QG] No new templates to validate")
+
+        report["quality_gate_results"] = qg_results
+        report["steps_completed"].append("quality_gate_done")
+
+        # ══════ STEP 6/7: Final backtest on TEST ══════
+        logger.info("[PIPELINE] " + "=" * 50)
+        logger.info("[PIPELINE] STEP 6/7: Final backtest (TEST period only)")
+        logger.info("[PIPELINE] " + "=" * 50)
+
+        try:
+            test_engine = BacktestEngine(
+                symbols=list(test_data.keys()),
+                initial_capital=self.initial_capital,
+                use_risk_gates=self.use_risk_gates,
+                data_cache=test_data,
+            )
+            test_engine.feed_shadow_ledger = False
+            test_results = test_engine.run()
+
+            report["final_test_summary"] = test_results.get("summary", {})
+            report["final_test_trades"] = len(
+                test_results.get("trades", getattr(test_engine, "closed_trades", []))
+            )
+            report["steps_completed"].append("final_test_done")
+
+            test_s = test_results.get("summary", {})
+            logger.info(
+                f"[PIPELINE] TEST results: {test_s.get('total_trades', 0)} trades | "
+                f"WR={test_s.get('win_rate', 0):.1f}% | "
+                f"PF={test_s.get('profit_factor', 0):.2f} | "
+                f"Return={test_s.get('total_return_pct', 0):.2f}%"
+            )
+        except Exception as e:
+            report["errors"].append(f"Final test failed: {e}")
+            logger.error(f"[PIPELINE] Final test error: {e}")
+
+        # ══════ STEP 7/7: Summary report ══════
+        logger.info("[PIPELINE] " + "=" * 50)
+        logger.info("[PIPELINE] STEP 7/7: Pipeline complete")
+        logger.info("[PIPELINE] " + "=" * 50)
+
+        report["pipeline_status"] = (
+            "COMPLETE" if not report["errors"] else "COMPLETED_WITH_ERRORS"
+        )
+
+        passed = sum(1 for r in qg_results.values() if r.get("passed"))
+        failed = len(qg_results) - passed
+        ts = report.get("final_test_summary", {})
+
+        print(f"\n{'=' * 55}")
+        print("FULL PIPELINE REPORT")
+        print(f"{'=' * 55}")
+        print(f"Symbols:      {report.get('symbols_loaded', 0)}")
+        print(f"Split:        TRAIN→{split_date_1} | VAL→{split_date_2}")
+        print(f"SL max_date:  {split_date_1} (TRAIN only)")
+        print(f"Generated:    {len(created)} templates")
+        print(f"QG results:   {passed} passed, {failed} failed")
+        print(
+            f"TEST period:  {ts.get('total_trades', 0)} trades | "
+            f"PF={ts.get('profit_factor', 0):.2f} | "
+            f"WR={ts.get('win_rate', 0):.1f}%"
+        )
+        print(f"Steps done:   {report['steps_completed']}")
+        if report["errors"]:
+            print(f"Errors:       {report['errors']}")
+        print(f"{'=' * 55}\n")
+
+        return report
+
     def _split_data(self, full_data):
         """3-Way chronological split: Train / Val / Test.
 
@@ -2289,7 +2507,24 @@ def main():
     parser.add_argument("--output",        default=BACKTEST_RESULTS_PATH)
     parser.add_argument("--walk-forward",  action="store_true",
                         help="Run Walk-Forward Validation (70/30 split, CP-2 checkpoint)")
+    parser.add_argument("--full-pipeline", action="store_true",
+                        help="Run full Train/Val/Test pipeline: SL→Generate→QG→Test (DDR #14)")
     args = parser.parse_args()
+
+    if args.full_pipeline:
+        wf = WalkForwardValidator(
+            symbols=args.symbols,
+            initial_capital=args.capital,
+            use_risk_gates=not args.no_risk_gates,
+        )
+        report = wf.run_full_pipeline()
+
+        pipeline_path = args.output.replace(".json", "_pipeline.json")
+        safe_json_write(pipeline_path, report)
+        print(f"\nPipeline report saved: {pipeline_path}")
+
+        has_errors = bool(report.get("errors"))
+        sys.exit(1 if has_errors else 0)
 
     if args.walk_forward:
         wf = WalkForwardValidator(

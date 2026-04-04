@@ -1,5 +1,19 @@
 # Changelog
 
+## [2026-04-04] Full Pipeline Orchestrator — SL→Generate→QG→Test with 3-Way Data Separation (DDR #14)
+
+### Added
+- `backtest_engine.py` (`WalkForwardValidator.run_full_pipeline`): 7-step orchestrator that enforces complete data separation across all pipeline stages: load data → compute split → Shadow Ledger (TRAIN only, via `max_date=split_date_1`) → template generation (from TRAIN coverage gaps) → Quality Gate (VAL data) → final backtest (TEST data) → summary report
+- `backtest_engine.py` (CLI): `--full-pipeline` flag — invokes `run_full_pipeline()` and saves report to `data/backtest_results_pipeline.json`
+- Templates that fail Quality Gate are automatically disabled via `disable_template()` before the TEST backtest runs
+- `tests/unit_tests.py`: 2 new tests in `TestFullPipeline` — method existence and CLI `--full-pipeline` flag presence
+
+### Notes
+- CLI test uses `PYTHONIOENCODING=utf-8` env override to work around Windows cp1252 crash on `→` in existing help text
+
+### Result
+130 passed, 0 failed
+
 ## [2026-04-04] Shadow Ledger max_date Restriction for TRAIN-Only Evaluation (DDR #14 Step 2)
 
 ### Added
