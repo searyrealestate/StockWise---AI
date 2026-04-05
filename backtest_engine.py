@@ -151,7 +151,7 @@ class BacktestEngine:
 
     def __init__(self, data_cache=None, symbols=None,
                  initial_capital=None, config_overrides=None,
-                 use_risk_gates=True):
+                 use_risk_gates=True, timeframe="1d"):
         self.symbols = symbols or list(getattr(cfg, "DEFAULT_TRAINING_SYMBOLS", []))
         self.config = dict(BACKTEST_CONFIG)
         if config_overrides:
@@ -162,6 +162,7 @@ class BacktestEngine:
         self.use_risk_gates = use_risk_gates
         self.feed_shadow_ledger = True
         self.data_cache = data_cache or {}   # symbol → DataFrame (with features)
+        self.timeframe = timeframe
 
         # Components
         self.fe      = FeatureEngine()
@@ -294,8 +295,11 @@ class BacktestEngine:
         warmup = self.config["min_candles_warmup"]
         for sym in self.symbols:
             try:
+                tf_configs = getattr(cfg, 'PIPELINE_TIMEFRAMES', {})
+                tf_cfg = tf_configs.get(self.timeframe, {})
+                _source = tf_cfg.get("data_source", "AUTO")
                 df = dsm.get_stock_data(sym, days_back=self.config["days_back"],
-                                        interval="1d")
+                                        interval=self.timeframe, source=_source)
                 if df is None or len(df) < warmup:
                     logger.warning(f"  {sym}: insufficient data")
                     continue
@@ -1729,7 +1733,7 @@ class WalkForwardValidator:
     """
 
     def __init__(self, symbols=None, initial_capital=None,
-                 use_risk_gates=True, data_cache=None):
+                 use_risk_gates=True, data_cache=None, timeframe="1d"):
         wf_cfg = getattr(cfg, 'WALK_FORWARD_CONFIG', {})
         self.symbols = symbols or list(getattr(cfg, "DEFAULT_TRAINING_SYMBOLS", []))
         self.initial_capital = initial_capital or BACKTEST_CONFIG["initial_capital"]
@@ -1737,7 +1741,15 @@ class WalkForwardValidator:
         self.train_pct = wf_cfg.get("train_pct", 0.60)
         self.val_pct   = wf_cfg.get("val_pct",   0.20)
         self.data_cache = data_cache  # optional pre-loaded data
-        self.config = wf_cfg
+        self.config = dict(wf_cfg)
+        self.timeframe = timeframe
+
+        # Load timeframe-specific config and override days_back / warmup
+        tf_configs = getattr(cfg, 'PIPELINE_TIMEFRAMES', {})
+        self.tf_config = tf_configs.get(timeframe, tf_configs.get("1d", {}))
+        if self.tf_config:
+            self.config["days_back"] = self.tf_config.get("days_back", self.config.get("days_back", 1095))
+            self.config["min_candles_warmup"] = self.tf_config.get("min_candles_warmup", 200)
 
     def validate(self) -> dict:
         """
@@ -1762,6 +1774,7 @@ class WalkForwardValidator:
             initial_capital=self.initial_capital,
             use_risk_gates=self.use_risk_gates,
             data_cache=self.data_cache,
+            timeframe=self.timeframe,
         )
         loader._ensure_data()
         full_data = loader.data_cache
@@ -1884,10 +1897,14 @@ class WalkForwardValidator:
         dsm = DataSourceManager()
         full_data = {}
 
+        interval = self.timeframe
+        source = self.tf_config.get("data_source", "AUTO") if self.tf_config else "AUTO"
+
         for symbol in self.symbols:
             try:
                 days_back = self.config.get("days_back", 1095)
-                df = dsm.get_stock_data(symbol, days_back=days_back, interval='1d')
+                logger.info(f"[PIPELINE] {symbol}: fetching {interval} data, source={source}, days_back={days_back}")
+                df = dsm.get_stock_data(symbol, days_back=days_back, interval=interval, source=source)
                 if df is not None and len(df) >= self.config.get("min_candles_warmup", 200):
                     df = fe.calculate_features(df)
                     full_data[symbol] = df
@@ -1927,7 +1944,7 @@ class WalkForwardValidator:
 
         # ══════ STEP 3/7: Shadow Ledger on TRAIN only ══════
         logger.info("[PIPELINE] " + "=" * 50)
-        logger.info("[PIPELINE] STEP 3/7: Shadow Ledger evaluation (TRAIN only)")
+        logger.info(f"[PIPELINE] STEP 3/7: Shadow Ledger evaluation (TRAIN only, {self.timeframe} bars)")
         logger.info("[PIPELINE] " + "=" * 50)
 
         try:
@@ -2033,6 +2050,7 @@ class WalkForwardValidator:
                 initial_capital=self.initial_capital,
                 use_risk_gates=self.use_risk_gates,
                 data_cache=test_data,
+                timeframe=self.timeframe,
             )
             test_engine.feed_shadow_ledger = False
             test_results = test_engine.run()
@@ -2520,6 +2538,9 @@ def main():
     parser.add_argument("--no-feed-shadow-ledger", action="store_true", default=False,
                         help="Skip feeding results into shadow_ledger.json")
     parser.add_argument("--output",        default=BACKTEST_RESULTS_PATH)
+    parser.add_argument("--timeframe",     type=str, default="1d",
+                        choices=["1d", "2h"],
+                        help="Data timeframe: '1d' (daily) or '2h' (2-hour bars)")
     parser.add_argument("--walk-forward",  action="store_true",
                         help="Run Walk-Forward Validation (70/30 split, CP-2 checkpoint)")
     parser.add_argument("--full-pipeline", action="store_true",
@@ -2531,6 +2552,7 @@ def main():
             symbols=args.symbols,
             initial_capital=args.capital,
             use_risk_gates=not args.no_risk_gates,
+            timeframe=args.timeframe,
         )
         report = wf.run_full_pipeline()
 
@@ -2546,6 +2568,7 @@ def main():
             symbols=args.symbols,
             initial_capital=args.capital,
             use_risk_gates=not args.no_risk_gates,
+            timeframe=args.timeframe,
         )
         report = wf.validate()
 
@@ -2574,6 +2597,7 @@ def main():
         symbols=args.symbols,
         initial_capital=args.capital,
         use_risk_gates=not args.no_risk_gates,
+        timeframe=args.timeframe,
         config_overrides={
             "position_size_pct": args.position_size,
             "max_positions":     args.max_positions,

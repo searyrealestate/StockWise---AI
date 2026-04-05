@@ -1872,6 +1872,42 @@ class TestTemplateTimeframe:
             "TEMPLATE_EVOLUTION_CONFIG['generation'] must include default_timeframe"
 
 
+class TestPipelineTimeframe:
+    """Tests for pipeline timeframe parameter wiring."""
+
+    def test_wfv_accepts_timeframe(self):
+        """WalkForwardValidator must accept timeframe parameter."""
+        from backtest_engine import WalkForwardValidator
+        wfv = WalkForwardValidator(symbols=["AAPL"], timeframe="2h")
+        assert wfv.timeframe == "2h"
+
+    def test_wfv_default_timeframe(self):
+        """WalkForwardValidator defaults to '1d'."""
+        from backtest_engine import WalkForwardValidator
+        wfv = WalkForwardValidator(symbols=["AAPL"])
+        assert wfv.timeframe == "1d"
+
+    def test_2h_config_overrides_days_back(self):
+        """2h timeframe must override days_back from PIPELINE_TIMEFRAMES."""
+        from backtest_engine import WalkForwardValidator
+        wfv = WalkForwardValidator(symbols=["AAPL"], timeframe="2h")
+        assert wfv.config["days_back"] == 1825
+
+    def test_cli_timeframe_flag(self):
+        """CLI must accept --timeframe flag."""
+        import subprocess, sys
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        result = subprocess.run(
+            [sys.executable, "backtest_engine.py", "--help"],
+            capture_output=True, text=True,
+            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            env=env,
+        )
+        assert "timeframe" in result.stdout + result.stderr, \
+            "--timeframe flag missing from CLI help"
+
+
 class TestDSM2HourSupport:
     """Tests for 2-hour interval support in DataSourceManager."""
 
@@ -1920,7 +1956,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestDSM2HourSupport]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestPipelineTimeframe, TestDSM2HourSupport]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

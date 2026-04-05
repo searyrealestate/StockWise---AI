@@ -1,5 +1,24 @@
 # Changelog
 
+## [2026-04-05] Wire PIPELINE_TIMEFRAMES into Pipeline + --timeframe CLI Flag (MTFA Phase 1)
+
+### Added
+- **`backtest_engine.py` (CLI)**: `--timeframe 1d|2h` flag — applies to backtest, walk-forward, and full-pipeline modes
+- **`backtest_engine.py` (`WalkForwardValidator.__init__`)**: `timeframe` parameter (default `"1d"`); reads `PIPELINE_TIMEFRAMES` config to override `days_back` and `min_candles_warmup` per timeframe; stores `self.tf_config`
+- **`backtest_engine.py` (`BacktestEngine.__init__`)**: `timeframe` parameter (default `"1d"`); stored as `self.timeframe`
+- **`backtest_engine.py` (`BacktestEngine.run`)**: Data fetch uses `interval=self.timeframe` and `source` from `PIPELINE_TIMEFRAMES` (e.g. `ALPACA` for `2h`)
+- **`backtest_engine.py` (`run_full_pipeline` Step 1)**: Data fetch uses timeframe-specific interval and source; logs `fetching {interval} data, source={source}`
+- **`backtest_engine.py` (`run_full_pipeline` Step 3)**: Log now includes active timeframe
+- **`backtest_engine.py` (`run_full_pipeline` Step 6)**: `BacktestEngine` instantiated with `timeframe=self.timeframe`
+- **`tests/unit_tests.py` (`TestPipelineTimeframe`)**: 4 new tests — WFV accepts `timeframe`, defaults to `"1d"`, `2h` overrides `days_back=1825`, CLI `--timeframe` in help text
+
+### Notes
+- No behavior change for existing daily pipeline — `timeframe` defaults to `"1d"` throughout
+- `--timeframe 2h` routes data fetch to Alpaca (per `PIPELINE_TIMEFRAMES["2h"]["data_source"] = "ALPACA"`) which provides 6,032 bars over 5+ years
+
+### Result
+147 passed, 0 failed
+
 ## [2026-04-05] 2h Interval Support in Data Providers (MTFA Phase 1)
 
 ### Added
