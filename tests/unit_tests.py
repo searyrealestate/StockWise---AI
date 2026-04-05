@@ -1774,18 +1774,18 @@ class TestFullPipeline:
 class TestPipelineBugFixes:
     """Tests for pipeline bug fixes — GEN cleanup, safe_json_write, stock_state_fn (DDR #14)."""
 
-    def test_no_gen_templates_on_disk(self):
-        """No GEN_* template files should exist after cleanup."""
-        templates_dir = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "data", "templates"
-        )
-        if os.path.exists(templates_dir):
-            gen_files = [
-                f for f in os.listdir(templates_dir)
-                if f.startswith("GEN_") and f.endswith(".json")
-            ]
-            assert len(gen_files) == 0, f"GEN files should be deleted: {gen_files}"
+    def test_gen_templates_skipped_when_generation_disabled(self):
+        """GEN_* template files on disk are not loaded when generation.enabled=False."""
+        import system_config as cfg
+        from setup_templates import TemplateManager
+        original = cfg.TEMPLATE_EVOLUTION_CONFIG["generation"]["enabled"]
+        try:
+            cfg.TEMPLATE_EVOLUTION_CONFIG["generation"]["enabled"] = False
+            tm = TemplateManager()
+            gen_ids = [tid for tid in tm.templates.keys() if tid.startswith("GEN_")]
+            assert gen_ids == [], f"GEN_* must not load when generation disabled: {gen_ids}"
+        finally:
+            cfg.TEMPLATE_EVOLUTION_CONFIG["generation"]["enabled"] = original
 
     def test_safe_json_write_windows_compatible(self):
         """safe_json_write should handle os.replace failure gracefully (double write)."""
@@ -1812,6 +1812,66 @@ class TestPipelineBugFixes:
             "run_full_pipeline must reference classify_stock_state"
 
 
+class TestTemplateTimeframe:
+    """Tests for template timeframe field — preparation for MTFA."""
+
+    def _minimal_template_data(self, **overrides):
+        data = {
+            "id": "TEST_TF", "name": "Test", "description": "test", "version": 1,
+            "source": "seed", "enabled": True,
+            "required_state": {"trend": ["BULLISH"]},
+            "conditions": [{"block": "rsi_above", "params": [50]}],
+            "entry": {"type": "close", "confirmation_candles": 0},
+            "stop_loss": {"method": "atr", "atr_multiplier": 1.5, "fallback_pct": 0.02},
+            "take_profit": {"method": "atr", "atr_multiplier": 3.0, "use_runner_mode": False},
+        }
+        data.update(overrides)
+        return data
+
+    def test_seed_templates_have_timeframe(self):
+        """All seed template JSON files must have timeframe='1d'."""
+        import json
+        templates_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "data", "templates"
+        )
+        for f in sorted(os.listdir(templates_dir)):
+            if f.endswith(".json") and not f.startswith("GEN_"):
+                with open(os.path.join(templates_dir, f)) as fp:
+                    data = json.load(fp)
+                assert data.get("timeframe") == "1d", \
+                    f"{f} missing timeframe='1d' (got {data.get('timeframe')!r})"
+
+    def test_template_default_timeframe(self):
+        """Template without timeframe field defaults to '1d'."""
+        from setup_templates import SetupTemplate
+        t = SetupTemplate(self._minimal_template_data())
+        assert t.timeframe == "1d", f"Expected '1d', got {t.timeframe!r}"
+
+    def test_timeframe_in_to_dict(self):
+        """to_dict() must include timeframe."""
+        from setup_templates import SetupTemplate
+        t = SetupTemplate(self._minimal_template_data(timeframe="2h"))
+        d = t.to_dict()
+        assert d["timeframe"] == "2h", f"Expected '2h', got {d.get('timeframe')!r}"
+
+    def test_get_for_timeframe(self):
+        """get_for_timeframe filters templates by timeframe correctly."""
+        from setup_templates import TemplateManager
+        tm = TemplateManager()
+        daily = tm.get_for_timeframe("1d")
+        hourly = tm.get_for_timeframe("2h")
+        assert len(daily) > 0, "Expected at least one daily template"
+        assert len(hourly) == 0, f"Expected no 2h templates, got {len(hourly)}"
+
+    def test_generation_config_has_timeframe(self):
+        """Generation config must include default_timeframe."""
+        import system_config as cfg
+        gen_cfg = cfg.TEMPLATE_EVOLUTION_CONFIG["generation"]
+        assert "default_timeframe" in gen_cfg, \
+            "TEMPLATE_EVOLUTION_CONFIG['generation'] must include default_timeframe"
+
+
 # ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
@@ -1820,7 +1880,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

@@ -578,6 +578,7 @@ TEMPLATE_EVOLUTION_CONFIG = {
         "default_confirmation_candles": 1,   # Default entry confirmation candles
         "use_runner_for_reversal": False,     # Mean reversion templates: no runner mode
         "use_runner_for_breakout": True,      # Breakout templates: use runner mode
+        "default_timeframe": "1d",           # Default timeframe for generated templates
     },
     "signal_direction": {
         "enabled": True,

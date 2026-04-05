@@ -1,23 +1,75 @@
 {
-  "id": "VSA_INSTITUTIONAL",
-  "name": "VSA Institutional Buying",
-  "description": "High volume bullish candle = institutional accumulation",
-  "version": 1,
-  "source": "seed",
-  "enabled": false,
-  "required_state": {
-    "trend": ["BULLISH", "SIDEWAYS"],
-    "volume": ["SURGING"],
-    "volatility": ["NORMAL", "VOLATILE"]
-  },
-  "conditions": [
-    {"block": "volume_surge", "params": [1.5]},
-    {"block": "bullish_candle", "params": []},
-    {"block": "close_above_sma", "params": [50]},
-    {"block": "rsi_between", "params": [30, 75]}
-  ],
-  "entry": {"type": "close", "confirmation_candles": 0},
-  "stop_loss": {"method": "swing_low", "atr_multiplier": 0.5, "fallback_pct": 0.02},
-  "take_profit": {"method": "atr", "atr_multiplier": 3.0, "use_runner_mode": true},
-  "statistics": {"total_activations": 0, "wins": 0, "losses": 0, "avg_profit_pct": 0.0, "avg_loss_pct": 0.0, "win_rate": 0.0, "last_activated": null, "best_tickers": {}, "worst_tickers": {}, "best_conditions": [], "created_at": "2026-03-10T00:00:00", "updated_at": "2026-03-10T00:00:00"}
+    "id": "VSA_INSTITUTIONAL",
+    "name": "VSA Institutional Buying",
+    "description": "High volume bullish candle = institutional accumulation",
+    "version": 1,
+    "source": "seed",
+    "timeframe": "1d",
+    "enabled": false,
+    "required_state": {
+        "trend": [
+            "BULLISH",
+            "SIDEWAYS"
+        ],
+        "volume": [
+            "SURGING"
+        ],
+        "volatility": [
+            "NORMAL",
+            "VOLATILE"
+        ]
+    },
+    "conditions": [
+        {
+            "block": "volume_surge",
+            "params": [
+                1.5
+            ]
+        },
+        {
+            "block": "bullish_candle",
+            "params": []
+        },
+        {
+            "block": "close_above_sma",
+            "params": [
+                50
+            ]
+        },
+        {
+            "block": "rsi_between",
+            "params": [
+                30,
+                75
+            ]
+        }
+    ],
+    "entry": {
+        "type": "close",
+        "confirmation_candles": 0
+    },
+    "stop_loss": {
+        "method": "swing_low",
+        "atr_multiplier": 0.5,
+        "fallback_pct": 0.02
+    },
+    "take_profit": {
+        "method": "atr",
+        "atr_multiplier": 3.0,
+        "use_runner_mode": true
+    },
+    "statistics": {
+        "total_activations": 0,
+        "wins": 0,
+        "losses": 0,
+        "avg_profit_pct": 0.0,
+        "avg_loss_pct": 0.0,
+        "win_rate": 0.0,
+        "last_activated": null,
+        "best_tickers": {},
+        "worst_tickers": {},
+        "best_conditions": [],
+        "created_at": "2026-03-10T00:00:00",
+        "updated_at": "2026-03-10T00:00:00"
+    }
 }

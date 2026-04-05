@@ -1,5 +1,21 @@
 # Changelog
 
+## [2026-04-05] Timeframe Field in Template System — Preparation for MTFA
+
+### Added
+- **`setup_templates.py` (`SetupTemplate`)**: `timeframe` field — defaults to `'1d'`, read from `data.get('timeframe', '1d')`. Included in `to_dict()` output. `validate()` enforces whitelist: `["1d", "2h", "1h", "4h", "15m"]`
+- **`setup_templates.py` (`TemplateManager.get_for_timeframe`)**: New method returning enabled templates matching a given timeframe (default `'1d'`)
+- **`setup_templates.py` (`TemplateManager.get_for_state`)**: Added optional `timeframe=None` parameter — when set, only templates matching that timeframe are returned
+- **`setup_templates.py` (`load_all`)**: Skip GEN_* files entirely when `generation.enabled=False` (fixes false positives in `TestGenTemplatesDisabled`)
+- **`setup_templates.py` (`_build_template_from_recipe`)**: Sets `"timeframe"` from `generation.default_timeframe` config key (default `'1d'`)
+- **`system_config.py` (`TEMPLATE_EVOLUTION_CONFIG["generation"]`)**: `default_timeframe: "1d"` key
+- **5 seed JSON files** (`data/templates/*.json`): `"timeframe": "1d"` field inserted after `"source"` in SQUEEZE_BREAKOUT, OVERSOLD_BOUNCE, TREND_PULLBACK_EMA, MOMENTUM_BREAKOUT, VSA_INSTITUTIONAL
+- **`tests/unit_tests.py` (`TestTemplateTimeframe`)**: 5 new tests — seed files have timeframe, default is `'1d'`, present in `to_dict()`, `get_for_timeframe()` filters correctly, generation config has `default_timeframe`
+- **`tests/unit_tests.py` (`TestPipelineBugFixes`)**: Replaced stale `test_no_gen_templates_on_disk` (depended on disk state) with `test_gen_templates_skipped_when_generation_disabled` — tests actual behavior of the `load_all` skip logic
+
+### Result
+138 passed, 0 failed
+
 ## [2026-04-05] Clean GEN_* Templates + Fix 3 Pipeline Bugs (DDR #14)
 
 ### Fixed

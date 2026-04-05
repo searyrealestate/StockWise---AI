@@ -406,6 +406,7 @@ class SetupTemplate:
         self.name = data.get('name', 'Unnamed Template')
         self.enabled = data.get('enabled', True)
         self.source = data.get('source', 'seed')
+        self.timeframe = data.get('timeframe', '1d')  # Default: daily for backward compat
         self.category = data.get('category', 'default')
         self.required_state = data.get('required_state', {})
         self.conditions = data.get('conditions', [])
@@ -534,6 +535,11 @@ class SetupTemplate:
         # Validate take_profit
         if self.take_profit.get('method') not in ['atr', 'resistance', 'fixed_pct']:
             errors.append(f"Invalid take_profit method: {self.take_profit.get('method')}")
+
+        # Validate timeframe
+        valid_timeframes = ["1d", "2h", "1h", "4h", "15m"]
+        if self.timeframe not in valid_timeframes:
+            errors.append(f"Invalid timeframe: {self.timeframe}")
 
         # ── Anti-Overfitting Validation ──────────────────────────────
         tmpl_cfg = getattr(cfg, 'TEMPLATE_CONFIG', {})
@@ -1030,6 +1036,7 @@ class SetupTemplate:
             "description": self.data.get('description', ''),
             "version": self.data.get('version', 1),
             "source": self.source,
+            "timeframe": self.timeframe,
             "category": self.category,
             "enabled": self.enabled,
             "required_state": self.required_state,
@@ -1061,8 +1068,13 @@ class TemplateManager:
             logger.warning(f"Templates directory not found: {self.templates_dir}")
             return
 
+        gen_enabled = cfg.TEMPLATE_EVOLUTION_CONFIG.get("generation", {}).get("enabled", True)
+
         for filename in os.listdir(self.templates_dir):
             if not filename.endswith('.json'):
+                continue
+            if not gen_enabled and filename.startswith("GEN_"):
+                logger.debug(f"Skipping GEN template (generation disabled): {filename}")
                 continue
             filepath = os.path.join(self.templates_dir, filename)
             try:
@@ -1128,15 +1140,28 @@ class TemplateManager:
         """Return list of all enabled templates."""
         return [t for t in self.templates.values() if t.enabled]
 
-    def get_for_state(self, stock_state, symbol=""):
+    def get_for_timeframe(self, timeframe="1d"):
+        """Return only enabled templates matching the given timeframe."""
+        return [t for t in self.templates.values()
+                if t.enabled and t.timeframe == timeframe]
+
+    def get_for_state(self, stock_state, symbol="", timeframe=None):
         """
         Return templates that match the stock's current state.
         Filters enabled templates by required_state compatibility.
         Logs match/reject reasons per template for analysis.
+
+        Args:
+            stock_state: dict with trend, structure, volatility, volume keys
+            symbol: ticker symbol for logging
+            timeframe: optional — if set, only templates matching this timeframe are considered
         """
         matching = []
         enabled = self.get_enabled()
         for template in enabled:
+            # Skip templates for a different timeframe if specified
+            if timeframe and template.timeframe != timeframe:
+                continue
             if self._state_matches(template.required_state, stock_state):
                 matching.append(template)
                 logger.debug(f"[{symbol}] [REGIME] ✓ {template.name} — state match")
@@ -1428,6 +1453,7 @@ class TemplateGenerator:
             "description": recipe.get("description", f"Auto-generated from recipe {recipe_id}"),
             "version": 1,
             "source": gen_cfg.get("source_label", "generated"),
+            "timeframe": gen_cfg.get("default_timeframe", "1d"),
             "category": recipe.get("category", "default"),
             "enabled": True,
             "required_state": required_state,
