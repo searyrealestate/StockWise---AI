@@ -1,5 +1,18 @@
 # Changelog
 
+## [2026-04-05] 2h Interval Support in Data Providers (MTFA Phase 1)
+
+### Added
+- **`data_source_manager.py` (`_download_from_alpaca`)**: `"2h"` → `TimeFrame(2, TimeFrameUnit.Hour)` mapping
+- **`data_source_manager.py` (`_download_from_ibkr`)**: `"2h": "2 hours"` added to `ib_interval_map`
+- **`data_source_manager.py` (`_download_from_massive`)**: `"2h"` → `timespan='hour', multiplier=2` mapping
+- **`data_source_manager.py` (`_download_from_yfinance`)**: Early-return guard for `interval == "2h"` (Yahoo Finance does not support 2h bars)
+- **`system_config.py` (`PIPELINE_TIMEFRAMES`)**: New config block — per-timeframe settings (data_source, days_back, min_candles_warmup, eval_days_back) for `"1d"` and `"2h"`; `"default": "1d"` for backward compatibility
+- **`tests/unit_tests.py` (`TestDSM2HourSupport`)**: 5 new tests — Alpaca/IBKR/Massive source checks, YFinance rejection guard, PIPELINE_TIMEFRAMES config structure
+
+### Result
+143 passed, 0 failed
+
 ## [2026-04-05] Timeframe Field in Template System — Preparation for MTFA
 
 ### Added

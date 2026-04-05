@@ -1872,6 +1872,46 @@ class TestTemplateTimeframe:
             "TEMPLATE_EVOLUTION_CONFIG['generation'] must include default_timeframe"
 
 
+class TestDSM2HourSupport:
+    """Tests for 2-hour interval support in DataSourceManager."""
+
+    def test_alpaca_2h_mapping(self):
+        """Alpaca interval mapping must include 2h."""
+        import inspect
+        from data_source_manager import DataSourceManager
+        source = inspect.getsource(DataSourceManager._download_from_alpaca)
+        assert '"2h"' in source, "Alpaca must handle '2h' interval"
+
+    def test_ibkr_2h_mapping(self):
+        """IBKR interval mapping must include 2h."""
+        import inspect
+        from data_source_manager import DataSourceManager
+        source = inspect.getsource(DataSourceManager._download_from_ibkr)
+        assert '"2h"' in source, "IBKR must handle '2h' interval"
+
+    def test_massive_2h_mapping(self):
+        """Massive interval mapping must include 2h."""
+        import inspect
+        from data_source_manager import DataSourceManager
+        source = inspect.getsource(DataSourceManager._download_from_massive)
+        assert "'2h'" in source, "Massive must handle '2h' interval"
+
+    def test_yfinance_rejects_2h(self):
+        """YFinance must gracefully reject 2h interval."""
+        import inspect
+        from data_source_manager import DataSourceManager
+        source = inspect.getsource(DataSourceManager._download_from_yfinance)
+        assert "2h" in source, "YFinance must handle 2h rejection"
+
+    def test_pipeline_timeframes_config(self):
+        """PIPELINE_TIMEFRAMES config must exist with 2h and 1d entries."""
+        import system_config as cfg
+        pt = cfg.PIPELINE_TIMEFRAMES
+        assert "2h" in pt, "PIPELINE_TIMEFRAMES must have 2h key"
+        assert "1d" in pt, "PIPELINE_TIMEFRAMES must have 1d key"
+        assert pt["2h"]["data_source"] == "ALPACA", "2h must prefer ALPACA"
+
+
 # ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
@@ -1880,7 +1920,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestDSM2HourSupport]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

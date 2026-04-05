@@ -746,6 +746,27 @@ WALK_FORWARD_CONFIG = {
 }
 
 
+# Pipeline timeframe configuration (MTFA Phase 1)
+# Controls which interval the pipeline uses for data fetching and template evaluation.
+# "1d" = daily (original), "2h" = 2-hour bars (MTFA)
+PIPELINE_TIMEFRAMES = {
+    "default": "1d",              # Default for backward compatibility
+    "available": ["1d", "2h"],    # Supported timeframes
+    "2h": {
+        "data_source": "ALPACA",  # Preferred provider for 2h data
+        "days_back": 1825,        # 5 years
+        "min_candles_warmup": 200,
+        "eval_days_back": 1825,   # Shadow Ledger lookback
+    },
+    "1d": {
+        "data_source": "AUTO",    # Use waterfall
+        "days_back": 1095,        # 3 years (existing)
+        "min_candles_warmup": 200,
+        "eval_days_back": 1095,
+    },
+}
+
+
 def validate_template_evolution_config():
     """Validate TEMPLATE_EVOLUTION_CONFIG has required keys and sane values."""
     ad = TEMPLATE_EVOLUTION_CONFIG.get("auto_disable", {})

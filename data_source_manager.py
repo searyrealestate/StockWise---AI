@@ -754,7 +754,8 @@ class DataSourceManager:
             # 4. Bar Size Mapping
             ib_interval_map = {
                 "1m": "1 min", "5m": "5 mins", "15m": "15 mins", "30m": "30 mins",
-                "1h": "1 hour", "1d": "1 day", "1wk": "1 week", "1mo": "1 month"
+                "1h": "1 hour", "2h": "2 hours",
+                "1d": "1 day", "1wk": "1 week", "1mo": "1 month"
             }
             bar_size = ib_interval_map.get(interval, "1 day")
 
@@ -794,6 +795,7 @@ class DataSourceManager:
             if interval == "1d": tf = TimeFrame.Day
             elif interval == "1wk": tf = TimeFrame.Week
             elif interval == "1h": tf = TimeFrame.Hour
+            elif interval == "2h": tf = TimeFrame(2, TimeFrameUnit.Hour)
             elif interval == "15m": tf = TimeFrame(15, TimeFrameUnit.Minute)
             elif interval == "5m": tf = TimeFrame(5, TimeFrameUnit.Minute)
             elif interval == "1m": tf = TimeFrame.Minute
@@ -903,6 +905,9 @@ class DataSourceManager:
         elif interval in ['1h', '60m']:
             timespan = 'hour'
             multiplier = 1
+        elif interval in ['2h']:
+            timespan = 'hour'
+            multiplier = 2
         elif interval in ['15m']:
             timespan = 'minute'
             multiplier = 15
@@ -992,6 +997,10 @@ class DataSourceManager:
         Robust YFinance Fetcher: Handles Tuples, MultiIndex headers, and Ticker Translation.
         """
         try:
+            if interval == "2h":
+                self._log(f"[{symbol}] YFinance does not support 2h interval — skipping", "DEBUG")
+                return pd.DataFrame()
+
             # 1. Ticker Translation (Yahoo requires '-' instead of '.' for BRK.B)
             yf_symbol = symbol.replace('.', '-')
             
