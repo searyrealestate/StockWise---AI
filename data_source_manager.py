@@ -210,6 +210,59 @@ def clean_raw_data(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def filter_regular_trading_hours(df, market_open="09:30", market_close="16:00"):
+    """
+    Filter DataFrame to Regular Trading Hours (RTH) only.
+    Removes pre-market and after-hours bars that create ILLIQUID states.
+
+    Only applies to intraday data (2h, 1h, 15m, etc).
+    Daily bars are unaffected (they have no time component).
+
+    Args:
+        df: DataFrame with DatetimeIndex
+        market_open: "HH:MM" string (default "09:30" ET)
+        market_close: "HH:MM" string (default "16:00" ET)
+    Returns:
+        Filtered DataFrame (RTH bars only)
+    """
+    if df is None or df.empty:
+        return df
+
+    # Only filter if index has time component (intraday data)
+    if not hasattr(df.index, 'hour'):
+        return df
+
+    # Check if all times are midnight (daily data) — skip filtering
+    if (df.index.hour == 0).all() and (df.index.minute == 0).all():
+        return df
+
+    open_h, open_m = map(int, market_open.split(":"))
+    close_h, close_m = map(int, market_close.split(":"))
+
+    open_minutes = open_h * 60 + open_m
+    close_minutes = close_h * 60 + close_m
+
+    # Convert UTC timestamps to US/Eastern before applying RTH bounds.
+    # clean_raw_data() strips timezone info but Alpaca timestamps are UTC-naive.
+    # Use string-based timezone to avoid pytz/pandas version conflicts.
+    try:
+        et_index = df.index.tz_localize('UTC').tz_convert('America/New_York')
+        bar_minutes = et_index.hour * 60 + et_index.minute
+    except Exception:
+        # Fallback: assume UTC, apply a fixed -4h EDT offset (13:30-20:00 UTC for 09:30-16:00 ET)
+        # This handles the common case where tz_localize is unavailable
+        bar_minutes = (df.index.hour * 60 + df.index.minute - 4 * 60) % (24 * 60)
+
+    mask = (bar_minutes >= open_minutes) & (bar_minutes < close_minutes)
+
+    filtered = df[mask]
+    removed = len(df) - len(filtered)
+    if removed > 0:
+        logging.debug(f"RTH filter: {len(df)} -> {len(filtered)} bars ({removed} extended hours removed)")
+
+    return filtered
+
+
 def normalize_ohlcv(df, provider_name):
     """
     SPEC v13.4 §2: Per-provider normalization to guaranteed OHLCV schema.
@@ -678,7 +731,12 @@ class DataSourceManager:
                 if not fetched_df.empty:
                     # Clean it first to ensure valid OHLCV
                     clean_df = clean_raw_data(fetched_df)
-                    
+
+                    # ═══ RTH FILTER (MTFA) ═══
+                    # Filter out extended hours for intraday data to prevent ILLIQUID state noise
+                    if interval not in ('1d', '1wk', '1mo'):
+                        clean_df = filter_regular_trading_hours(clean_df)
+
                     # Row Count Check
                     if len(clean_df) >= min_rows:
                         self._log(f"Success ({provider}): Retrieved {len(clean_df)} rows (Target: {min_rows}+).", "DEBUG")

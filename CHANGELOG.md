@@ -1,5 +1,21 @@
 # Changelog
 
+## [2026-04-06] RTH Filter + Clean Stale GEN_* Templates (MTFA)
+
+### Added
+- **`data_source_manager.py` (`filter_regular_trading_hours`)**: New utility function — removes pre-market and after-hours bars from intraday data; converts UTC-naive timestamps to US/Eastern via `tz_localize('UTC').tz_convert('America/New_York')` before applying 09:30–16:00 bounds; daily bars (midnight timestamps) are passed through unchanged; fallback to EDT offset if conversion unavailable
+- **`data_source_manager.py` (`get_stock_data`)**: RTH filter applied automatically after `clean_raw_data()` for all intraday intervals (not `1d`, `1wk`, `1mo`)
+- **`system_config.py` (`PIPELINE_TIMEFRAMES`)**: `rth_filter`, `market_open`, `market_close` keys added to `"2h"` and `"1d"` configs
+- **`tests/unit_tests.py` (`TestRTHFilter`)**: 3 new tests — extended-hours removed (ET assertion via UTC→ET conversion, summer date), daily bars unchanged, empty DataFrame handled gracefully
+
+### Fixed
+- **2h pipeline 12.1% coverage** caused by 88% of bars being ILLIQUID extended-hours bars (pre-market at 12:00 UTC = 8 AM ET). After RTH filter: 6,037 → 4,267 bars (UTC hours [14, 16, 18, 20] = [10AM, 12PM, 2PM ET] regular session only)
+- **Stale GEN_* templates deleted** — 4 daily-calibrated GEN_* templates removed from `data/templates/`. Only 5 seed templates remain: SQUEEZE_BREAKOUT, OVERSOLD_BOUNCE, TREND_PULLBACK_EMA, MOMENTUM_BREAKOUT, VSA_INSTITUTIONAL
+- **`backtest_engine.py`**: Unicode `→` in `run_full_pipeline()` Step 7 print replaced with `->` (cp1252 crash fix)
+
+### Result
+150 passed, 0 failed
+
 ## [2026-04-05] Wire PIPELINE_TIMEFRAMES into Pipeline + --timeframe CLI Flag (MTFA Phase 1)
 
 ### Added

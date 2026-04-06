@@ -1872,6 +1872,58 @@ class TestTemplateTimeframe:
             "TEMPLATE_EVOLUTION_CONFIG['generation'] must include default_timeframe"
 
 
+class TestRTHFilter:
+    """Tests for Regular Trading Hours filter."""
+
+    def test_rth_filter_removes_extended_hours(self):
+        """RTH filter must remove pre-market and after-hours bars.
+        Uses summer date (EDT = UTC-4) for deterministic timezone behavior.
+        Timestamps are UTC-naive (same format as Alpaca data after clean_raw_data).
+        """
+        import numpy as np
+        from data_source_manager import filter_regular_trading_hours
+        # Create 24h of 2h bars starting 2024-07-01 04:00 UTC (EDT day)
+        # UTC:  04, 06, 08, 10, 12, 14, 16, 18, 20, 22, 00, 02
+        # ET:   00, 02, 04, 06, 08, 10, 12, 14, 16, 18, 20, 22
+        dates = pd.date_range("2024-07-01 04:00", periods=12, freq="2h")
+        df = pd.DataFrame({
+            "open": np.random.uniform(100, 110, 12),
+            "close": np.random.uniform(100, 110, 12),
+            "high": np.random.uniform(100, 110, 12),
+            "low": np.random.uniform(100, 110, 12),
+            "volume": np.random.randint(1000, 5000, 12),
+        }, index=dates)
+        filtered = filter_regular_trading_hours(df)
+        assert len(filtered) > 0, "RTH filter removed all bars"
+        # Verify every kept bar is within 09:30-16:00 ET (convert UTC timestamps to ET)
+        for ts in filtered.index:
+            et_ts = pd.Timestamp(ts).tz_localize('UTC').tz_convert('America/New_York')
+            minutes = et_ts.hour * 60 + et_ts.minute
+            assert minutes >= 9 * 60 + 30, f"Pre-market ET bar in filtered: {et_ts}"
+            assert minutes < 16 * 60, f"After-hours ET bar in filtered: {et_ts}"
+
+    def test_rth_filter_skips_daily(self):
+        """RTH filter must not affect daily bars (midnight timestamps)."""
+        import numpy as np
+        from data_source_manager import filter_regular_trading_hours
+        dates = pd.date_range("2024-01-02", periods=10, freq="B")
+        df = pd.DataFrame({
+            "open": np.random.uniform(100, 110, 10),
+            "close": np.random.uniform(100, 110, 10),
+            "high": np.random.uniform(100, 110, 10),
+            "low": np.random.uniform(100, 110, 10),
+            "volume": np.random.randint(1000, 5000, 10),
+        }, index=dates)
+        filtered = filter_regular_trading_hours(df)
+        assert len(filtered) == len(df), "Daily bars should not be filtered"
+
+    def test_rth_filter_returns_empty_gracefully(self):
+        """RTH filter must handle empty DataFrame without error."""
+        from data_source_manager import filter_regular_trading_hours
+        result = filter_regular_trading_hours(pd.DataFrame())
+        assert result.empty
+
+
 class TestPipelineTimeframe:
     """Tests for pipeline timeframe parameter wiring."""
 
@@ -1956,7 +2008,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestPipelineTimeframe, TestDSM2HourSupport]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

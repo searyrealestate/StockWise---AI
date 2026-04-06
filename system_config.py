@@ -757,12 +757,16 @@ PIPELINE_TIMEFRAMES = {
         "days_back": 1825,        # 5 years
         "min_candles_warmup": 200,
         "eval_days_back": 1825,   # Shadow Ledger lookback
+        "rth_filter": True,       # Filter to Regular Trading Hours only
+        "market_open": "09:30",   # ET
+        "market_close": "16:00",  # ET
     },
     "1d": {
         "data_source": "AUTO",    # Use waterfall
         "days_back": 1095,        # 3 years (existing)
         "min_candles_warmup": 200,
         "eval_days_back": 1095,
+        "rth_filter": False,      # Daily bars don't need RTH filtering
     },
 }
 

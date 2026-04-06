@@ -2089,7 +2089,7 @@ class WalkForwardValidator:
         print("FULL PIPELINE REPORT")
         print(f"{'=' * 55}")
         print(f"Symbols:      {report.get('symbols_loaded', 0)}")
-        print(f"Split:        TRAIN→{split_date_1} | VAL→{split_date_2}")
+        print(f"Split:        TRAIN->{split_date_1} | VAL->{split_date_2}")
         print(f"SL max_date:  {split_date_1} (TRAIN only)")
         print(f"Generated:    {len(created)} templates")
         print(f"QG results:   {passed} passed, {failed} failed")
