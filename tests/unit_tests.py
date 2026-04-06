@@ -2000,6 +2000,51 @@ class TestDSM2HourSupport:
         assert pt["2h"]["data_source"] == "ALPACA", "2h must prefer ALPACA"
 
 
+class TestTimeframePassThrough:
+    """Tests for timeframe threading through BacktestEngine -> TemplateMatcher -> ShadowLedger."""
+
+    def test_scan_ticker_accepts_timeframe(self):
+        """TemplateMatcher.scan_ticker must accept a timeframe keyword argument."""
+        import inspect
+        from template_matcher import TemplateMatcher
+        sig = inspect.signature(TemplateMatcher.scan_ticker)
+        assert 'timeframe' in sig.parameters, \
+            "scan_ticker must accept timeframe= parameter"
+
+    def test_evaluate_history_accepts_timeframe(self):
+        """ShadowLedger.evaluate_history must accept a timeframe keyword argument."""
+        import inspect
+        from shadow_ledger import ShadowLedger
+        sig = inspect.signature(ShadowLedger.evaluate_history)
+        assert 'timeframe' in sig.parameters, \
+            "evaluate_history must accept timeframe= parameter"
+
+    def test_run_full_evaluation_accepts_timeframe(self):
+        """ShadowLedger.run_full_evaluation must accept a timeframe keyword argument."""
+        import inspect
+        from shadow_ledger import ShadowLedger
+        sig = inspect.signature(ShadowLedger.run_full_evaluation)
+        assert 'timeframe' in sig.parameters, \
+            "run_full_evaluation must accept timeframe= parameter"
+
+    def test_recipes_have_timeframe_field(self):
+        """All TEMPLATE_GENERATION_RECIPES must declare a timeframe field."""
+        import system_config as cfg
+        for recipe_id, recipe in cfg.TEMPLATE_GENERATION_RECIPES.items():
+            assert 'timeframe' in recipe, \
+                f"Recipe '{recipe_id}' missing 'timeframe' field"
+            assert recipe['timeframe'] in ('1d', '2h', '1h', '4h', '15m'), \
+                f"Recipe '{recipe_id}' has unrecognised timeframe '{recipe['timeframe']}'"
+
+    def test_2h_recipes_exist_in_config(self):
+        """At least 5 recipes with timeframe='2h' must be defined."""
+        import system_config as cfg
+        two_h = [r for r in cfg.TEMPLATE_GENERATION_RECIPES.values()
+                 if r.get('timeframe') == '2h']
+        assert len(two_h) >= 5, \
+            f"Expected >= 5 2h recipes, found {len(two_h)}"
+
+
 # ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
@@ -2008,7 +2053,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

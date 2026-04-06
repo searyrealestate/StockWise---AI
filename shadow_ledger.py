@@ -63,7 +63,7 @@ class ShadowLedger:
         data["template_stats"] = self.ledger.get("template_stats", {})
         safe_json_write(self.ledger_path, data)
 
-    def evaluate_history(self, symbol, df, stock_state_fn=None, max_date=None):
+    def evaluate_history(self, symbol, df, stock_state_fn=None, max_date=None, timeframe=None):
         """
         Walk through df candle-by-candle, evaluate all templates at each bar.
 
@@ -131,7 +131,7 @@ class ShadowLedger:
                     state = {}
 
             # Filter templates by state if we have one; otherwise use all enabled
-            matching = self.tm.get_for_state(state) if state else templates
+            matching = self.tm.get_for_state(state, timeframe=timeframe) if state else templates
 
             # Coverage gap tracking — record per bar
             if cov_cfg.get("enabled", False) and state:
@@ -1709,7 +1709,7 @@ class ShadowLedger:
             f"{periods:.1f} periods (rates by category)"
         )
 
-    def run_full_evaluation(self, data_source_manager, symbols=None, feature_engine=None, max_date=None, stock_state_fn=None):
+    def run_full_evaluation(self, data_source_manager, symbols=None, feature_engine=None, max_date=None, stock_state_fn=None, timeframe=None):
         """
         Batch evaluation: run candle-by-candle for all symbols.
         Intended for OFFLINE/weekend execution per DDR Part C.
@@ -1744,7 +1744,7 @@ class ShadowLedger:
         for symbol in symbols:
             try:
                 df = data_source_manager.get_stock_data(
-                    symbol, days_back=days_back, interval='1d'
+                    symbol, days_back=days_back, interval=timeframe or '1d'
                 )
                 if df is None or len(df) < min_candles:
                     logger.debug(f"[{symbol}] Skipped — insufficient data")
@@ -1754,7 +1754,7 @@ class ShadowLedger:
                 if feature_engine is not None:
                     df = feature_engine.calculate_features(df)
 
-                self.evaluate_history(symbol, df, stock_state_fn=stock_state_fn, max_date=max_date)
+                self.evaluate_history(symbol, df, stock_state_fn=stock_state_fn, max_date=max_date, timeframe=timeframe)
                 evaluated += 1
                 # Log per-symbol summary
                 sym_stats = self.ledger.get("template_stats", {}).get(symbol, {})

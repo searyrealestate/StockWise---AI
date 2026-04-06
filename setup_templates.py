@@ -1401,8 +1401,12 @@ class TemplateGenerator:
         gap_trend = gap_state.get("trend", "")
         gap_vol = gap_state.get("volatility", "")
         gap_struct = gap_state.get("structure", "")
+        pipeline_tf = getattr(self, '_pipeline_timeframe', '1d')
 
         for recipe_id, recipe in recipes.items():
+            # Timeframe match — only run recipes calibrated for the active pipeline timeframe
+            if recipe.get("timeframe", "1d") != pipeline_tf:
+                continue
             # Trend match
             if gap_trend not in recipe.get("applicable_trends", []):
                 continue
@@ -1453,7 +1457,7 @@ class TemplateGenerator:
             "description": recipe.get("description", f"Auto-generated from recipe {recipe_id}"),
             "version": 1,
             "source": gen_cfg.get("source_label", "generated"),
-            "timeframe": gen_cfg.get("default_timeframe", "1d"),
+            "timeframe": getattr(self, '_pipeline_timeframe', None) or gen_cfg.get("default_timeframe", "1d"),
             "category": recipe.get("category", "default"),
             "enabled": True,
             "required_state": required_state,

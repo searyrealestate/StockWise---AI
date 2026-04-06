@@ -1,5 +1,21 @@
 # Changelog
 
+## [2026-04-05] MTFA Timeframe Pass-Through + 2h Recipes (Prompt 9)
+
+### Added
+- **`shadow_ledger.py` (`evaluate_history`)**: `timeframe=None` parameter — passed to `get_for_state()` so only templates matching the active timeframe are evaluated
+- **`shadow_ledger.py` (`run_full_evaluation`)**: `timeframe=None` parameter — passed through to `evaluate_history()` and used as `interval` for DSM data fetch
+- **`template_matcher.py` (`scan_ticker`)**: `timeframe=None` parameter — passed to `get_for_state()` so daily templates are excluded from 2h scan
+- **`backtest_engine.py` (`run_full_pipeline` Step 3)**: `timeframe=self.timeframe` now passed to `sl.evaluate_history()` — shadow ledger trains on correct-timeframe bars only
+- **`backtest_engine.py` (`run_full_pipeline` Step 4)**: `tg._pipeline_timeframe = self.timeframe` set on `TemplateGenerator` before `generate_from_gaps()` — generator creates templates with correct timeframe and filters recipes by timeframe
+- **`setup_templates.py` (`_match_recipes_to_gap`)**: Timeframe filter — recipes with `recipe["timeframe"] != pipeline_tf` are skipped; `pipeline_tf` read from `self._pipeline_timeframe` (default `"1d"`)
+- **`setup_templates.py` (`_build_template_from_recipe`)**: Template `timeframe` field uses `self._pipeline_timeframe` when set, falling back to `gen_cfg["default_timeframe"]`
+- **`system_config.py` (`TEMPLATE_GENERATION_RECIPES`)**: `"timeframe": "1d"` added to all 8 existing daily recipes; 5 new 2h recipes added: `2H_SIDEWAYS_ACCUMULATION`, `2H_BULLISH_TREND_RIDE`, `2H_BREAKOUT_VOLUME`, `2H_BEARISH_BOUNCE`, `2H_SQUEEZE_BREAKOUT` — calibrated with wider RSI ranges (35-65), lower volume thresholds (1.2-1.3), slightly wider ATR stops
+- **`tests/unit_tests.py` (`TestTimeframePassThrough`)**: 5 new tests — `scan_ticker` accepts `timeframe=`, `evaluate_history` accepts `timeframe=`, `run_full_evaluation` accepts `timeframe=`, all recipes have `timeframe` field, at least 5 `"2h"` recipes exist
+
+### Result
+155 passed, 0 failed
+
 ## [2026-04-06] RTH Filter + Clean Stale GEN_* Templates (MTFA)
 
 ### Added

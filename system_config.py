@@ -594,8 +594,10 @@ TEMPLATE_EVOLUTION_CONFIG = {
 
 
 TEMPLATE_GENERATION_RECIPES = {
+    # ── Daily (1d) recipes ────────────────────────────────────────────────────
     "BEARISH_REVERSAL": {
         "description": "Mean reversion from oversold bearish",
+        "timeframe": "1d",
         "category": "mean_reversion",
         "applicable_trends": ["BEARISH"],
         "applicable_volatility": ["NORMAL", "VOLATILE"],
@@ -612,6 +614,7 @@ TEMPLATE_GENERATION_RECIPES = {
     },
     "BEARISH_SQUEEZE_BREAK": {
         "description": "Squeeze breakout from bearish compression",
+        "timeframe": "1d",
         "category": "breakout",
         "applicable_trends": ["BEARISH", "SIDEWAYS"],
         "applicable_volatility": ["COMPRESSED"],
@@ -629,6 +632,7 @@ TEMPLATE_GENERATION_RECIPES = {
     },
     "SUPPORT_BOUNCE_STRONG": {
         "description": "Strong bounce from support with volume",
+        "timeframe": "1d",
         "category": "mean_reversion",
         "applicable_trends": ["BEARISH", "SIDEWAYS"],
         "applicable_volatility": ["NORMAL", "VOLATILE"],
@@ -646,6 +650,7 @@ TEMPLATE_GENERATION_RECIPES = {
     },
     "SIDEWAYS_ACCUMULATION": {
         "description": "Quiet accumulation in sideways market",
+        "timeframe": "1d",
         "category": "momentum",
         "applicable_trends": ["SIDEWAYS"],
         "applicable_volatility": ["NORMAL", "COMPRESSED"],
@@ -663,6 +668,7 @@ TEMPLATE_GENERATION_RECIPES = {
     },
     "TREND_EXHAUSTION_BOUNCE": {
         "description": "Bearish trend weakening with momentum shift",
+        "timeframe": "1d",
         "category": "mean_reversion",
         "applicable_trends": ["BEARISH"],
         "applicable_volatility": ["NORMAL"],
@@ -679,6 +685,7 @@ TEMPLATE_GENERATION_RECIPES = {
     },
     "BULLISH_TREND_RIDE": {
         "description": "Ride confirmed bullish trend with momentum",
+        "timeframe": "1d",
         "category": "momentum",
         "applicable_trends": ["BULLISH"],
         "applicable_volatility": ["NORMAL", "VOLATILE"],
@@ -696,6 +703,7 @@ TEMPLATE_GENERATION_RECIPES = {
     },
     "BULLISH_BREAKOUT_VOLUME": {
         "description": "Bullish breakout with strong volume confirmation",
+        "timeframe": "1d",
         "category": "breakout",
         "applicable_trends": ["BULLISH"],
         "applicable_volatility": ["NORMAL", "COMPRESSED"],
@@ -713,6 +721,7 @@ TEMPLATE_GENERATION_RECIPES = {
     },
     "SIDEWAYS_BREAKOUT_CLEAN": {
         "description": "Sideways accumulation breakout with volume",
+        "timeframe": "1d",
         "category": "momentum",
         "applicable_trends": ["SIDEWAYS"],
         "applicable_volatility": ["NORMAL"],
@@ -727,6 +736,98 @@ TEMPLATE_GENERATION_RECIPES = {
         "target_atr_mult": 3.0,
         "confirmation_candles": 1,
         "use_runner": False,
+    },
+    # ── 2-hour intraday recipes ───────────────────────────────────────────────
+    # Calibrated for 2h bars: wider RSI ranges (35-65), lower volume thresholds (1.2-1.3),
+    # slightly wider ATR stops for intraday noise.
+    "2H_SIDEWAYS_ACCUMULATION": {
+        "description": "2h quiet accumulation — intraday sideways with flow",
+        "timeframe": "2h",
+        "category": "momentum",
+        "applicable_trends": ["SIDEWAYS"],
+        "applicable_volatility": ["NORMAL", "COMPRESSED"],
+        "excluded_structure": [],
+        "conditions": [
+            {"block": "obv_rising",    "params": [10]},
+            {"block": "cmf_positive",  "params": []},
+            {"block": "rsi_between",   "params": [35, 65]},
+            {"block": "bullish_candle","params": []},
+        ],
+        "stop_atr_mult": 1.8,
+        "target_atr_mult": 2.5,
+        "confirmation_candles": 1,
+        "use_runner": False,
+    },
+    "2H_BULLISH_TREND_RIDE": {
+        "description": "2h momentum ride in confirmed intraday uptrend",
+        "timeframe": "2h",
+        "category": "momentum",
+        "applicable_trends": ["BULLISH"],
+        "applicable_volatility": ["NORMAL", "VOLATILE"],
+        "excluded_structure": [],
+        "conditions": [
+            {"block": "close_above_ema",   "params": [20]},
+            {"block": "rsi_between",       "params": [45, 70]},
+            {"block": "macd_above_signal", "params": []},
+            {"block": "bullish_candle",    "params": []},
+        ],
+        "stop_atr_mult": 2.0,
+        "target_atr_mult": 3.0,
+        "confirmation_candles": 0,
+        "use_runner": True,
+    },
+    "2H_BREAKOUT_VOLUME": {
+        "description": "2h intraday breakout with volume surge",
+        "timeframe": "2h",
+        "category": "breakout",
+        "applicable_trends": ["BULLISH", "SIDEWAYS"],
+        "applicable_volatility": ["NORMAL", "COMPRESSED"],
+        "excluded_structure": [],
+        "conditions": [
+            {"block": "close_above_sma", "params": [20]},
+            {"block": "volume_surge",    "params": [1.2]},
+            {"block": "rsi_above",       "params": [45]},
+            {"block": "bullish_candle",  "params": []},
+        ],
+        "stop_atr_mult": 1.8,
+        "target_atr_mult": 3.0,
+        "confirmation_candles": 0,
+        "use_runner": True,
+    },
+    "2H_BEARISH_BOUNCE": {
+        "description": "2h oversold bounce in bearish intraday regime",
+        "timeframe": "2h",
+        "category": "mean_reversion",
+        "applicable_trends": ["BEARISH"],
+        "applicable_volatility": ["NORMAL", "VOLATILE"],
+        "excluded_structure": [],
+        "conditions": [
+            {"block": "rsi_below",     "params": [35]},
+            {"block": "bullish_candle","params": []},
+            {"block": "volume_surge",  "params": [1.2]},
+        ],
+        "stop_atr_mult": 1.8,
+        "target_atr_mult": 2.5,
+        "confirmation_candles": 1,
+        "use_runner": False,
+    },
+    "2H_SQUEEZE_BREAKOUT": {
+        "description": "2h Bollinger squeeze release — intraday compression burst",
+        "timeframe": "2h",
+        "category": "breakout",
+        "applicable_trends": ["BEARISH", "SIDEWAYS"],
+        "applicable_volatility": ["COMPRESSED"],
+        "excluded_structure": [],
+        "conditions": [
+            {"block": "squeeze_active",            "params": []},
+            {"block": "squeeze_momentum_positive", "params": []},
+            {"block": "rsi_above",                 "params": [38]},
+            {"block": "bullish_candle",            "params": []},
+        ],
+        "stop_atr_mult": 2.2,
+        "target_atr_mult": 3.5,
+        "confirmation_candles": 0,
+        "use_runner": True,
     },
 }
 

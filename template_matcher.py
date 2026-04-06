@@ -53,7 +53,7 @@ class TemplateMatcher:
         self.total_scans = 0
         self.total_signals = 0
 
-    def scan_ticker(self, symbol, df, stock_state=None):
+    def scan_ticker(self, symbol, df, stock_state=None, timeframe=None):
         """
         Main entry point: scan a single ticker against all matching templates.
 
@@ -116,8 +116,8 @@ class TemplateMatcher:
                         f"reason=state_mismatch | evaluating_all"
                     )
 
-        # Step 1: Filter templates that match this stock's state
-        matching_templates = self.tm.get_for_state(stock_state, symbol=symbol)
+        # Step 1: Filter templates that match this stock's state (and timeframe if set)
+        matching_templates = self.tm.get_for_state(stock_state, symbol=symbol, timeframe=timeframe)
 
         if not matching_templates:
             self._track_idle(symbol, "no_templates_match_state")

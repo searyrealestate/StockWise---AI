@@ -450,7 +450,7 @@ class BacktestEngine:
 
             # Template matching — returns list of signal dicts
             try:
-                signals = self.matcher.scan_ticker(sym, df_slice, stock_state)
+                signals = self.matcher.scan_ticker(sym, df_slice, stock_state, timeframe=self.timeframe)
             except Exception:
                 continue
             if not signals:
@@ -1965,7 +1965,7 @@ class WalkForwardValidator:
                 )
 
             for symbol, df in full_data.items():
-                sl.evaluate_history(symbol, df, stock_state_fn=stock_state_fn, max_date=split_date_1)
+                sl.evaluate_history(symbol, df, stock_state_fn=stock_state_fn, max_date=split_date_1, timeframe=self.timeframe)
 
             sl.apply_decay()
             sl._finalize_coverage_gaps()
@@ -1994,7 +1994,11 @@ class WalkForwardValidator:
         created = []
         try:
             tg = TemplateGenerator(sl.tm)
+            # Signal active timeframe so generator writes correct timeframe on new templates
+            # and filters recipes to only those calibrated for this timeframe
+            tg._pipeline_timeframe = self.timeframe
             gen_report = tg.generate_from_gaps()
+
             report["generation_report"] = gen_report
             report["steps_completed"].append("generation_done")
             created = gen_report.get("created", [])
