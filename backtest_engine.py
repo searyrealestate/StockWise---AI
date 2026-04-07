@@ -1805,6 +1805,7 @@ class WalkForwardValidator:
             initial_capital=self.initial_capital,
             use_risk_gates=self.use_risk_gates,
             data_cache=train_data,
+            timeframe=self.timeframe,
         )
         train_engine.feed_shadow_ledger = False  # Don't pollute ledger with partial data
         train_results = train_engine.run()
@@ -1816,6 +1817,7 @@ class WalkForwardValidator:
             initial_capital=self.initial_capital,
             use_risk_gates=self.use_risk_gates,
             data_cache=val_data,
+            timeframe=self.timeframe,
         )
         val_engine.feed_shadow_ledger = False
         val_results = val_engine.run()
@@ -1827,6 +1829,7 @@ class WalkForwardValidator:
             initial_capital=self.initial_capital,
             use_risk_gates=self.use_risk_gates,
             data_cache=test_data,
+            timeframe=self.timeframe,
         )
         test_engine.feed_shadow_ledger = False
         test_results = test_engine.run()
@@ -2468,6 +2471,7 @@ class WalkForwardValidator:
             initial_capital=self.initial_capital,
             use_risk_gates=self.use_risk_gates,
             data_cache=data_cache,
+            timeframe=self.timeframe,
         )
         engine.feed_shadow_ledger = False
         results = engine.run()

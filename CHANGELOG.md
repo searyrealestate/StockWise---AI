@@ -1,5 +1,15 @@
 # Changelog
 
+## [2026-04-07] Fix _run_engine_and_filter Missing Timeframe (MTFA QG)
+
+### Fixed
+- **`backtest_engine.py` (`_run_engine_and_filter`)**: `BacktestEngine` now instantiated with `timeframe=self.timeframe` — without this, QG validation engines defaulted to `"1d"`, reverted to 500K volume threshold, classified all bars as ILLIQUID, and generated 0 signals across 8 sub-runs (4 templates × train+val). Pipeline ran 27+ minutes doing nothing.
+- **`backtest_engine.py` (`validate()`)**: `train_engine`, `val_engine`, `test_engine` all now pass `timeframe=self.timeframe`
+- AST-verified: all 7 real `BacktestEngine(...)` instantiations now include `timeframe=`
+
+### Result
+All 7 BacktestEngine calls confirmed timeframe-aware via AST check
+
 ## [2026-04-07] Fix _is_duplicate Timeframe Check + NEAR_RESISTANCE 2h Recipes (MTFA)
 
 ### Fixed
