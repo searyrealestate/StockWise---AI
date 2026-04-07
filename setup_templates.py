@@ -1512,13 +1512,20 @@ class TemplateGenerator:
         """Check if a functionally equivalent template already exists.
 
         Two templates are duplicates if they have:
+        - Same timeframe
         - Same set of block names (order doesn't matter)
         - Any overlapping trend values (covers same market regime)
         """
         new_blocks = set(c.get("block", "") for c in new_template.get("conditions", []))
         new_trends = set(new_template.get("required_state", {}).get("trend", []))
+        new_tf = new_template.get("timeframe", "1d")
 
         for existing in self.tm.templates.values():
+            # Different timeframe = not a duplicate
+            existing_tf = getattr(existing, 'timeframe', '1d')
+            if existing_tf != new_tf:
+                continue
+
             existing_blocks = set(c.get("block", "") for c in existing.conditions)
             existing_trends = set(existing.required_state.get("trend", []))
 

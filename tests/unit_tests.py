@@ -2085,6 +2085,57 @@ class TestVolumeTimeframeThreshold:
             "_classify_volume_health must accept timeframe= parameter"
 
 
+class TestDuplicateTimeframeAware:
+    """Tests for timeframe-aware duplicate detection."""
+
+    def test_different_timeframe_not_duplicate(self):
+        """Templates with same blocks but different timeframe are NOT duplicates."""
+        import inspect
+        from setup_templates import TemplateGenerator, TemplateManager
+        tm = TemplateManager()
+        tg = TemplateGenerator(tm)
+        # Same block set as SQUEEZE_BREAKOUT (1d) but timeframe=2h
+        fake_2h = {
+            "conditions": [
+                {"block": "squeeze_active", "params": []},
+                {"block": "squeeze_momentum_positive", "params": []},
+                {"block": "close_above_sma", "params": [50]},
+                {"block": "rvol_above", "params": [1.2]},
+            ],
+            "required_state": {"trend": ["BULLISH", "SIDEWAYS"]},
+            "timeframe": "2h",
+        }
+        assert not tg._is_duplicate(fake_2h), \
+            "2h template with same blocks as 1d should NOT be a duplicate"
+
+    def test_same_timeframe_is_duplicate(self):
+        """Templates with same blocks AND same timeframe ARE duplicates."""
+        from setup_templates import TemplateGenerator, TemplateManager
+        tm = TemplateManager()
+        tg = TemplateGenerator(tm)
+        fake_1d = {
+            "conditions": [
+                {"block": "squeeze_active", "params": []},
+                {"block": "squeeze_momentum_positive", "params": []},
+                {"block": "close_above_sma", "params": [50]},
+                {"block": "rvol_above", "params": [1.2]},
+            ],
+            "required_state": {"trend": ["BULLISH"]},
+            "timeframe": "1d",
+        }
+        assert tg._is_duplicate(fake_1d), \
+            "1d template with same blocks as existing 1d should be a duplicate"
+
+    def test_near_resistance_recipes_exist(self):
+        """Must have at least 1 NEAR_RESISTANCE recipe."""
+        import system_config as cfg
+        recipes = cfg.TEMPLATE_GENERATION_RECIPES
+        nr_recipes = {k: v for k, v in recipes.items()
+                      if "NEAR_RESISTANCE" in v.get("required_structure", [])}
+        assert len(nr_recipes) >= 1, \
+            f"Must have at least 1 NEAR_RESISTANCE recipe, found {len(nr_recipes)}"
+
+
 # ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
@@ -2093,7 +2144,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough, TestVolumeTimeframeThreshold]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough, TestVolumeTimeframeThreshold, TestDuplicateTimeframeAware]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

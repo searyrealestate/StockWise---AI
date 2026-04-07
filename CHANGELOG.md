@@ -1,5 +1,20 @@
 # Changelog
 
+## [2026-04-07] Fix _is_duplicate Timeframe Check + NEAR_RESISTANCE 2h Recipes (MTFA)
+
+### Fixed
+- **`setup_templates.py` (`_is_duplicate`)**: Now timeframe-aware — skips existing templates with a different `timeframe` before comparing block sets. Fixes 11 false-duplicate blocks that prevented all 2h template generation when 1d seed templates share the same condition blocks
+- Previous run generated 0 templates despite 10 coverage gaps; this fix unblocks the generator
+
+### Added
+- **`system_config.py`**: 2 new 2h recipes targeting `NEAR_RESISTANCE` structure (top uncovered gap at 9.3%, all 10 symbols):
+  - `2H_RESISTANCE_BREAKOUT` — breakout through resistance with volume surge, BULLISH/SIDEWAYS, NORMAL/COMPRESSED
+  - `2H_RESISTANCE_SQUEEZE` — squeeze compression release at resistance, BULLISH/SIDEWAYS, COMPRESSED only
+- **`tests/unit_tests.py` (`TestDuplicateTimeframeAware`)**: 3 new tests — different timeframe not duplicate, same timeframe is duplicate, NEAR_RESISTANCE recipe exists
+
+### Result
+162 passed, 0 failed — total 2h recipes: 7
+
 ## [2026-04-07] Timeframe-Aware Volume Thresholds + QG Sharpe Fix (MTFA)
 
 ### Fixed
