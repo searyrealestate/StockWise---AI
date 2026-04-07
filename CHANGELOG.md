@@ -1,5 +1,23 @@
 # Changelog
 
+## [2026-04-07] Timeframe-Aware Volume Thresholds + QG Sharpe Fix (MTFA)
+
+### Fixed
+- **2h pipeline 41% false ILLIQUID**: volume thresholds now timeframe-aware — `500K` daily → `150K` for `2h` (IEX feed ≈ 30% of consolidated volume per 2h bar); AAPL/AVGO will correctly classify as HEALTHY/DRYING_UP rather than ILLIQUID
+- **QG Sharpe complex number crash**: `daily_ret = np.real(...)` strips any complex component before computing std; `max(float(std), 1e-9)` replaces `or 1e-9` idiom — prevents `'<' not supported between float and complex` in `daily_ret[daily_ret < 0]` filter
+
+### Added
+- **`system_config.py` (`MANDATORY_SCAN_CONFIG`)**: `min_avg_volume_by_timeframe` dict — `1d=500K`, `2h=150K`, `1h=100K`, `15m=25K`
+- **`stock_hunter.py` (`_classify_volume_health`)**: `timeframe="1d"` parameter — picks threshold from `min_avg_volume_by_timeframe`, falls back to `min_avg_volume`
+- **`stock_hunter.py` (`classify_stock_state`)**: `timeframe="1d"` parameter — passed to `_classify_volume_health`
+- **`backtest_engine.py`**: All 3 `classify_stock_state` call sites updated to pass `timeframe=self.timeframe` (BacktestEngine inner loop ×2, `run_full_pipeline` lambda)
+- **`shadow_ledger.py` CLI**: `--timeframe` argument; `stock_state_fn` uses `args.timeframe` for volume threshold
+- **`tests/unit_tests.py` (`TestVolumeTimeframeThreshold`)**: 4 new tests — config has timeframe volumes, 2h < 1d threshold, `classify_stock_state` accepts timeframe, `_classify_volume_health` accepts timeframe
+- **`tests/unit_tests.py` (`test_get_for_timeframe`)**: Updated assertion — verifies all returned templates match requested timeframe (previously asserted 0 2h templates, now invalid after pipeline generates GEN_2H_SIDEWAYS_ACCUMULATION)
+
+### Result
+159 passed, 0 failed
+
 ## [2026-04-05] MTFA Timeframe Pass-Through + 2h Recipes (Prompt 9)
 
 ### Added

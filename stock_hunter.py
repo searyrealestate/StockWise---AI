@@ -183,7 +183,7 @@ class StockHunter:
             logger.debug(f"Structure classification error: {e}")
             return "OPEN_FIELD"
 
-    def _classify_volume_health(self, df):
+    def _classify_volume_health(self, df, timeframe="1d"):
         """
         Mandatory Template 3: VOLUME HEALTH
         Checks if the stock has enough liquidity and whether volume is growing or drying up.
@@ -191,7 +191,8 @@ class StockHunter:
         """
         try:
             scan_cfg = getattr(cfg, 'MANDATORY_SCAN_CONFIG', {})
-            min_volume = scan_cfg.get('min_avg_volume', 500000)
+            tf_volumes = scan_cfg.get('min_avg_volume_by_timeframe', {})
+            min_volume = tf_volumes.get(timeframe, scan_cfg.get('min_avg_volume', 500000))
             # Use 60-bar baseline for the absolute liquidity check; reduces
             # false ILLIQUID on stocks with recently elevated volume history.
             vol_lookback = scan_cfg.get('volume_trend_lookback', 60)
@@ -264,7 +265,7 @@ class StockHunter:
             logger.debug(f"Volatility classification error: {e}")
             return "NORMAL"
 
-    def classify_stock_state(self, df):
+    def classify_stock_state(self, df, timeframe="1d"):
         """
         Master classifier: runs all 4 mandatory templates and returns a state dict.
         Called on every stock during morning/evening scan.
@@ -272,7 +273,7 @@ class StockHunter:
         return {
             "trend": self._classify_trend_direction(df),
             "structure": self._classify_structure(df),
-            "volume": self._classify_volume_health(df),
+            "volume": self._classify_volume_health(df, timeframe=timeframe),
             "volatility": self._classify_volatility_state(df),
         }
 

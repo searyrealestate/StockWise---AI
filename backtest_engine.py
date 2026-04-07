@@ -444,7 +444,7 @@ class BacktestEngine:
             stock_state = {}
             if self.hunter:
                 try:
-                    stock_state = self.hunter.classify_stock_state(df_slice)
+                    stock_state = self.hunter.classify_stock_state(df_slice, timeframe=self.timeframe)
                 except Exception:
                     pass
 
@@ -637,9 +637,9 @@ class BacktestEngine:
 
         # Sharpe / Sortino / Calmar
         if len(equities) > 1:
-            daily_ret = np.diff(equities) / np.array(equities[:-1]) * 100
+            daily_ret = np.real(np.diff(equities) / np.array(equities[:-1]) * 100)
             mu        = float(np.mean(daily_ret))
-            sigma     = float(np.std(daily_ret, ddof=1)) or 1e-9
+            sigma     = max(float(np.std(daily_ret, ddof=1)), 1e-9)
             sharpe    = round(mu / sigma * math.sqrt(252), 2)
             downside  = daily_ret[daily_ret < 0]
             ds_std    = float(np.std(downside, ddof=1)) if len(downside) > 1 else 1e-9
@@ -1450,7 +1450,7 @@ class BacktestEngine:
                 stock_state = {}
                 if self.hunter:
                     try:
-                        stock_state = self.hunter.classify_stock_state(df_slice)
+                        stock_state = self.hunter.classify_stock_state(df_slice, timeframe=self.timeframe)
                     except Exception:
                         pass
 
@@ -1957,7 +1957,8 @@ class WalkForwardValidator:
                 class _MockDM:
                     stock_client = None
                 hunter = StockHunter(_MockDM())
-                stock_state_fn = lambda df_slice: hunter.classify_stock_state(df_slice)
+                pipeline_tf = self.timeframe
+                stock_state_fn = lambda df_slice: hunter.classify_stock_state(df_slice, timeframe=pipeline_tf)
                 logger.info("[PIPELINE] stock_state_fn initialized via StockHunter")
             except Exception as e:
                 logger.warning(

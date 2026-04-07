@@ -1024,7 +1024,13 @@ MANDATORY_SCAN_CONFIG = {
     "near_level_pct": 0.02,                  # Within 2% of S/R = "near"
 
     # Volume Health
-    "min_avg_volume": 500000,                # Minimum 500K avg daily volume
+    "min_avg_volume": 500000,                # Minimum 500K avg daily volume (1d default)
+    "min_avg_volume_by_timeframe": {         # Per-timeframe overrides (IEX feed fractions)
+        "1d":  500000,
+        "2h":  150000,                       # IEX 2h ≈ 30% of daily volume
+        "1h":  100000,                       # IEX 1h ≈ 15% of daily
+        "15m":  25000,                       # IEX 15m ≈ 4% of daily
+    },
     "volume_trend_lookback": 20,             # Days for volume trend
 
     # Volatility State

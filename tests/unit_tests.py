@@ -1856,13 +1856,17 @@ class TestTemplateTimeframe:
         assert d["timeframe"] == "2h", f"Expected '2h', got {d.get('timeframe')!r}"
 
     def test_get_for_timeframe(self):
-        """get_for_timeframe filters templates by timeframe correctly."""
+        """get_for_timeframe returns only templates matching requested timeframe."""
         from setup_templates import TemplateManager
         tm = TemplateManager()
         daily = tm.get_for_timeframe("1d")
         hourly = tm.get_for_timeframe("2h")
         assert len(daily) > 0, "Expected at least one daily template"
-        assert len(hourly) == 0, f"Expected no 2h templates, got {len(hourly)}"
+        # All returned templates must match the requested timeframe
+        for t in daily:
+            assert t.timeframe == "1d", f"Expected 1d template, got {t.timeframe} for {t.id}"
+        for t in hourly:
+            assert t.timeframe == "2h", f"Expected 2h template, got {t.timeframe} for {t.id}"
 
     def test_generation_config_has_timeframe(self):
         """Generation config must include default_timeframe."""
@@ -2045,6 +2049,42 @@ class TestTimeframePassThrough:
             f"Expected >= 5 2h recipes, found {len(two_h)}"
 
 
+class TestVolumeTimeframeThreshold:
+    """Tests for timeframe-aware volume classification."""
+
+    def test_config_has_timeframe_volumes(self):
+        """MANDATORY_SCAN_CONFIG must have per-timeframe volume thresholds."""
+        import system_config as cfg
+        scan_cfg = cfg.MANDATORY_SCAN_CONFIG
+        assert "min_avg_volume_by_timeframe" in scan_cfg, \
+            "MANDATORY_SCAN_CONFIG must have min_avg_volume_by_timeframe"
+        assert "2h" in scan_cfg["min_avg_volume_by_timeframe"], \
+            "min_avg_volume_by_timeframe must have 2h entry"
+
+    def test_2h_threshold_lower_than_daily(self):
+        """2h volume threshold must be lower than daily."""
+        import system_config as cfg
+        tf_vols = cfg.MANDATORY_SCAN_CONFIG["min_avg_volume_by_timeframe"]
+        assert tf_vols["2h"] < tf_vols["1d"], \
+            f"2h threshold ({tf_vols['2h']}) must be less than 1d ({tf_vols['1d']})"
+
+    def test_classify_accepts_timeframe(self):
+        """classify_stock_state must accept timeframe parameter."""
+        import inspect
+        from stock_hunter import StockHunter
+        sig = inspect.signature(StockHunter.classify_stock_state)
+        assert "timeframe" in sig.parameters, \
+            "classify_stock_state must accept timeframe= parameter"
+
+    def test_volume_health_accepts_timeframe(self):
+        """_classify_volume_health must accept timeframe parameter."""
+        import inspect
+        from stock_hunter import StockHunter
+        sig = inspect.signature(StockHunter._classify_volume_health)
+        assert "timeframe" in sig.parameters, \
+            "_classify_volume_health must accept timeframe= parameter"
+
+
 # ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
@@ -2053,7 +2093,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough, TestVolumeTimeframeThreshold]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

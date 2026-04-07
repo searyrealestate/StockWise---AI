@@ -1940,6 +1940,10 @@ if __name__ == "__main__":
         help="Restrict evaluation to bars on or before this date (YYYY-MM-DD). "
              "Used for train-only mode in the 3-way split pipeline."
     )
+    parser.add_argument(
+        "--timeframe", type=str, default="1d",
+        help="Data timeframe for volume threshold calibration (default: 1d)"
+    )
     args = parser.parse_args()
 
     # ── Setup logging to console ─────────────────────────────
@@ -1991,8 +1995,9 @@ if __name__ == "__main__":
         class _MockDM:
             stock_client = None
         hunter = StockHunter(_MockDM())
-        stock_state_fn = lambda df_slice: hunter.classify_stock_state(df_slice)
-        print(f"  State fn: StockHunter.classify_stock_state")
+        sl_tf = args.timeframe
+        stock_state_fn = lambda df_slice: hunter.classify_stock_state(df_slice, timeframe=sl_tf)
+        print(f"  State fn: StockHunter.classify_stock_state (timeframe={sl_tf})")
     except Exception as e:
         print(f"  State fn: UNAVAILABLE ({e}) — coverage gaps won't be detected")
 
