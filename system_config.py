@@ -551,6 +551,9 @@ TEMPLATE_EVOLUTION_CONFIG = {
         "use_decayed_wr": True,              # Use exponentially decayed WR (recent = more weight)
         "decay_rate": 0.95,                  # Per-signal decay factor (0.95 = 5% fade per signal)
         "state_grouping_levels": 3,          # Fallback levels: L3=full, L2=trend+vol, L1=trend
+        "trust_gate_enabled": True,          # Block signals with low lifecycle
+        "trust_gate_min_lifecycle": "MONITORING",  # Minimum lifecycle to PASS (DEGRADED/DISABLED blocked)
+        "trust_gate_min_signals": 15,        # Only gate when we have enough data (don't block BURN_IN with few signals)
     },
     "suit_assignment": {
         "enabled": True,
@@ -1055,6 +1058,12 @@ def validate_template_evolution_config():
         "contextual_trust.decay_rate must be float in (0, 1)"
     assert isinstance(ct.get("state_grouping_levels", None), int) and ct["state_grouping_levels"] in [1, 2, 3], \
         "contextual_trust.state_grouping_levels must be int in {1, 2, 3}"
+    assert isinstance(ct.get("trust_gate_enabled"), bool), \
+        "contextual_trust.trust_gate_enabled must be bool"
+    assert ct.get("trust_gate_min_lifecycle") in ("PROVEN", "MONITORING", "DEGRADED", "BURN_IN"), \
+        "contextual_trust.trust_gate_min_lifecycle must be valid lifecycle"
+    assert isinstance(ct.get("trust_gate_min_signals"), int) and ct["trust_gate_min_signals"] > 0, \
+        "contextual_trust.trust_gate_min_signals must be int > 0"
     sa = TEMPLATE_EVOLUTION_CONFIG.get("suit_assignment", {})
     _sa_score = sa.get("min_trust_score_to_assign", None)
     assert isinstance(_sa_score, float) and 0.0 <= _sa_score <= 1.0, \

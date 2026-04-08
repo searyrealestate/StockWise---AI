@@ -155,6 +155,28 @@ class TemplateMatcher:
                         )
                     except Exception as _trust_ex:
                         logger.debug(f"[{symbol}] Trust score failed: {_trust_ex}")
+
+                    # Trust Lifecycle Gate — block DEGRADED/DISABLED combos with sufficient data
+                    ct_gate_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {}).get("contextual_trust", {})
+                    if ct_gate_cfg.get("trust_gate_enabled", False) and signal.get("trust"):
+                        _gate_trust = signal["trust"]
+                        _gate_min_signals = ct_gate_cfg.get("trust_gate_min_signals", 15)
+                        _gate_min_lifecycle = ct_gate_cfg.get("trust_gate_min_lifecycle", "MONITORING")
+                        _lifecycle_rank = {"DISABLED": 0, "DEGRADED": 1, "MONITORING": 2, "PROVEN": 3, "BURN_IN": -1}
+                        _trust_lc = _gate_trust.get("lifecycle", "BURN_IN")
+                        _trust_rank = _lifecycle_rank.get(_trust_lc, -1)
+                        _min_rank = _lifecycle_rank.get(_gate_min_lifecycle, 2)
+                        if (_gate_trust.get("total", 0) >= _gate_min_signals
+                                and 0 <= _trust_rank < _min_rank
+                                and not is_exploration):
+                            logger.info(
+                                f"[TRUST-GATE] {symbol} | {template.id} | BLOCKED | "
+                                f"lifecycle={_trust_lc} | wr={_gate_trust.get('decayed_wr', 0):.1%} | "
+                                f"signals={_gate_trust.get('total', 0)} | "
+                                f"state={state_key} | reason=lifecycle_below_{_gate_min_lifecycle}"
+                            )
+                            continue
+
                     # CP-3: Tag whether this signal is from the assigned (suit) template
                     signal["is_assigned"] = (
                         suit is not None

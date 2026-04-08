@@ -2494,6 +2494,66 @@ class TestRollingTrust:
         assert cell.get("decayed_wr", 1) < 0.5, f"LOSS should push decayed_wr below 0.5"
 
 
+class TestTrustGate:
+    """Tests for Trust Lifecycle Signal Gate."""
+
+    def setup_method(self, _method=None):
+        import system_config as cfg
+        self._cfg = cfg
+        self._orig_ct = cfg.TEMPLATE_EVOLUTION_CONFIG["contextual_trust"].copy()
+        cfg.TEMPLATE_EVOLUTION_CONFIG["contextual_trust"]["trust_gate_enabled"] = True
+        cfg.TEMPLATE_EVOLUTION_CONFIG["contextual_trust"]["trust_gate_min_lifecycle"] = "MONITORING"
+        cfg.TEMPLATE_EVOLUTION_CONFIG["contextual_trust"]["trust_gate_min_signals"] = 15
+
+    def teardown_method(self, _method=None):
+        self._cfg.TEMPLATE_EVOLUTION_CONFIG["contextual_trust"] = self._orig_ct
+
+    def _is_gated(self, trust, is_exploration=False, min_signals=15, min_lifecycle="MONITORING"):
+        lifecycle_rank = {"DISABLED": 0, "DEGRADED": 1, "MONITORING": 2, "PROVEN": 3, "BURN_IN": -1}
+        trust_rank = lifecycle_rank.get(trust.get("lifecycle", "BURN_IN"), -1)
+        min_rank = lifecycle_rank.get(min_lifecycle, 2)
+        return (trust.get("total", 0) >= min_signals
+                and 0 <= trust_rank < min_rank
+                and not is_exploration)
+
+    def test_trust_gate_blocks_degraded(self):
+        """DEGRADED lifecycle with sufficient signals → signal blocked."""
+        trust = {"lifecycle": "DEGRADED", "total": 25, "decayed_wr": 0.20}
+        assert self._is_gated(trust), "DEGRADED with 25 signals should be gated"
+
+    def test_trust_gate_allows_burn_in(self):
+        """BURN_IN lifecycle → signal passes (rank=-1 skips gate)."""
+        trust = {"lifecycle": "BURN_IN", "total": 25}
+        assert not self._is_gated(trust), "BURN_IN should never be gated"
+
+    def test_trust_gate_allows_monitoring(self):
+        """MONITORING lifecycle → signal passes (rank == min_rank)."""
+        trust = {"lifecycle": "MONITORING", "total": 25}
+        assert not self._is_gated(trust), "MONITORING should pass when min_lifecycle=MONITORING"
+
+    def test_trust_gate_bypassed_on_exploration(self):
+        """Exploration bar → DEGRADED signal passes for data collection."""
+        trust = {"lifecycle": "DEGRADED", "total": 25}
+        assert not self._is_gated(trust, is_exploration=True), \
+            "Exploration bar should bypass trust gate"
+
+    def test_trust_gate_respects_min_signals(self):
+        """DEGRADED with too few signals → passes (not enough data to gate)."""
+        trust = {"lifecycle": "DEGRADED", "total": 10}  # < 15 min
+        assert not self._is_gated(trust), "Should not gate with only 10 signals (< 15 min)"
+
+    def test_trust_gate_config_exists(self):
+        """Gate config keys are present and valid."""
+        import system_config as cfg
+        ct = cfg.TEMPLATE_EVOLUTION_CONFIG["contextual_trust"]
+        assert "trust_gate_enabled" in ct
+        assert "trust_gate_min_lifecycle" in ct
+        assert "trust_gate_min_signals" in ct
+        assert isinstance(ct["trust_gate_enabled"], bool)
+        assert ct["trust_gate_min_lifecycle"] in ("PROVEN", "MONITORING", "DEGRADED", "BURN_IN")
+        assert isinstance(ct["trust_gate_min_signals"], int) and ct["trust_gate_min_signals"] > 0
+
+
 class TestReEnablePerState:
     """Tests for per-state trust-based re-enable logic."""
 
@@ -2524,7 +2584,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough, TestVolumeTimeframeThreshold, TestDuplicateTimeframeAware, TestNewRecipes, TestIndicatorScaling, TestSignalStackingCooldown, TestQGTestPeriodSafetyNet, TestTrustScoreCalculation, TestRollingTrust, TestReEnablePerState]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough, TestVolumeTimeframeThreshold, TestDuplicateTimeframeAware, TestNewRecipes, TestIndicatorScaling, TestSignalStackingCooldown, TestQGTestPeriodSafetyNet, TestTrustScoreCalculation, TestRollingTrust, TestReEnablePerState, TestTrustGate]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

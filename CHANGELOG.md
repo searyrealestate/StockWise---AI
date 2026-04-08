@@ -1,5 +1,17 @@
 # Changelog
 
+## [2026-04-08] Trust Lifecycle Signal Gate (DDR #38)
+
+### Added
+- **Trust Lifecycle Gate** in `scan_ticker()`: Blocks signals from template+symbol+state combos where trust lifecycle is DEGRADED or DISABLED with ≥15 signals. Gate is bypassed on exploration bars (15%) for data collection.
+- Config keys in `TEMPLATE_EVOLUTION_CONFIG["contextual_trust"]`: `trust_gate_enabled` (True), `trust_gate_min_lifecycle` ("MONITORING"), `trust_gate_min_signals` (15)
+- Validation assertions for the 3 new config keys in `_validate_template_evolution_config()`
+- `TestTrustGate`: 6 unit tests covering blocked/allowed/exploration/min_signals/config
+
+### Fixed
+- BRK-B SIDEWAYS DEGRADED (WR=15.4%, 13 trades, -$252) will now be gated after ≥15 signals
+- System previously KNEW about bad combos but never ACTED on them
+
 ## [2026-04-08] Per-State Trust-Based Re-Enable in evaluate_auto_disable
 
 ### Added
