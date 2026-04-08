@@ -75,6 +75,7 @@ BACKTEST_CONFIG = {
     "ruin_threshold_pct":     50,       # 50% capital loss = ruin
     "min_trade_capital":      500,      # Cannot trade below this
     "days_back":              _sl.get("eval_days_back", 1095),
+    "min_bars_after_exit":    _sl.get("min_bars_between_signals", 20),
     # Kinetic stop phases — from KINETIC_STOP_CONFIG
     "phase1_atr_mult":                _ks.get("phase1_atr_mult", 2.0),
     "phase2_breakeven_trigger_pct":   _ks.get("phase2_breakeven_trigger_pct", 0.015),
@@ -188,6 +189,7 @@ class BacktestEngine:
         self.closed_trades  = []   # list[dict]
         self.equity_curve   = []   # list[{date, equity, cash, open_positions}]
         self.block_eval_stats = {}   # Populated by _collect_block_evaluations()
+        self.symbol_exit_bar = {}   # sym -> last exit bar index (for cooldown)
 
     # ───────────────────────────────────────────────────────────────────────
     # Public entry point
@@ -422,6 +424,21 @@ class BacktestEngine:
                 break
             if sym in open_syms:
                 continue
+            # Signal stacking cooldown: wait min_bars_after_exit bars after last exit
+            last_exit = self.symbol_exit_bar.get(sym)
+            if last_exit is not None:
+                df_sym = self.data_cache.get(sym)
+                if df_sym is not None and last_exit in df_sym.index and trading_day in df_sym.index:
+                    try:
+                        exit_idx = df_sym.index.get_indexer([last_exit])[0]
+                        curr_idx = df_sym.index.get_indexer([trading_day])[0]
+                        if exit_idx >= 0 and curr_idx >= 0:
+                            bars_since = curr_idx - exit_idx
+                            if bars_since < self.config["min_bars_after_exit"]:
+                                logger.debug(f"  {sym}: COOLDOWN {bars_since}/{self.config['min_bars_after_exit']} bars since exit")
+                                continue
+                    except Exception:
+                        pass  # fail-open
             df = self.data_cache.get(sym)
             if df is None or trading_day not in df.index:
                 continue
@@ -545,6 +562,8 @@ class BacktestEngine:
         pos.exit_reason = reason
         pos.pnl         = round((exit_px - pos.entry_price) * pos.shares, 2)
         pos.pnl_pct     = round((exit_px - pos.entry_price) / pos.entry_price * 100, 2)
+
+        self.symbol_exit_bar[pos.symbol] = exit_day
 
         self.closed_trades.append({
             "symbol":        pos.symbol,

@@ -1,5 +1,17 @@
 # Changelog
 
+## [2026-04-08] Per-Symbol Cooldown After Exit — Prevent Signal Stacking
+
+### Added
+- `BACKTEST_CONFIG["min_bars_after_exit"]`: sourced from `SHADOW_LEDGER_CONFIG.min_bars_between_signals` (=20)
+- `BacktestEngine.symbol_exit_bar`: dict tracking last exit bar per symbol
+- Cooldown check in `_scan_for_signals()`: skips re-entry if `bars_since_exit < min_bars_after_exit`
+- Exit recording in `_close_position()`: updates `symbol_exit_bar[sym]` on every exit
+- 4 unit tests in `TestSignalStackingCooldown`
+
+### Fixed
+- NFLX-style signal stacking: symbol re-entering same day as stop-loss (was 31/74 trades from re-entry on 2h run)
+
 ## [2026-04-08] Replace RESISTANCE_SQUEEZE + Add SUPPORT_BOUNCE + VOLATILE Recipes
 
 ### Added

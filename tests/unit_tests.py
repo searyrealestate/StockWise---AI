@@ -2215,6 +2215,85 @@ class TestIndicatorScaling:
 
 
 # ============================================================
+# TestSignalStackingCooldown
+# ============================================================
+class TestSignalStackingCooldown:
+    """Tests for per-symbol cooldown after exit in BacktestEngine."""
+
+    def test_config_key_exists(self):
+        """BACKTEST_CONFIG must contain min_bars_after_exit."""
+        from backtest_engine import BACKTEST_CONFIG
+        assert "min_bars_after_exit" in BACKTEST_CONFIG, "BACKTEST_CONFIG missing 'min_bars_after_exit'"
+        assert BACKTEST_CONFIG["min_bars_after_exit"] > 0, "min_bars_after_exit must be > 0"
+
+    def test_symbol_exit_bar_initialized(self):
+        """BacktestEngine.__init__ must create symbol_exit_bar dict."""
+        from backtest_engine import BacktestEngine
+        eng = BacktestEngine.__new__(BacktestEngine)
+        eng.config = {
+            "initial_capital": 10000, "max_positions": 5, "position_size_pct": 10,
+            "stop_loss_pct": 2, "take_profit_pct": 4, "commission_per_trade": 1,
+            "slippage_pct": 0.05, "days_back": 365, "min_bars_after_exit": 20,
+            "max_bars_in_trade": 10, "eval_start_date": None,
+        }
+        eng.timeframe = "1d"
+        eng.symbols = []
+        eng.open_positions = []
+        eng.closed_trades = []
+        eng.equity_curve = []
+        eng.block_eval_stats = {}
+        eng.symbol_exit_bar = {}
+        assert isinstance(eng.symbol_exit_bar, dict), "symbol_exit_bar must be a dict"
+        assert len(eng.symbol_exit_bar) == 0, "symbol_exit_bar must start empty"
+
+    def test_cooldown_blocks_reentry(self):
+        """symbol_exit_bar blocks re-entry within cooldown window."""
+        import pandas as pd
+        from unittest.mock import MagicMock, patch
+        from backtest_engine import BacktestEngine
+
+        eng = BacktestEngine.__new__(BacktestEngine)
+        eng.config = {"min_bars_after_exit": 20, "max_positions": 5}
+        eng.open_positions = []
+        eng.closed_trades = []
+        eng.equity_curve = []
+        eng.block_eval_stats = {}
+
+        # Build a 30-bar index
+        dates = pd.bdate_range("2024-01-01", periods=30)
+        df = pd.DataFrame({"close": 100.0}, index=dates)
+        eng.symbols = [dates[0]]  # dummy — not used in this sub-test
+        eng.data_cache = {"NFLX": df}
+        eng.symbol_exit_bar = {"NFLX": dates[0]}
+
+        # Check that bars_since < 20 would trigger cooldown (dates[5] is 5 bars after)
+        exit_idx = df.index.get_indexer([dates[0]])[0]
+        curr_idx = df.index.get_indexer([dates[5]])[0]
+        bars_since = curr_idx - exit_idx
+        assert bars_since == 5, f"Expected 5 bars_since, got {bars_since}"
+        assert bars_since < eng.config["min_bars_after_exit"], "Should be in cooldown"
+
+    def test_cooldown_allows_reentry_after_window(self):
+        """symbol_exit_bar allows re-entry after cooldown expires."""
+        import pandas as pd
+        from backtest_engine import BacktestEngine
+
+        eng = BacktestEngine.__new__(BacktestEngine)
+        eng.config = {"min_bars_after_exit": 20, "max_positions": 5}
+
+        dates = pd.bdate_range("2024-01-01", periods=30)
+        df = pd.DataFrame({"close": 100.0}, index=dates)
+        eng.data_cache = {"NFLX": df}
+        eng.symbol_exit_bar = {"NFLX": dates[0]}
+
+        exit_idx = df.index.get_indexer([dates[0]])[0]
+        curr_idx = df.index.get_indexer([dates[25]])[0]
+        bars_since = curr_idx - exit_idx
+        assert bars_since >= eng.config["min_bars_after_exit"], \
+            f"Expected bars_since >= 20, got {bars_since}"
+
+
+# ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
 if __name__ == '__main__':
@@ -2222,7 +2301,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough, TestVolumeTimeframeThreshold, TestDuplicateTimeframeAware, TestNewRecipes, TestIndicatorScaling]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough, TestVolumeTimeframeThreshold, TestDuplicateTimeframeAware, TestNewRecipes, TestIndicatorScaling, TestSignalStackingCooldown]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")
