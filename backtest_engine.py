@@ -82,6 +82,11 @@ BACKTEST_CONFIG = {
         "15m": 100,
     },
     "min_bars_after_exit":    _sl.get("min_bars_between_signals", 20),
+    "rolling_trust": {
+        "enabled":               True,  # Enable rolling trust updates during backtest
+        "reassign_enabled":      True,  # Enable periodic suit reassignment
+        "reassign_interval_bars": 20,   # Reassign suits every N bars (~1 month daily)
+    },
     # Kinetic stop phases — from KINETIC_STOP_CONFIG
     "phase1_atr_mult":                _ks.get("phase1_atr_mult", 2.0),
     "phase2_breakeven_trigger_pct":   _ks.get("phase2_breakeven_trigger_pct", 0.015),
@@ -115,6 +120,7 @@ class Position:
         "exit_price", "exit_date", "exit_reason",
         "pnl", "pnl_pct", "bars_held",
         "indicator_snapshot",
+        "stock_state",
     ]
 
     def __init__(self, symbol, template_id, template_name,
@@ -140,6 +146,7 @@ class Position:
         self.pnl_pct       = 0.0
         self.bars_held     = 0
         self.indicator_snapshot = {}
+        self.stock_state = {}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -196,6 +203,7 @@ class BacktestEngine:
         self.equity_curve   = []   # list[{date, equity, cash, open_positions}]
         self.block_eval_stats = {}   # Populated by _collect_block_evaluations()
         self.symbol_exit_bar = {}   # sym -> last exit bar index (for cooldown)
+        self.rolling_bar_counter = 0
 
     # ───────────────────────────────────────────────────────────────────────
     # Public entry point
@@ -212,6 +220,14 @@ class BacktestEngine:
         if not self.data_cache:
             return {"error": "No data available", "trades": [], "equity_curve": []}
 
+        # ── Rolling trust: load caches into RAM ──
+        rolling_cfg = self.config.get("rolling_trust", {})
+        if rolling_cfg.get("enabled", True):
+            self.matcher._trust_cache = self.matcher._load_trust_matrix()
+            self.matcher._suit_cache  = self.matcher._load_assignments()
+            self.rolling_bar_counter  = 0
+            logger.info("[ROLLING] Trust cache initialized — backtest runs in RAM mode")
+
         timeline = self._build_timeline()
         if not timeline:
             return {"error": "Empty timeline after warmup exclusion",
@@ -222,6 +238,20 @@ class BacktestEngine:
 
         for trading_day in timeline:
             self._process_day(trading_day)
+
+        # ── Rolling trust: save caches to disk ──
+        if self.matcher._trust_cache is not None:
+            try:
+                sl_cfg = getattr(cfg, 'SHADOW_LEDGER_CONFIG', {})
+                ledger_path = sl_cfg.get('ledger_path', 'data/shadow_ledger.json')
+                data = safe_json_read(ledger_path, default={})
+                data["trust_matrix"] = self.matcher._trust_cache
+                safe_json_write(ledger_path, data)
+                logger.info("[ROLLING] Trust cache persisted to disk")
+            except Exception as e:
+                logger.warning(f"[ROLLING] Failed to persist trust cache: {e}")
+            self.matcher._trust_cache = None
+            self.matcher._suit_cache  = None
 
         self._close_remaining(timeline[-1])
 
@@ -332,6 +362,17 @@ class BacktestEngine:
 
     def _process_day(self, trading_day):
         self._update_positions(trading_day)
+        # ── Rolling suit reassignment ──
+        rolling_cfg = self.config.get("rolling_trust", {})
+        if self.matcher._trust_cache is not None and rolling_cfg.get("reassign_enabled", True):
+            self.rolling_bar_counter += 1
+            interval = rolling_cfg.get("reassign_interval_bars", 20)
+            if self.rolling_bar_counter % interval == 0:
+                try:
+                    self.matcher.assign_suits()
+                    logger.debug(f"[ROLLING] Suit reassignment at bar {self.rolling_bar_counter}")
+                except Exception as e:
+                    logger.debug(f"[ROLLING] Suit reassignment failed (non-fatal): {e}")
         if len(self.open_positions) < self.config["max_positions"]:
             self._scan_for_signals(trading_day)
         equity = self._calc_equity(trading_day)
@@ -540,6 +581,7 @@ class BacktestEngine:
             except Exception:
                 pos.indicator_snapshot = {}
 
+            pos.stock_state = stock_state
             self.open_positions.append(pos)
             logger.debug(f"  OPEN {sym} @{actual_px:.2f} x{shares} stop={stop_loss:.2f} "
                          f"tmpl={template_id}")
@@ -589,6 +631,99 @@ class BacktestEngine:
             "final_phase":        pos.phase,
             "indicators_at_entry": getattr(pos, "indicator_snapshot", {}),
         })
+
+        # ── Rolling trust update ──
+        if self.matcher._trust_cache is not None:
+            try:
+                self._update_rolling_trust(pos)
+            except Exception as e:
+                logger.debug(f"[ROLLING] Trust update failed for {pos.symbol} (non-fatal): {e}")
+
+    def _update_rolling_trust(self, pos):
+        """Update in-memory trust cache cell after position close.
+        Mirrors ShadowLedger._update_trust_matrix logic but operates on RAM."""
+        trust_matrix = self.matcher._trust_cache
+        if trust_matrix is None:
+            return
+
+        ct_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {}).get("contextual_trust", {})
+        if not ct_cfg.get("enabled", False):
+            return
+
+        template_id = pos.template_id
+        symbol      = pos.symbol
+        stock_state = getattr(pos, 'stock_state', None) or {}
+        won         = (pos.pnl_pct > 0)
+
+        trend      = stock_state.get("trend", "")
+        structure  = stock_state.get("structure", "")
+        volume     = stock_state.get("volume", "")
+        volatility = stock_state.get("volatility", "")
+        state_key  = f"{trend}:{structure}:{volume}:{volatility}"
+
+        if template_id not in trust_matrix:
+            trust_matrix[template_id] = {}
+        if symbol not in trust_matrix[template_id]:
+            trust_matrix[template_id][symbol] = {}
+        if state_key not in trust_matrix[template_id][symbol]:
+            trust_matrix[template_id][symbol][state_key] = {
+                "signals": [], "wins": 0, "total": 0,
+                "decayed_wr": 0.5, "lifecycle": "BURN_IN",
+            }
+
+        cell = trust_matrix[template_id][symbol][state_key]
+
+        cell["signals"].append({
+            "won":       won,
+            "pnl_pct":   round(float(pos.pnl_pct), 4),
+            "timestamp": pos.exit_date or "",
+        })
+        if len(cell["signals"]) > 52:
+            cell["signals"] = cell["signals"][-52:]
+
+        cell["total"] += 1
+        if won:
+            cell["wins"] += 1
+
+        # Recalculate decayed WR
+        decay = ct_cfg.get("decay_rate", 0.95)
+        signals = cell["signals"]
+        n = len(signals)
+        total_w, win_w = 0.0, 0.0
+        for i, sig in enumerate(signals):
+            w = decay ** (n - 1 - i)
+            total_w += w
+            if sig.get("won", False):
+                win_w += w
+        cell["decayed_wr"] = round(win_w / max(total_w, 1e-9), 4)
+
+        # Update lifecycle (use determine_lifecycle from shadow_ledger for hysteresis)
+        prev_lifecycle = cell.get("lifecycle", "BURN_IN")
+        try:
+            from shadow_ledger import ShadowLedger
+            sl_tmp = ShadowLedger.__new__(ShadowLedger)
+            cell["lifecycle"] = sl_tmp.determine_lifecycle(
+                cell["total"], cell["decayed_wr"], prev_lifecycle
+            )
+        except Exception:
+            # Fallback: simple lifecycle without hysteresis
+            if cell["total"] < ct_cfg.get("burn_in_signals", 20):
+                cell["lifecycle"] = "BURN_IN"
+            elif cell["decayed_wr"] >= ct_cfg.get("proven_wr_threshold", 0.50):
+                cell["lifecycle"] = "PROVEN"
+            elif cell["decayed_wr"] >= ct_cfg.get("monitoring_wr_threshold", 0.35):
+                cell["lifecycle"] = "MONITORING"
+            elif cell["decayed_wr"] >= ct_cfg.get("degraded_wr_threshold", 0.20):
+                cell["lifecycle"] = "DEGRADED"
+            else:
+                cell["lifecycle"] = "DISABLED"
+
+        logger.debug(
+            f"[ROLLING] {template_id}:{symbol}:{state_key} | "
+            f"{'WIN' if won else 'LOSS'} | pnl={pos.pnl_pct:+.2f}% | "
+            f"total={cell['total']} | wr={cell['decayed_wr']:.1%} | "
+            f"lifecycle={cell['lifecycle']}"
+        )
 
     def _close_remaining(self, last_day):
         for pos in list(self.open_positions):

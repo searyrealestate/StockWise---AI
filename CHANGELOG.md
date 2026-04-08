@@ -1,5 +1,22 @@
 # Changelog
 
+## [2026-04-08] Rolling Trust Updates + Suit Reassignment During Backtest
+
+### Added
+- `TemplateMatcher._trust_cache` / `_suit_cache`: in-memory cache slots (default None); backward-compatible — None = disk behavior unchanged
+- Cache short-circuits in `_load_trust_matrix`, `_save_trust_matrix`, `_load_assignments`, `_save_assignments`
+- `Position.stock_state` slot: captures market state at entry for rolling trust updates
+- `BacktestEngine.rolling_bar_counter`: bar counter for periodic suit reassignment
+- `BacktestEngine._update_rolling_trust(pos)`: updates trust cell (wins, total, decayed_wr, lifecycle) in RAM after each position close; fail-open
+- Rolling setup in `run()`: loads trust + suit caches into RAM at start, persists to disk at end, clears caches after save
+- Periodic suit reassignment in `_process_day()`: every `reassign_interval_bars` bars (default 20)
+- `BACKTEST_CONFIG["rolling_trust"]`: config block with enabled, reassign_enabled, reassign_interval_bars
+- 7 unit tests in `TestRollingTrust`
+
+### Notes
+- Trust cache is cleared after backtest (no stale state bleeds into next run)
+- `_update_rolling_trust` is fail-open: exceptions do not affect trade close logic
+
 ## [2026-04-08] Trust Score Calculation + Lifecycle per (template × symbol × state)
 
 ### Added

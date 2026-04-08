@@ -2424,6 +2424,95 @@ class TestTrustScoreCalculation:
 
 
 # ============================================================
+# TestRollingTrust
+# ============================================================
+class TestRollingTrust:
+    """Tests for rolling trust updates during backtest (SPEC §4 rolling evaluation)."""
+
+    def test_rolling_trust_config_exists(self):
+        """BACKTEST_CONFIG must have rolling_trust sub-dict with required keys."""
+        from backtest_engine import BACKTEST_CONFIG
+        rt = BACKTEST_CONFIG.get("rolling_trust", {})
+        assert "enabled" in rt, "rolling_trust.enabled missing"
+        assert "reassign_enabled" in rt, "rolling_trust.reassign_enabled missing"
+        assert "reassign_interval_bars" in rt, "rolling_trust.reassign_interval_bars missing"
+        assert isinstance(rt["reassign_interval_bars"], int) and rt["reassign_interval_bars"] > 0
+
+    def test_matcher_trust_cache_default_none(self):
+        """TemplateMatcher must initialize _trust_cache and _suit_cache to None."""
+        from template_matcher import TemplateMatcher
+        m = TemplateMatcher()
+        assert m._trust_cache is None, "_trust_cache must default to None"
+        assert m._suit_cache is None, "_suit_cache must default to None"
+
+    def test_matcher_load_trust_uses_cache_when_set(self):
+        """_load_trust_matrix must return cache dict when _trust_cache is set."""
+        from template_matcher import TemplateMatcher
+        m = TemplateMatcher()
+        fake_cache = {"FAKE_TEMPLATE": {"AAPL": {"BULL:::": {"wins": 5, "total": 10}}}}
+        m._trust_cache = fake_cache
+        result = m._load_trust_matrix()
+        assert result is fake_cache, "Should return cache, not disk data"
+
+    def test_matcher_load_assignments_uses_cache_when_set(self):
+        """_load_assignments must return cache dict when _suit_cache is set."""
+        from template_matcher import TemplateMatcher
+        m = TemplateMatcher()
+        fake_assignments = {"AAPL": {"by_state": {}, "default": None}}
+        m._suit_cache = fake_assignments
+        result = m._load_assignments()
+        assert result is fake_assignments, "Should return suit cache, not disk data"
+
+    def test_position_has_stock_state(self):
+        """Position must have stock_state attribute (slot)."""
+        from backtest_engine import Position
+        pos = Position(
+            symbol="TEST", template_id="T1", template_name="Test",
+            entry_price=100.0, entry_date="2026-01-01", shares=10,
+            stop_loss=95.0, take_profit=110.0, initial_stop=95.0,
+        )
+        assert hasattr(pos, "stock_state"), "Position must have stock_state slot"
+
+    def test_rolling_trust_update_win(self):
+        """_update_rolling_trust must record a WIN correctly in the trust cache."""
+        from backtest_engine import BacktestEngine, Position
+        engine = BacktestEngine(symbols=["TEST"], data_cache={"TEST": None})
+        engine.matcher._trust_cache = {}
+        pos = Position(
+            symbol="AAPL", template_id="SQUEEZE", template_name="Squeeze",
+            entry_price=100.0, entry_date="2026-01-01", shares=10,
+            stop_loss=95.0, take_profit=110.0, initial_stop=95.0,
+        )
+        pos.stock_state = {"trend": "BULLISH", "structure": "OPEN", "volume": "HEALTHY", "volatility": "NORMAL"}
+        pos.pnl_pct = 2.5
+        pos.exit_date = "2026-01-10"
+        engine._update_rolling_trust(pos)
+        cell = engine.matcher._trust_cache.get("SQUEEZE", {}).get("AAPL", {}).get("BULLISH:OPEN:HEALTHY:NORMAL", {})
+        assert cell.get("wins") == 1, f"Expected wins=1, got {cell.get('wins')}"
+        assert cell.get("total") == 1, f"Expected total=1, got {cell.get('total')}"
+        assert cell.get("decayed_wr", 0) > 0.5, f"WIN should push decayed_wr above 0.5"
+
+    def test_rolling_trust_update_loss(self):
+        """_update_rolling_trust must record a LOSS correctly in the trust cache."""
+        from backtest_engine import BacktestEngine, Position
+        engine = BacktestEngine(symbols=["TEST"], data_cache={"TEST": None})
+        engine.matcher._trust_cache = {}
+        pos = Position(
+            symbol="AAPL", template_id="SQUEEZE", template_name="Squeeze",
+            entry_price=100.0, entry_date="2026-01-01", shares=10,
+            stop_loss=95.0, take_profit=110.0, initial_stop=95.0,
+        )
+        pos.stock_state = {"trend": "BEARISH", "structure": "", "volume": "", "volatility": ""}
+        pos.pnl_pct = -1.5
+        pos.exit_date = "2026-01-05"
+        engine._update_rolling_trust(pos)
+        cell = engine.matcher._trust_cache.get("SQUEEZE", {}).get("AAPL", {}).get("BEARISH:::", {})
+        assert cell.get("wins") == 0, f"Expected wins=0, got {cell.get('wins')}"
+        assert cell.get("total") == 1, f"Expected total=1, got {cell.get('total')}"
+        assert cell.get("decayed_wr", 1) < 0.5, f"LOSS should push decayed_wr below 0.5"
+
+
+# ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
 if __name__ == '__main__':
@@ -2431,7 +2520,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough, TestVolumeTimeframeThreshold, TestDuplicateTimeframeAware, TestNewRecipes, TestIndicatorScaling, TestSignalStackingCooldown, TestQGTestPeriodSafetyNet, TestTrustScoreCalculation]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough, TestVolumeTimeframeThreshold, TestDuplicateTimeframeAware, TestNewRecipes, TestIndicatorScaling, TestSignalStackingCooldown, TestQGTestPeriodSafetyNet, TestTrustScoreCalculation, TestRollingTrust]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

@@ -52,6 +52,8 @@ class TemplateMatcher:
         # Statistics
         self.total_scans = 0
         self.total_signals = 0
+        self._trust_cache = None   # In-memory trust matrix (set by BacktestEngine)
+        self._suit_cache  = None   # In-memory suit assignments (set by BacktestEngine)
 
     def scan_ticker(self, symbol, df, stock_state=None, timeframe=None):
         """
@@ -627,6 +629,8 @@ class TemplateMatcher:
 
     def _load_trust_matrix(self):
         """Load trust_matrix section from shadow_ledger.json."""
+        if self._trust_cache is not None:
+            return self._trust_cache
         evo_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {})
         path = evo_cfg.get("auto_disable", {}).get(
             "disable_list_path", "data/shadow_ledger.json"
@@ -639,6 +643,9 @@ class TemplateMatcher:
 
     def _save_trust_matrix(self, trust_matrix):
         """Persist trust_matrix — writes only the trust_matrix key."""
+        if self._trust_cache is not None:
+            self._trust_cache = trust_matrix
+            return
         evo_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {})
         path = evo_cfg.get("auto_disable", {}).get(
             "disable_list_path", "data/shadow_ledger.json"
@@ -973,6 +980,8 @@ class TemplateMatcher:
 
     def _load_assignments(self):
         """Load suit assignments from shadow_ledger.json['suit_assignments']['assignments']."""
+        if self._suit_cache is not None:
+            return self._suit_cache
         try:
             data = safe_json_read(self._get_ledger_path(), default={})
             return data.get("suit_assignments", {}).get("assignments", {})
@@ -981,6 +990,9 @@ class TemplateMatcher:
 
     def _save_assignments(self, assignments):
         """Persist suit assignments — writes only the suit_assignments key."""
+        if self._suit_cache is not None:
+            self._suit_cache = assignments
+            return
         try:
             data = safe_json_read(self._get_ledger_path(), default={})
             if "suit_assignments" not in data:
