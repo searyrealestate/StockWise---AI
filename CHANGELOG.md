@@ -1,5 +1,19 @@
 # Changelog
 
+## [2026-04-08] Replace RESISTANCE_SQUEEZE + Add SUPPORT_BOUNCE + VOLATILE Recipes
+
+### Added
+- `2H_SUPPORT_BOUNCE` recipe: mean reversion from support with RSI<40 + EMA(12) momentum confirm (2h)
+- `2H_SIDEWAYS_VOLATILE_BREAKOUT` recipe: breakout from volatile sideways range, runner mode, 2.0 ATR stop (2h)
+- `2H_SIDEWAYS_VOLATILE_ACCUMULATION` recipe: OBV accumulation in volatile sideways, 1.2 volume surge (2h)
+- `SUPPORT_BOUNCE_MOMENTUM` recipe: daily equivalent of 2H_SUPPORT_BOUNCE
+- 4 unit tests in `TestNewRecipes`
+- Covers top uncovered gap: SIDEWAYS:OPEN_FIELD:HEALTHY:VOLATILE (1,905 bars)
+
+### Removed
+- `2H_RESISTANCE_SQUEEZE` recipe (PF=0.52 — buying at resistance is wrong premise)
+- `GEN_2H_RESISTANCE_SQUEEZE.json` template file
+
 ## [2026-04-08] Timeframe-Aware Indicator Period Scaling (MTFA)
 
 ### Added

@@ -2136,6 +2136,43 @@ class TestDuplicateTimeframeAware:
             f"Must have at least 1 NEAR_RESISTANCE recipe, found {len(nr_recipes)}"
 
 
+class TestNewRecipes:
+    """Tests for SUPPORT_BOUNCE and VOLATILE recipes."""
+
+    def test_resistance_squeeze_removed(self):
+        """2H_RESISTANCE_SQUEEZE must NOT exist."""
+        import system_config as cfg
+        assert "2H_RESISTANCE_SQUEEZE" not in cfg.TEMPLATE_GENERATION_RECIPES, \
+            "2H_RESISTANCE_SQUEEZE should have been removed (PF=0.52)"
+
+    def test_support_bounce_2h_exists(self):
+        """2H_SUPPORT_BOUNCE must exist with NEAR_SUPPORT."""
+        import system_config as cfg
+        recipe = cfg.TEMPLATE_GENERATION_RECIPES.get("2H_SUPPORT_BOUNCE")
+        assert recipe is not None, "2H_SUPPORT_BOUNCE recipe must exist"
+        assert "NEAR_SUPPORT" in recipe.get("required_structure", []), \
+            "2H_SUPPORT_BOUNCE must require NEAR_SUPPORT"
+        assert recipe.get("timeframe") == "2h", "timeframe must be 2h"
+
+    def test_volatile_recipes_exist(self):
+        """VOLATILE 2h recipes must exist."""
+        import system_config as cfg
+        r = cfg.TEMPLATE_GENERATION_RECIPES
+        assert "2H_SIDEWAYS_VOLATILE_BREAKOUT" in r, \
+            "2H_SIDEWAYS_VOLATILE_BREAKOUT must exist"
+        assert "2H_SIDEWAYS_VOLATILE_ACCUMULATION" in r, \
+            "2H_SIDEWAYS_VOLATILE_ACCUMULATION must exist"
+        assert "VOLATILE" in r["2H_SIDEWAYS_VOLATILE_BREAKOUT"]["applicable_volatility"], \
+            "VOLATILE must be in applicable_volatility"
+
+    def test_daily_support_bounce_exists(self):
+        """SUPPORT_BOUNCE_MOMENTUM must exist for daily."""
+        import system_config as cfg
+        recipe = cfg.TEMPLATE_GENERATION_RECIPES.get("SUPPORT_BOUNCE_MOMENTUM")
+        assert recipe is not None, "SUPPORT_BOUNCE_MOMENTUM recipe must exist"
+        assert recipe.get("timeframe") == "1d", "timeframe must be 1d"
+
+
 class TestIndicatorScaling:
     """Tests for timeframe-aware indicator period scaling."""
 
@@ -2185,7 +2222,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough, TestVolumeTimeframeThreshold, TestDuplicateTimeframeAware, TestIndicatorScaling]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough, TestVolumeTimeframeThreshold, TestDuplicateTimeframeAware, TestNewRecipes, TestIndicatorScaling]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")
