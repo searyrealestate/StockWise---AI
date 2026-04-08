@@ -2487,9 +2487,59 @@ class WalkForwardValidator:
         train_trades = self._run_engine_and_filter(train_data, template_id)
         val_trades   = self._run_engine_and_filter(val_data,   template_id)
 
-        return self._evaluate_quality_gate(
+        # VAL Quality Gate (existing logic)
+        val_result = self._evaluate_quality_gate(
             template_id, train_trades, val_trades, min_trades, min_pf
         )
+
+        # If VAL failed, no need to check TEST
+        if not val_result.get("passed"):
+            return val_result
+
+        # ── TEST-period safety net (DDR #28) ──
+        test_min_pf     = cfg_used.get("quality_gate_test_min_pf", 0.8)
+        test_min_trades = cfg_used.get("quality_gate_test_min_trades", 3)
+
+        if test_data:
+            oos_trades = self._run_engine_and_filter(test_data, template_id)
+            oos_n = len(oos_trades)
+
+            if oos_n >= test_min_trades:
+                oos_profit = sum(t["pnl_pct"] for t in oos_trades if t.get("pnl_pct", 0) > 0)
+                oos_loss   = abs(sum(t["pnl_pct"] for t in oos_trades if t.get("pnl_pct", 0) <= 0))
+                oos_pf = round(oos_profit / oos_loss, 2) if oos_loss > 0 else (float("inf") if oos_profit > 0 else 0.0)
+
+                logger.info(
+                    f"[QG-TEST] {template_id}: TEST period -- "
+                    f"PF={oos_pf:.2f}, trades={oos_n}"
+                )
+
+                if oos_pf < test_min_pf:
+                    logger.warning(
+                        f"[QG-TEST] {template_id}: FAILED TEST safety net -- "
+                        f"PF={oos_pf:.2f} < {test_min_pf} "
+                        f"(VAL passed with PF={val_result.get('test_pf', 0):.2f})"
+                    )
+                    val_result["passed"] = False
+                    val_result["reason"] = (
+                        f"QG_TEST_PERIOD_FAIL: VAL PF={val_result.get('test_pf', 0):.2f} OK, "
+                        f"but TEST PF={oos_pf:.2f} < {test_min_pf}"
+                    )
+                    val_result["test_period_pf"] = oos_pf
+                    val_result["test_period_trades"] = oos_n
+                    return val_result
+
+                val_result["test_period_pf"] = oos_pf
+                val_result["test_period_trades"] = oos_n
+            else:
+                logger.info(
+                    f"[QG-TEST] {template_id}: TEST period -- "
+                    f"{oos_n} trades < {test_min_trades} minimum -- BURN_IN (pass)"
+                )
+                val_result["test_period_pf"] = 0
+                val_result["test_period_trades"] = oos_n
+
+        return val_result
 
     def _run_engine_and_filter(self, data_cache, template_id):
         """Run BacktestEngine on data_cache and return only trades for template_id."""

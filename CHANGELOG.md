@@ -1,5 +1,19 @@
 # Changelog
 
+## [2026-04-08] QG TEST-Period Safety Net + Auto-Disable Tightened to WR<25%
+
+### Added
+- `WALK_FORWARD_CONFIG["quality_gate_test_min_pf"]` = 0.8: TEST-period safety net threshold (DDR #28)
+- `WALK_FORWARD_CONFIG["quality_gate_test_min_trades"]` = 3: minimum TEST trades to enforce net
+- `validate_single_template()`: runs `_run_engine_and_filter(test_data)` after VAL pass; templates with TEST PF < 0.8 (≥3 trades) are rejected with `QG_TEST_PERIOD_FAIL` reason
+- `[QG-TEST]` logger messages for all TEST evaluations
+
+### Changed
+- `TEMPLATE_EVOLUTION_CONFIG["auto_disable"]["max_loss_rate"]`: 0.85 → 0.75 (now catches WR<25%, previously WR<15%)
+
+### Fixed
+- GEN_BEARISH_SQUEEZE_BREAK pattern: previously passed VAL QG but WR=18.8% on TEST — TEST safety net would have blocked it
+
 ## [2026-04-08] Timeframe-Aware Cooldown: 5 bars for daily, 20 for 2h
 
 ### Changed

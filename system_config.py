@@ -496,7 +496,7 @@ TEMPLATE_EVOLUTION_CONFIG = {
     "auto_disable": {
         "enabled": True,
         "min_signals_to_evaluate": 15,       # Need >= 15 signals before considering disable
-        "max_loss_rate": 0.85,               # Disable combo if loss rate > 85% (WR<15% — truly toxic)
+        "max_loss_rate": 0.75,               # Disable combo if loss rate > 75% (WR<25% — DDR #28)
         "min_loss_streak": 5,                # OR disable after 5 consecutive losses
         "disable_list_path": "data/shadow_ledger.json",  # Stored in shadow_ledger
         "re_enable_win_rate": 0.35,          # Re-enable if global win rate recovers above 35%
@@ -935,6 +935,8 @@ WALK_FORWARD_CONFIG = {
     "flag_overfit_threshold": 0.20,       # Flag if train_WR - test_WR > 20 percentage points
     "quality_gate_min_pf":    1.0,        # Minimum PF on test set for newly generated templates to stay enabled
     "quality_gate_min_trades": 3,         # Minimum test trades to make a decision (below → keep enabled as BURN_IN)
+    "quality_gate_test_min_pf":     0.8,  # TEST-period safety net: must survive unseen data (DDR #28)
+    "quality_gate_test_min_trades": 3,    # Minimum TEST trades to enforce safety net (below → BURN_IN pass)
 }
 
 

@@ -2307,6 +2307,40 @@ class TestSignalStackingCooldown:
 
 
 # ============================================================
+# TestQGTestPeriodSafetyNet
+# ============================================================
+class TestQGTestPeriodSafetyNet:
+    """Tests for QG TEST-period safety net and auto-disable tightening (DDR #28)."""
+
+    def test_config_has_test_period_thresholds(self):
+        """WALK_FORWARD_CONFIG must have test-period QG thresholds."""
+        import system_config as cfg
+        wfc = cfg.WALK_FORWARD_CONFIG
+        assert "quality_gate_test_min_pf" in wfc, \
+            "WALK_FORWARD_CONFIG missing 'quality_gate_test_min_pf'"
+        assert "quality_gate_test_min_trades" in wfc, \
+            "WALK_FORWARD_CONFIG missing 'quality_gate_test_min_trades'"
+        assert wfc["quality_gate_test_min_pf"] < wfc["quality_gate_min_pf"], \
+            (f"TEST threshold ({wfc['quality_gate_test_min_pf']}) must be looser "
+             f"than VAL threshold ({wfc['quality_gate_min_pf']})")
+
+    def test_auto_disable_catches_18pct_wr(self):
+        """Auto-disable must catch WR=18.8% (loss_rate=81.2%)."""
+        import system_config as cfg
+        ad = cfg.TEMPLATE_EVOLUTION_CONFIG["auto_disable"]
+        max_lr = ad["max_loss_rate"]
+        assert 0.812 >= max_lr, \
+            f"WR=18.8% (loss_rate=0.812) must exceed max_loss_rate={max_lr}"
+
+    def test_auto_disable_threshold_is_75(self):
+        """Auto-disable max_loss_rate should be 0.75 (WR < 25%)."""
+        import system_config as cfg
+        ad = cfg.TEMPLATE_EVOLUTION_CONFIG["auto_disable"]
+        assert ad["max_loss_rate"] == 0.75, \
+            f"Expected max_loss_rate=0.75, got {ad['max_loss_rate']}"
+
+
+# ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
 if __name__ == '__main__':
@@ -2314,7 +2348,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough, TestVolumeTimeframeThreshold, TestDuplicateTimeframeAware, TestNewRecipes, TestIndicatorScaling, TestSignalStackingCooldown]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough, TestVolumeTimeframeThreshold, TestDuplicateTimeframeAware, TestNewRecipes, TestIndicatorScaling, TestSignalStackingCooldown, TestQGTestPeriodSafetyNet]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")
