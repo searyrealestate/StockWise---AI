@@ -561,17 +561,44 @@ class TemplateMatcher:
         disabled_set = self._load_disable_list()
 
         if key in disabled_set:
-            # Check for re-enable: global win rate recovered
+            should_reenable = False
+            reenable_reason = ""
+
+            # Path 1: Global WR recovery (existing logic)
             global_stat = self._aggregate_global_stats(shadow_stats, template_id)
             global_wr = global_stat.get("win_rate", 0.0) / 100.0
             if global_wr >= re_enable_wr:
+                should_reenable = True
+                reenable_reason = f"global_wr={global_wr:.1%} >= {re_enable_wr:.1%}"
+
+            # Path 2: Per-state trust recovery (SPEC §4)
+            if not should_reenable:
+                re_enable_lifecycle = ad_cfg.get("re_enable_min_lifecycle", "MONITORING")
+                lifecycle_rank = {
+                    "DISABLED": 0, "DEGRADED": 1, "BURN_IN": 2,
+                    "MONITORING": 3, "PROVEN": 4,
+                }
+                min_rank = lifecycle_rank.get(re_enable_lifecycle, 3)
+                try:
+                    trust = self.get_trust_score(template_id, symbol, stock_state)
+                    trust_lifecycle = trust.get("lifecycle", "DISABLED")
+                    trust_rank = lifecycle_rank.get(trust_lifecycle, 0)
+                    if trust_rank >= min_rank and trust.get("signals", 0) >= min_signals:
+                        should_reenable = True
+                        reenable_reason = (
+                            f"trust_lifecycle={trust_lifecycle} >= {re_enable_lifecycle} | "
+                            f"score={trust.get('score', 0):.3f} | "
+                            f"signals={trust.get('signals', 0)}"
+                        )
+                except Exception:
+                    pass  # Trust check failed — don't re-enable
+
+            if should_reenable:
                 disabled_set.discard(key)
                 self._save_disable_list(disabled_set)
                 logger.info(
                     f"[AutoDisable] RE-ENABLED {key} | "
-                    f"global_wr={global_wr:.1%} | "
-                    f"threshold={re_enable_wr:.1%} | "
-                    f"status=RE-ENABLED"
+                    f"reason={reenable_reason} | status=RE-ENABLED"
                 )
                 if notifier:
                     try:

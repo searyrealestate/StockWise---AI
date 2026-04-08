@@ -500,6 +500,7 @@ TEMPLATE_EVOLUTION_CONFIG = {
         "min_loss_streak": 5,                # OR disable after 5 consecutive losses
         "disable_list_path": "data/shadow_ledger.json",  # Stored in shadow_ledger
         "re_enable_win_rate": 0.35,          # Re-enable if global win rate recovers above 35%
+        "re_enable_min_lifecycle": "MONITORING",  # Per-state trust lifecycle threshold for re-enable (SPEC §4)
         "watchlist_loss_rate": 0.60,         # WR<40% → log WARNING for analysis (not disabled)
     },
     "attribution": {

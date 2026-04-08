@@ -2494,6 +2494,28 @@ class TestRollingTrust:
         assert cell.get("decayed_wr", 1) < 0.5, f"LOSS should push decayed_wr below 0.5"
 
 
+class TestReEnablePerState:
+    """Tests for per-state trust-based re-enable logic."""
+
+    def test_re_enable_config_exists(self):
+        import system_config as cfg
+        ad = cfg.TEMPLATE_EVOLUTION_CONFIG.get("auto_disable", {})
+        assert "re_enable_min_lifecycle" in ad, "re_enable_min_lifecycle missing"
+        assert ad["re_enable_min_lifecycle"] in ("PROVEN", "MONITORING", "DEGRADED", "BURN_IN")
+
+    def test_re_enable_lifecycle_rank_order(self):
+        """Verify lifecycle rank ordering is correct for re-enable comparison."""
+        rank = {"DISABLED": 0, "DEGRADED": 1, "BURN_IN": 2, "MONITORING": 3, "PROVEN": 4}
+        assert rank["PROVEN"] > rank["MONITORING"] > rank["DEGRADED"] > rank["DISABLED"]
+        assert rank["BURN_IN"] > rank["DEGRADED"]
+
+    def test_auto_disable_config_has_re_enable_wr(self):
+        import system_config as cfg
+        ad = cfg.TEMPLATE_EVOLUTION_CONFIG.get("auto_disable", {})
+        assert "re_enable_win_rate" in ad
+        assert 0 < ad["re_enable_win_rate"] <= 1.0
+
+
 # ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
@@ -2502,7 +2524,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough, TestVolumeTimeframeThreshold, TestDuplicateTimeframeAware, TestNewRecipes, TestIndicatorScaling, TestSignalStackingCooldown, TestQGTestPeriodSafetyNet, TestTrustScoreCalculation, TestRollingTrust]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough, TestVolumeTimeframeThreshold, TestDuplicateTimeframeAware, TestNewRecipes, TestIndicatorScaling, TestSignalStackingCooldown, TestQGTestPeriodSafetyNet, TestTrustScoreCalculation, TestRollingTrust, TestReEnablePerState]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

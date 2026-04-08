@@ -1,5 +1,17 @@
 # Changelog
 
+## [2026-04-08] Per-State Trust-Based Re-Enable in evaluate_auto_disable
+
+### Added
+- `evaluate_auto_disable()`: second re-enable path — disabled template re-enables if per-state trust lifecycle >= `re_enable_min_lifecycle` (default: MONITORING) AND signals >= min_signals
+- `system_config.TEMPLATE_EVOLUTION_CONFIG["auto_disable"]["re_enable_min_lifecycle"]`: config key for minimum trust lifecycle required to re-enable (default: "MONITORING")
+- `TestReEnablePerState`: 3 unit tests covering config existence, lifecycle rank ordering, and re_enable_wr presence
+- Lifecycle rank map: DISABLED=0, DEGRADED=1, BURN_IN=2, MONITORING=3, PROVEN=4
+
+### Changed
+- Re-enable is now two-path: Path 1 = global WR recovery (existing); Path 2 = per-state trust recovery (new)
+- Both paths log re-enable reason with lifecycle, score, and signal count
+
 ## [2026-04-08] Fix Lifecycle Hysteresis Bug + Remove Dead Code
 
 ### Fixed
