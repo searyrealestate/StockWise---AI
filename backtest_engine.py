@@ -75,6 +75,12 @@ BACKTEST_CONFIG = {
     "ruin_threshold_pct":     50,       # 50% capital loss = ruin
     "min_trade_capital":      500,      # Cannot trade below this
     "days_back":              _sl.get("eval_days_back", 1095),
+    "min_bars_after_exit_by_timeframe": {
+        "1d":  5,
+        "2h":  20,
+        "1h":  40,
+        "15m": 100,
+    },
     "min_bars_after_exit":    _sl.get("min_bars_between_signals", 20),
     # Kinetic stop phases — from KINETIC_STOP_CONFIG
     "phase1_atr_mult":                _ks.get("phase1_atr_mult", 2.0),
@@ -434,8 +440,10 @@ class BacktestEngine:
                         curr_idx = df_sym.index.get_indexer([trading_day])[0]
                         if exit_idx >= 0 and curr_idx >= 0:
                             bars_since = curr_idx - exit_idx
-                            if bars_since < self.config["min_bars_after_exit"]:
-                                logger.debug(f"  {sym}: COOLDOWN {bars_since}/{self.config['min_bars_after_exit']} bars since exit")
+                            tf_cooldowns = self.config.get("min_bars_after_exit_by_timeframe", {})
+                            cooldown_bars = tf_cooldowns.get(self.timeframe, self.config.get("min_bars_after_exit", 20))
+                            if bars_since < cooldown_bars:
+                                logger.debug(f"  {sym}: COOLDOWN {bars_since}/{cooldown_bars} bars since exit (tf={self.timeframe})")
                                 continue
                     except Exception:
                         pass  # fail-open

@@ -2220,11 +2220,17 @@ class TestIndicatorScaling:
 class TestSignalStackingCooldown:
     """Tests for per-symbol cooldown after exit in BacktestEngine."""
 
-    def test_config_key_exists(self):
-        """BACKTEST_CONFIG must contain min_bars_after_exit."""
+    def test_cooldown_per_timeframe_config(self):
+        """BACKTEST_CONFIG must have per-timeframe cooldown dict."""
         from backtest_engine import BACKTEST_CONFIG
         assert "min_bars_after_exit" in BACKTEST_CONFIG, "BACKTEST_CONFIG missing 'min_bars_after_exit'"
         assert BACKTEST_CONFIG["min_bars_after_exit"] > 0, "min_bars_after_exit must be > 0"
+        tf_map = BACKTEST_CONFIG.get("min_bars_after_exit_by_timeframe")
+        assert isinstance(tf_map, dict), "min_bars_after_exit_by_timeframe must be a dict"
+        assert "1d" in tf_map, "must contain '1d'"
+        assert "2h" in tf_map, "must contain '2h'"
+        assert tf_map["1d"] == 5, f"1d cooldown should be 5, got {tf_map['1d']}"
+        assert tf_map["2h"] == 20, f"2h cooldown should be 20, got {tf_map['2h']}"
 
     def test_symbol_exit_bar_initialized(self):
         """BacktestEngine.__init__ must create symbol_exit_bar dict."""
@@ -2291,6 +2297,13 @@ class TestSignalStackingCooldown:
         bars_since = curr_idx - exit_idx
         assert bars_since >= eng.config["min_bars_after_exit"], \
             f"Expected bars_since >= 20, got {bars_since}"
+
+    def test_cooldown_daily_less_than_2h(self):
+        """Daily cooldown must be shorter than 2h (fewer bars per day)."""
+        from backtest_engine import BACKTEST_CONFIG
+        tf_map = BACKTEST_CONFIG["min_bars_after_exit_by_timeframe"]
+        assert tf_map["1d"] < tf_map["2h"], \
+            f"1d cooldown ({tf_map['1d']}) must be < 2h cooldown ({tf_map['2h']})"
 
 
 # ============================================================

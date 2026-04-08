@@ -1,5 +1,15 @@
 # Changelog
 
+## [2026-04-08] Timeframe-Aware Cooldown: 5 bars for daily, 20 for 2h
+
+### Changed
+- `BACKTEST_CONFIG["min_bars_after_exit_by_timeframe"]`: 1d=5, 2h=20, 1h=40, 15m=100
+- `_scan_for_signals()`: cooldown now resolved via `timeframe → bars` lookup; unknown timeframe falls back to `min_bars_after_exit` (20)
+- Logger includes `tf=` in COOLDOWN debug message
+
+### Fixed
+- Daily pipeline over-correction: 20-bar daily cooldown = 1-month lockout → reduced to 5 bars (1 week)
+
 ## [2026-04-08] Per-Symbol Cooldown After Exit — Prevent Signal Stacking
 
 ### Added
