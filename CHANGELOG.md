@@ -1,5 +1,16 @@
 # Changelog
 
+## [2026-04-08] Fix Lifecycle Hysteresis Bug + Remove Dead Code
+
+### Fixed
+- `template_matcher._determine_lifecycle()`: was applying hysteresis unconditionally to all thresholds (e.g. WR=0.47 → PROVEN instead of MONITORING); now delegates to `ShadowLedger.determine_lifecycle()` which applies hysteresis **downgrade-only**
+- CT-25/CT-26 tests updated to use n=25 (above burn_in_signals=20) and removed misleading hysteresis-band comments
+
+### Removed
+- `ShadowLedger.compute_trust_score()` — 0 production callers, 0 tests; removed dead code
+- `ShadowLedger._wilson_ci_lower()` — only called by compute_trust_score; removed with it
+- `TestTrustScoreCalculation.test_wilson_ci_basic` and `test_wilson_ci_zero_total` — tests for removed code
+
 ## [2026-04-08] Rolling Trust Updates + Suit Reassignment During Backtest
 
 ### Added

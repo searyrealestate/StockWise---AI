@@ -1970,16 +1970,16 @@ class TestContextualTrust:
         result = matcher._determine_lifecycle(15, 20, 0.70, _CT_CONFIG)
         assert result == "PROVEN"
 
-    # CT-25: mid decayed_wr (above monitoring threshold) → MONITORING
+    # CT-25: mid decayed_wr (above monitoring threshold, strict) → MONITORING
     def test_ct25_lifecycle_monitoring(self, matcher):
-        # 0.35 - hysteresis(0.05) = 0.30; use 0.40 → MONITORING
-        result = matcher._determine_lifecycle(5, 15, 0.40, _CT_CONFIG)
+        # WR=0.40 >= monitoring_thr=0.35 → MONITORING (strict, no hysteresis inflation)
+        result = matcher._determine_lifecycle(5, 25, 0.40, _CT_CONFIG)
         assert result == "MONITORING"
 
-    # CT-26: low decayed_wr → DEGRADED or DISABLED (below monitoring threshold)
+    # CT-26: low decayed_wr → DEGRADED or DISABLED (below monitoring threshold, strict)
     def test_ct26_lifecycle_degraded(self, matcher):
-        # 0.20 - hysteresis(0.05) = 0.15; use 0.25 → DEGRADED
-        result = matcher._determine_lifecycle(3, 15, 0.25, _CT_CONFIG)
+        # WR=0.25 >= degraded_thr=0.20 → DEGRADED (strict, no hysteresis inflation)
+        result = matcher._determine_lifecycle(3, 25, 0.25, _CT_CONFIG)
         assert result in ("DEGRADED", "DISABLED")
 
     # ── get_trust_score (CT-27 → CT-31) ──────────────────────────────────

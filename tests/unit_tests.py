@@ -2365,24 +2365,6 @@ class TestTrustScoreCalculation:
         assert isinstance(ct["burn_in_signals"], int) and ct["burn_in_signals"] > 0
         assert ct["proven_wr_threshold"] > ct["monitoring_wr_threshold"] > ct["degraded_wr_threshold"]
 
-    def test_wilson_ci_basic(self):
-        """Wilson CI lower bound for 10/20 should be in reasonable range."""
-        import system_config as cfg
-        from shadow_ledger import ShadowLedger
-        sl = ShadowLedger.__new__(ShadowLedger)
-        sl.config = getattr(cfg, 'SHADOW_LEDGER_CONFIG', {})
-        result = sl._wilson_ci_lower(10, 20)
-        assert 0.29 < result < 0.5, f"Wilson CI for 10/20 should be ~0.29-0.5, got {result}"
-
-    def test_wilson_ci_zero_total(self):
-        """Wilson CI lower bound for 0/0 must return 0.0."""
-        import system_config as cfg
-        from shadow_ledger import ShadowLedger
-        sl = ShadowLedger.__new__(ShadowLedger)
-        sl.config = getattr(cfg, 'SHADOW_LEDGER_CONFIG', {})
-        result = sl._wilson_ci_lower(0, 0)
-        assert result == 0.0, f"Expected 0.0 for zero total, got {result}"
-
     def test_lifecycle_burn_in(self):
         """Low signal count → BURN_IN regardless of WR."""
         from shadow_ledger import ShadowLedger

@@ -765,38 +765,35 @@ class TemplateMatcher:
         return round(score, 4)
 
     def _determine_lifecycle(self, wins, n, decayed_wr, config):
-        """Classify a trust cell into a lifecycle state (with hysteresis).
+        """Classify a trust cell into a lifecycle state.
 
-        States:
-          BURN_IN    — n < lifecycle_check_min_signals
-          PROVEN     — decayed_wr >= proven_wr_threshold (with hysteresis band)
-          MONITORING — decayed_wr >= monitoring_wr_threshold
-          DEGRADED   — decayed_wr >= degraded_wr_threshold
-          DISABLED   — decayed_wr < degraded_wr_threshold AND n >= min_signals_for_proven
+        Delegates to ShadowLedger.determine_lifecycle which implements
+        correct hysteresis (downgrade-only, not unconditional threshold deflation).
 
         Args:
-            wins: total wins
+            wins: total wins (unused — kept for backward-compatible signature)
             n: total signals
             decayed_wr: exponentially decayed win rate
-            config: contextual_trust config dict
+            config: contextual_trust config dict (unused — sl reads from cfg directly)
         Returns:
-            str: lifecycle state name
+            str: lifecycle state name (BURN_IN/PROVEN/MONITORING/DEGRADED/DISABLED)
         """
-        min_signals = config.get("lifecycle_check_min_signals", 10)
-        if n < min_signals:
-            return "BURN_IN"
-        proven_thr = config.get("proven_wr_threshold", 0.50)
-        monitoring_thr = config.get("monitoring_wr_threshold", 0.35)
-        degraded_thr = config.get("degraded_wr_threshold", 0.20)
-        hysteresis = config.get("hysteresis", 0.05)
-        min_proven = config.get("min_signals_for_proven", 20)
-        if decayed_wr >= proven_thr - hysteresis and n >= min_proven:
-            return "PROVEN"
-        elif decayed_wr >= monitoring_thr - hysteresis:
-            return "MONITORING"
-        elif decayed_wr >= degraded_thr - hysteresis:
-            return "DEGRADED"
-        return "DISABLED"
+        try:
+            from shadow_ledger import ShadowLedger
+            sl_tmp = ShadowLedger.__new__(ShadowLedger)
+            return sl_tmp.determine_lifecycle(n, decayed_wr)
+        except Exception:
+            # Fallback: strict thresholds, no hysteresis (conservative)
+            min_signals = config.get("lifecycle_check_min_signals", 10)
+            if n < min_signals:
+                return "BURN_IN"
+            if decayed_wr >= config.get("proven_wr_threshold", 0.50) and n >= config.get("min_signals_for_proven", 20):
+                return "PROVEN"
+            elif decayed_wr >= config.get("monitoring_wr_threshold", 0.35):
+                return "MONITORING"
+            elif decayed_wr >= config.get("degraded_wr_threshold", 0.20):
+                return "DEGRADED"
+            return "DISABLED"
 
     def _aggregate_grouped_cells(self, trust_matrix, template_id, symbol,
                                  key_levels, min_signals=5):
