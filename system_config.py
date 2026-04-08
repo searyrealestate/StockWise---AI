@@ -910,6 +910,18 @@ PIPELINE_TIMEFRAMES = {
 }
 
 
+# Timeframe scaling factors for indicator period adjustment (MTFA)
+# bars_per_day: how many bars of this interval fit in one trading day (6.5h)
+# Used by FeatureEngine to scale all indicator periods to time-equivalent values
+TIMEFRAME_SCALING = {
+    "1d":  {"bars_per_day": 1.0,   "label": "Daily"},
+    "4h":  {"bars_per_day": 1.625, "label": "4-Hour"},
+    "2h":  {"bars_per_day": 3.25,  "label": "2-Hour"},
+    "1h":  {"bars_per_day": 6.5,   "label": "Hourly"},
+    "15m": {"bars_per_day": 26.0,  "label": "15-Minute"},
+}
+
+
 def validate_template_evolution_config():
     """Validate TEMPLATE_EVOLUTION_CONFIG has required keys and sane values."""
     ad = TEMPLATE_EVOLUTION_CONFIG.get("auto_disable", {})

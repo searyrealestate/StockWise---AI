@@ -145,7 +145,7 @@ class StockHunter:
             logger.debug(f"Trend classification error: {e}")
             return "SIDEWAYS"
 
-    def _classify_structure(self, df):
+    def _classify_structure(self, df, timeframe="1d"):
         """
         Mandatory Template 2: PRICE STRUCTURE
         Identifies if price is near support/resistance or in open field.
@@ -153,7 +153,9 @@ class StockHunter:
         """
         try:
             scan_cfg = getattr(cfg, 'MANDATORY_SCAN_CONFIG', {})
-            lookback = scan_cfg.get('support_resistance_lookback', 60)
+            tf_config = getattr(cfg, 'TIMEFRAME_SCALING', {}).get(timeframe, {})
+            scale = tf_config.get("bars_per_day", 1.0)
+            lookback = int(scan_cfg.get('support_resistance_lookback', 60) * scale)
             near_pct = scan_cfg.get('near_level_pct', 0.02)
 
             if len(df) < lookback:
@@ -191,11 +193,11 @@ class StockHunter:
         """
         try:
             scan_cfg = getattr(cfg, 'MANDATORY_SCAN_CONFIG', {})
+            tf_config = getattr(cfg, 'TIMEFRAME_SCALING', {}).get(timeframe, {})
+            scale = tf_config.get("bars_per_day", 1.0)
             tf_volumes = scan_cfg.get('min_avg_volume_by_timeframe', {})
             min_volume = tf_volumes.get(timeframe, scan_cfg.get('min_avg_volume', 500000))
-            # Use 60-bar baseline for the absolute liquidity check; reduces
-            # false ILLIQUID on stocks with recently elevated volume history.
-            vol_lookback = scan_cfg.get('volume_trend_lookback', 60)
+            vol_lookback = int(scan_cfg.get('volume_trend_lookback', 20) * scale)
 
             if len(df) < vol_lookback:
                 return "ILLIQUID"
@@ -205,8 +207,9 @@ class StockHunter:
             if avg_volume < min_volume:
                 return "ILLIQUID"
 
-            # Volume trend: compare last 5 days avg to 60-day avg
-            recent_vol = df['volume'].tail(5).mean()
+            # Volume trend: compare last N bars (scaled) to vol_lookback avg
+            recent_count = max(2, int(5 * scale))
+            recent_vol = df['volume'].tail(recent_count).mean()
             vol_ratio = recent_vol / max(avg_volume, 1)
 
             if vol_ratio > 1.5:
@@ -272,7 +275,7 @@ class StockHunter:
         """
         return {
             "trend": self._classify_trend_direction(df),
-            "structure": self._classify_structure(df),
+            "structure": self._classify_structure(df, timeframe=timeframe),
             "volume": self._classify_volume_health(df, timeframe=timeframe),
             "volatility": self._classify_volatility_state(df),
         }

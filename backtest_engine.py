@@ -165,7 +165,7 @@ class BacktestEngine:
         self.timeframe = timeframe
 
         # Components
-        self.fe      = FeatureEngine()
+        self.fe      = FeatureEngine(timeframe=self.timeframe)
         self.matcher = TemplateMatcher()
         try:
             from stock_hunter import StockHunter
@@ -1896,7 +1896,7 @@ class WalkForwardValidator:
         logger.info("[PIPELINE] STEP 1/7: Loading data and computing features")
         logger.info("[PIPELINE] " + "=" * 50)
 
-        fe = FeatureEngine()
+        fe = FeatureEngine(timeframe=self.timeframe)
         dsm = DataSourceManager()
         full_data = {}
 

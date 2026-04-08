@@ -2136,6 +2136,47 @@ class TestDuplicateTimeframeAware:
             f"Must have at least 1 NEAR_RESISTANCE recipe, found {len(nr_recipes)}"
 
 
+class TestIndicatorScaling:
+    """Tests for timeframe-aware indicator period scaling."""
+
+    def test_scale_factor_daily(self):
+        """Daily scale factor = 1.0 (no change)."""
+        from feature_engine import FeatureEngine
+        fe = FeatureEngine(timeframe="1d")
+        assert fe._p(50) == 50, f"Expected 50, got {fe._p(50)}"
+        assert fe._p(14) == 14, f"Expected 14, got {fe._p(14)}"
+
+    def test_scale_factor_2h(self):
+        """2h scale factor = 3.25x."""
+        from feature_engine import FeatureEngine
+        fe = FeatureEngine(timeframe="2h")
+        assert fe._p(50) == 162, f"50*3.25=162.5→162 (banker's rounding), got {fe._p(50)}"
+        assert fe._p(14) == 46, f"14*3.25=45.5→46, got {fe._p(14)}"
+        assert fe._p(20) == 65, f"20*3.25=65, got {fe._p(20)}"
+
+    def test_scale_factor_minimum(self):
+        """Scaled period must be at least 2."""
+        from feature_engine import FeatureEngine
+        fe = FeatureEngine(timeframe="1d")
+        assert fe._p(1) >= 2, f"Minimum period should be 2, got {fe._p(1)}"
+
+    def test_config_has_scaling(self):
+        """TIMEFRAME_SCALING config must exist."""
+        import system_config as cfg
+        ts = cfg.TIMEFRAME_SCALING
+        assert "2h" in ts, "TIMEFRAME_SCALING must contain '2h'"
+        assert ts["2h"]["bars_per_day"] == 3.25, \
+            f"2h bars_per_day should be 3.25, got {ts['2h']['bars_per_day']}"
+
+    def test_daily_unchanged(self):
+        """Daily FeatureEngine must produce same results as before."""
+        from feature_engine import FeatureEngine
+        fe_default = FeatureEngine()
+        fe_daily = FeatureEngine(timeframe="1d")
+        assert fe_default.scale == fe_daily.scale == 1.0, \
+            f"Daily scale should be 1.0, got default={fe_default.scale}, daily={fe_daily.scale}"
+
+
 # ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
@@ -2144,7 +2185,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough, TestVolumeTimeframeThreshold, TestDuplicateTimeframeAware]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough, TestVolumeTimeframeThreshold, TestDuplicateTimeframeAware, TestIndicatorScaling]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

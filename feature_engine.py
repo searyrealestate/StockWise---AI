@@ -30,8 +30,16 @@ class FeatureEngine:
     Integrates 85+ Technical Models including Advanced Geometric Pattern Recognition,
     Institutional Trend Templates, and VSA Logic.
     """
-    def __init__(self):
-        pass
+    def __init__(self, timeframe="1d"):
+        self.timeframe = timeframe
+        tf_config = getattr(cfg, 'TIMEFRAME_SCALING', {}).get(timeframe, {})
+        self.scale = tf_config.get("bars_per_day", 1.0)
+        if self.scale != 1.0:
+            logger.info(f"FeatureEngine: timeframe={timeframe}, scale={self.scale}x")
+
+    def _p(self, period):
+        """Scale a period by timeframe factor. SMA(50) on 2h → SMA(163)."""
+        return max(2, int(round(period * self.scale)))
 
     def calculate_features(self, df, strategy_config=None):
         """
@@ -173,17 +181,17 @@ class FeatureEngine:
                 return res.fillna(0.0) # Ensure no NaNs exist in the valid series
 
             # [1-5] SMAs
-            df['sma_20'] = safe_sma(df['close'], 20)
-            df['sma_50'] = safe_sma(df['close'], 50)
-            df['sma_100'] = safe_sma(df['close'], 100)
-            df['sma_150'] = safe_sma(df['close'], 150)
-            df['sma_200'] = safe_sma(df['close'], 200)
-            
+            df['sma_20'] = safe_sma(df['close'], self._p(20))
+            df['sma_50'] = safe_sma(df['close'], self._p(50))
+            df['sma_100'] = safe_sma(df['close'], self._p(100))
+            df['sma_150'] = safe_sma(df['close'], self._p(150))
+            df['sma_200'] = safe_sma(df['close'], self._p(200))
+
             # [6-7] EMAs
-            res_ema12 = ta.ema(df['close'], length=12)
+            res_ema12 = ta.ema(df['close'], length=self._p(12))
             df['ema_12'] = res_ema12.fillna(0.0) if res_ema12 is not None else 0.0
-            
-            res_ema26 = ta.ema(df['close'], length=26)
+
+            res_ema26 = ta.ema(df['close'], length=self._p(26))
             df['ema_26'] = res_ema26.fillna(0.0) if res_ema26 is not None else 0.0
 
             # [8] Parabolic SAR
@@ -194,7 +202,7 @@ class FeatureEngine:
                 df['psar'] = 0.0
 
             # [9] SuperTrend
-            supertrend = ta.supertrend(df['high'], df['low'], df['close'], length=7, multiplier=3.0)
+            supertrend = ta.supertrend(df['high'], df['low'], df['close'], length=self._p(7), multiplier=3.0)
             if supertrend is not None and not supertrend.empty:
                 df['supertrend'] = supertrend.iloc[:, 0]
                 df['supertrend_direction'] = supertrend.iloc[:, 1]
@@ -245,12 +253,12 @@ class FeatureEngine:
         """Calculates Momentum Oscillators."""
         try:
             # [16] RSI
-            df['rsi'] = ta.rsi(df['close'], length=14)
-            
+            df['rsi'] = ta.rsi(df['close'], length=self._p(14))
+
             # [17] MACD Line
             # [18] MACD Signal
             # [19] MACD Histogram
-            macd = ta.macd(df['close'])
+            macd = ta.macd(df['close'], fast=self._p(12), slow=self._p(26), signal=self._p(9))
             if macd is not None and not macd.empty:
                 df['macd'] = macd.iloc[:, 0]        # MACD Line
                 df['macd_hist'] = macd.iloc[:, 1]   # Histogram
@@ -263,7 +271,7 @@ class FeatureEngine:
 
             # [20] Stochastic %K
             # [21] Stochastic %D
-            stoch = ta.stoch(df['high'], df['low'], df['close'])
+            stoch = ta.stoch(df['high'], df['low'], df['close'], k=self._p(14), d=self._p(3))
             if stoch is not None and not stoch.empty:
                 df['stoch_k'] = stoch.iloc[:, 0]
                 df['stoch_d'] = stoch.iloc[:, 1]
@@ -279,7 +287,7 @@ class FeatureEngine:
             df['cci'] = ta.cci(df['high'], df['low'], df['close'])
             
             # [24] ROC (Rate of Change)
-            df['roc'] = ta.roc(df['close'], length=10)
+            df['roc'] = ta.roc(df['close'], length=self._p(10))
 
         except Exception as e:
             logger.error(f"Momentum Block Failed: {e}")
@@ -289,12 +297,12 @@ class FeatureEngine:
         """Calculates Volatility models."""
         try:
             # [25] ATR (Average True Range)
-            df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=14)
-            
+            df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=self._p(14))
+
             # [26] Bollinger Upper
             # [27] Bollinger Lower
             # [28] Bollinger Width (Squeeze)
-            bb = ta.bbands(df['close'], length=20)
+            bb = ta.bbands(df['close'], length=self._p(20))
             if bb is not None and not bb.empty:
                 # 0: Lower, 1: Mid, 2: Upper, 3: Bandwidth, 4: Percent
                 df['bb_lower'] = bb.iloc[:, 0]
@@ -315,7 +323,7 @@ class FeatureEngine:
 
             # [29] Keltner Upper
             # [30] Keltner Lower
-            kc = ta.kc(df['high'], df['low'], df['close'])
+            kc = ta.kc(df['high'], df['low'], df['close'], length=self._p(20))
             if kc is not None and not kc.empty:
                 # 0: Lower, 1: Basis, 2: Upper
                 df['kc_lower'] = kc.iloc[:, 0]
@@ -359,7 +367,7 @@ class FeatureEngine:
         """Calculates Volume and Liquidity Models."""
         try:
             # [33] Volume SMA 20
-            df['vol_avg_20'] = ta.sma(df['volume'], length=20)
+            df['vol_avg_20'] = ta.sma(df['volume'], length=self._p(20))
             
             # [34] RVOL (Relative Volume)
             df['rvol'] = df['volume'] / df['vol_avg_20'].replace(0, 1)
@@ -460,8 +468,8 @@ class FeatureEngine:
             logger.info("Initializing DSP calculation sequence to evaluate Market Regime.")
             
             # 1. Fetch our thresholds from the memory bank (system_config.py)
-            slow_lookback = cfg.DSP_CONFIG.get("er_lookback_slow", 20)
-            fast_lookback = cfg.DSP_CONFIG.get("er_lookback_fast", 5)
+            slow_lookback = self._p(cfg.DSP_CONFIG.get("er_lookback_slow", 20))
+            fast_lookback = self._p(cfg.DSP_CONFIG.get("er_lookback_fast", 5))
             
             # --- PHASE A: The Slow Efficiency Ratio (The Core Trend) ---
             # We ask the data: Over the last 20 days, what was the absolute distance traveled from point A to point B?

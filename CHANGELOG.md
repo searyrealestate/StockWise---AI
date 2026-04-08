@@ -1,5 +1,24 @@
 # Changelog
 
+## [2026-04-08] Timeframe-Aware Indicator Period Scaling (MTFA)
+
+### Added
+- `TIMEFRAME_SCALING` config in `system_config.py`: `bars_per_day` per interval (1d/4h/2h/1h/15m)
+- `FeatureEngine._p(period)` helper: scales any indicator period by `bars_per_day` ratio
+- `FeatureEngine.__init__(timeframe="1d")`: reads scale from config, logs when scale≠1.0
+- 5 unit tests in `TestIndicatorScaling`
+
+### Changed
+- `feature_engine.py`: all hardcoded indicator periods now pass through `self._p()` — SMAs (20/50/100/150/200), EMAs (12/26), SuperTrend(7), RSI(14), MACD(12/26/9), Stoch(14/3), ROC(10), ATR(14), BB(20), KC(20), vol_avg(20), DSP slow/fast lookbacks
+- `stock_hunter.py`: `_classify_structure()` — lookback scaled by timeframe; `_classify_volume_health()` — vol_lookback and recent window scaled; both pass through `TIMEFRAME_SCALING`
+- `backtest_engine.py`: `BacktestEngine.__init__` and `run_full_pipeline` Step 1 now pass `timeframe=self.timeframe` to `FeatureEngine()`
+- `shadow_ledger.py`: CLI `__main__` now passes `timeframe=args.timeframe` to `FeatureEngine()`
+
+### Effect
+- 2h bars: SMA_50→SMA(162), RSI→RSI(46), ATR→ATR(46), BB→BB(65), DSP slow→65 bars
+- Column names unchanged (`sma_50` = "50-day equivalent" regardless of timeframe)
+- Daily pipeline: scale=1.0, zero behavior change
+
 ## [2026-04-07] Fix _run_engine_and_filter Missing Timeframe (MTFA QG)
 
 ### Fixed

@@ -1983,7 +1983,7 @@ if __name__ == "__main__":
         from data_source_manager import DataSourceManager
         from feature_engine import FeatureEngine
         dsm = DataSourceManager()
-        fe = FeatureEngine()
+        fe = FeatureEngine(timeframe=args.timeframe)
     except Exception as e:
         print(f"[ShadowLedger] ERROR: Failed to initialize dependencies: {e}")
         sys.exit(1)
