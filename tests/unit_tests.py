@@ -2341,6 +2341,89 @@ class TestQGTestPeriodSafetyNet:
 
 
 # ============================================================
+# TestTrustScoreCalculation
+# ============================================================
+class TestTrustScoreCalculation:
+    """Tests for trust score computation, lifecycle, and Wilson CI (SPEC §4)."""
+
+    def test_trust_config_values_exist(self):
+        """contextual_trust config must have all required keys."""
+        import system_config as cfg
+        ct = cfg.TEMPLATE_EVOLUTION_CONFIG["contextual_trust"]
+        required_keys = [
+            "enabled", "burn_in_signals", "min_signals_per_cell",
+            "min_signals_for_proven", "bayesian_prior_weight",
+            "global_fallback_weight", "local_weight",
+            "proven_wr_threshold", "monitoring_wr_threshold",
+            "degraded_wr_threshold", "lifecycle_check_min_signals",
+            "hysteresis", "confidence_interval_pct",
+            "use_decayed_wr", "decay_rate", "state_grouping_levels",
+        ]
+        for key in required_keys:
+            assert key in ct, f"Missing contextual_trust key: {key}"
+        assert isinstance(ct["enabled"], bool)
+        assert isinstance(ct["burn_in_signals"], int) and ct["burn_in_signals"] > 0
+        assert ct["proven_wr_threshold"] > ct["monitoring_wr_threshold"] > ct["degraded_wr_threshold"]
+
+    def test_wilson_ci_basic(self):
+        """Wilson CI lower bound for 10/20 should be in reasonable range."""
+        import system_config as cfg
+        from shadow_ledger import ShadowLedger
+        sl = ShadowLedger.__new__(ShadowLedger)
+        sl.config = getattr(cfg, 'SHADOW_LEDGER_CONFIG', {})
+        result = sl._wilson_ci_lower(10, 20)
+        assert 0.29 < result < 0.5, f"Wilson CI for 10/20 should be ~0.29-0.5, got {result}"
+
+    def test_wilson_ci_zero_total(self):
+        """Wilson CI lower bound for 0/0 must return 0.0."""
+        import system_config as cfg
+        from shadow_ledger import ShadowLedger
+        sl = ShadowLedger.__new__(ShadowLedger)
+        sl.config = getattr(cfg, 'SHADOW_LEDGER_CONFIG', {})
+        result = sl._wilson_ci_lower(0, 0)
+        assert result == 0.0, f"Expected 0.0 for zero total, got {result}"
+
+    def test_lifecycle_burn_in(self):
+        """Low signal count → BURN_IN regardless of WR."""
+        from shadow_ledger import ShadowLedger
+        sl = ShadowLedger.__new__(ShadowLedger)
+        result = sl.determine_lifecycle(signals=5, decayed_wr=0.80)
+        assert result == "BURN_IN", f"Expected BURN_IN for 5 signals, got {result}"
+
+    def test_lifecycle_proven(self):
+        """High WR + sufficient signals → PROVEN."""
+        from shadow_ledger import ShadowLedger
+        sl = ShadowLedger.__new__(ShadowLedger)
+        result = sl.determine_lifecycle(signals=25, decayed_wr=0.55)
+        assert result == "PROVEN", f"Expected PROVEN for WR=0.55, got {result}"
+
+    def test_lifecycle_degraded(self):
+        """WR between degraded_thr(0.20) and monitoring_thr(0.35) → DEGRADED."""
+        from shadow_ledger import ShadowLedger
+        sl = ShadowLedger.__new__(ShadowLedger)
+        result = sl.determine_lifecycle(signals=25, decayed_wr=0.22)
+        assert result == "DEGRADED", f"Expected DEGRADED for WR=0.22, got {result}"
+
+    def test_lifecycle_disabled(self):
+        """Very low WR → DISABLED."""
+        from shadow_ledger import ShadowLedger
+        sl = ShadowLedger.__new__(ShadowLedger)
+        result = sl.determine_lifecycle(signals=25, decayed_wr=0.10)
+        assert result == "DISABLED", f"Expected DISABLED for WR=0.10, got {result}"
+
+    def test_lifecycle_hysteresis_prevents_flip(self):
+        """Hysteresis keeps PROVEN when WR is within band; allows downgrade below band."""
+        from shadow_ledger import ShadowLedger
+        sl = ShadowLedger.__new__(ShadowLedger)
+        # WR=0.48 < proven_thr=0.50 but >= 0.50-0.05=0.45 → stays PROVEN
+        result = sl.determine_lifecycle(signals=25, decayed_wr=0.48, prev_lifecycle="PROVEN")
+        assert result == "PROVEN", f"Hysteresis should prevent downgrade at WR=0.48, got {result}"
+        # WR=0.44 < 0.45 → should downgrade to MONITORING
+        result2 = sl.determine_lifecycle(signals=25, decayed_wr=0.44, prev_lifecycle="PROVEN")
+        assert result2 == "MONITORING", f"Should downgrade below hysteresis band, got {result2}"
+
+
+# ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
 if __name__ == '__main__':
@@ -2348,7 +2431,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough, TestVolumeTimeframeThreshold, TestDuplicateTimeframeAware, TestNewRecipes, TestIndicatorScaling, TestSignalStackingCooldown, TestQGTestPeriodSafetyNet]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough, TestVolumeTimeframeThreshold, TestDuplicateTimeframeAware, TestNewRecipes, TestIndicatorScaling, TestSignalStackingCooldown, TestQGTestPeriodSafetyNet, TestTrustScoreCalculation]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

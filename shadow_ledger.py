@@ -321,6 +321,201 @@ class ShadowLedger:
             return "DEGRADED"
         return "DISABLED"
 
+    def _wilson_ci_lower(self, wins, total, z=None):
+        """Wilson score interval lower bound for a proportion.
+
+        Args:
+            wins:  number of successes
+            total: total observations
+            z:     optional z-score override (default from config)
+
+        Returns:
+            float in [0, 1]
+        """
+        if total == 0:
+            return 0.0
+        if z is None:
+            ct_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {}).get("contextual_trust", {})
+            ci_pct = ct_cfg.get("confidence_interval_pct", 0.95)
+            z_map = {0.90: 1.645, 0.95: 1.96, 0.99: 2.576}
+            z = z_map.get(ci_pct, 1.96)
+        p = wins / total
+        denominator = 1 + z ** 2 / total
+        center = p + z ** 2 / (2 * total)
+        spread = z * math.sqrt((p * (1 - p) + z ** 2 / (4 * total)) / total)
+        return max((center - spread) / denominator, 0.0)
+
+    def determine_lifecycle(self, signals, decayed_wr, prev_lifecycle=None):
+        """Lifecycle state machine with hysteresis.
+
+        Args:
+            signals:        number of resolved signals (int)
+            decayed_wr:     exponentially decayed win rate (float 0-1)
+            prev_lifecycle: previous lifecycle string for hysteresis (optional)
+
+        Returns:
+            str: one of BURN_IN, PROVEN, MONITORING, DEGRADED, DISABLED
+        """
+        ct_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {}).get("contextual_trust", {})
+        burn_in       = ct_cfg.get("burn_in_signals", 20)
+        proven_thr    = ct_cfg.get("proven_wr_threshold", 0.50)
+        monitoring_thr = ct_cfg.get("monitoring_wr_threshold", 0.35)
+        degraded_thr  = ct_cfg.get("degraded_wr_threshold", 0.20)
+        hysteresis    = ct_cfg.get("hysteresis", 0.05)
+        min_proven    = ct_cfg.get("min_signals_for_proven", 20)
+
+        if signals < burn_in:
+            return "BURN_IN"
+
+        # Determine raw lifecycle (no hysteresis)
+        if decayed_wr >= proven_thr and signals >= min_proven:
+            raw = "PROVEN"
+        elif decayed_wr >= monitoring_thr:
+            raw = "MONITORING"
+        elif decayed_wr >= degraded_thr:
+            raw = "DEGRADED"
+        else:
+            raw = "DISABLED"
+
+        # Hysteresis: prevent downgrade if within band
+        if prev_lifecycle is not None:
+            RANK = {"DISABLED": 0, "DEGRADED": 1, "MONITORING": 2, "PROVEN": 3, "BURN_IN": -1}
+            prev_rank = RANK.get(prev_lifecycle, -1)
+            raw_rank  = RANK.get(raw, -1)
+
+            if raw_rank < prev_rank and prev_rank >= 0:
+                if prev_lifecycle == "PROVEN" and decayed_wr >= proven_thr - hysteresis and signals >= min_proven:
+                    return "PROVEN"
+                elif prev_lifecycle == "MONITORING" and decayed_wr >= monitoring_thr - hysteresis:
+                    return "MONITORING"
+                elif prev_lifecycle == "DEGRADED" and decayed_wr >= degraded_thr - hysteresis:
+                    return "DEGRADED"
+
+        return raw
+
+    def compute_trust_score(self, template_id, symbol, state_key):
+        """Bayesian-blended trust score for (template × symbol × state).
+
+        Falls back from L3 (full state) → L2 (trend+volatility) → L1 (trend only)
+        when insufficient signals exist at finer granularity.
+
+        Args:
+            template_id: template ID string (e.g. "GEN_SIDEWAYS_ACCUMULATION")
+            symbol:      stock ticker (e.g. "NVDA")
+            state_key:   colon-delimited state string (e.g. "BULLISH:OPEN_FIELD:HEALTHY:NORMAL")
+
+        Returns:
+            dict with keys: score, local_wr, global_wr, signals, confidence_lower,
+                            lifecycle, level
+        """
+        ct_cfg = getattr(cfg, 'TEMPLATE_EVOLUTION_CONFIG', {}).get("contextual_trust", {})
+
+        # ── a. Load trust matrix ──────────────────────────────────────────────
+        trust_matrix = self._load_trust_matrix_from_disk()
+
+        # ── b. Parse state_key into levels ───────────────────────────────────
+        parts = state_key.split(":") if state_key else []
+
+        # ── c. Per-level data helpers ─────────────────────────────────────────
+        template_data = trust_matrix.get(template_id, {})
+        symbol_data   = template_data.get(symbol, {})
+
+        def gather_stats(level_match_fn):
+            t_wins, t_total, t_signals = 0, 0, []
+            for sk, cell in symbol_data.items():
+                if level_match_fn(sk):
+                    t_wins    += cell.get("wins", 0)
+                    t_total   += cell.get("total", 0)
+                    t_signals.extend(cell.get("signals", []))
+            return t_wins, t_total, t_signals
+
+        def l2_match(sk):
+            sk_parts = sk.split(":")
+            return (
+                len(sk_parts) >= 2 and len(parts) >= 2
+                and sk_parts[0] == parts[0]
+                and sk_parts[-1] == parts[-1]
+            )
+
+        l3_match = lambda sk: sk == state_key
+        l1_match = lambda sk: (sk.split(":")[0] == parts[0]) if parts else False
+
+        # ── d. Find first level with sufficient signals ───────────────────────
+        min_signals = ct_cfg.get("min_signals_per_cell", 5)
+
+        wins, total, signals_list, level = 0, 0, [], "L1"
+        for level_name, match_fn in [("L3", l3_match), ("L2", l2_match), ("L1", l1_match)]:
+            w, t, sl = gather_stats(match_fn)
+            if t >= min_signals:
+                wins, total, signals_list, level = w, t, sl, level_name
+                break
+        else:
+            # None of the levels met min_signals — use L1 anyway
+            wins, total, signals_list = gather_stats(l1_match)
+
+        # ── e. Local WR ───────────────────────────────────────────────────────
+        local_wr = wins / total if total > 0 else 0.0
+
+        # ── f. Global WR (across ALL symbols for this template) ──────────────
+        global_wins, global_total = 0, 0
+        for sym, sym_data in template_data.items():
+            for cell in sym_data.values():
+                global_wins  += cell.get("wins", 0)
+                global_total += cell.get("total", 0)
+        global_wr = global_wins / global_total if global_total > 0 else 0.0
+
+        # ── g. Bayesian blend with normalized weights ─────────────────────────
+        prior      = 0.43
+        raw_local  = ct_cfg.get("local_weight", 0.7)
+        raw_global = ct_cfg.get("global_fallback_weight", 0.3)
+        raw_prior  = ct_cfg.get("bayesian_prior_weight", 0.4)
+
+        if total >= min_signals:
+            weight_sum = raw_local + raw_global + raw_prior
+            score = (local_wr * raw_local + global_wr * raw_global + prior * raw_prior) / weight_sum
+        else:
+            weight_sum = raw_global + raw_prior
+            score = (global_wr * raw_global + prior * raw_prior) / max(weight_sum, 1e-9)
+
+        score = max(0.0, min(1.0, score))
+
+        # ── h. Wilson CI lower bound ──────────────────────────────────────────
+        confidence_lower = self._wilson_ci_lower(wins, total)
+
+        # ── i. Decayed WR for lifecycle ───────────────────────────────────────
+        if ct_cfg.get("use_decayed_wr", True) and signals_list:
+            decayed_wr = self._calculate_decayed_wr_simple(signals_list)
+        else:
+            decayed_wr = local_wr
+
+        # ── j. Lifecycle (with hysteresis from stored state) ─────────────────
+        prev_lifecycle = None
+        if state_key in symbol_data:
+            prev_lifecycle = symbol_data[state_key].get("lifecycle")
+        lifecycle = self.determine_lifecycle(total, decayed_wr, prev_lifecycle)
+
+        # ── k. Log ────────────────────────────────────────────────────────────
+        fallback_note = (
+            f" (fallback from L3, {level}={total} signals)" if level != "L3" else ""
+        )
+        logger.info(
+            f"[TRUST] {template_id} | {symbol} | state={state_key} | "
+            f"level={level}{fallback_note} | "
+            f"local_wr={local_wr:.1%} ({total} signals) | global_wr={global_wr:.1%} | "
+            f"score={score:.3f} | ci_lower={confidence_lower:.3f} | lifecycle={lifecycle}"
+        )
+
+        # ── l. Return ─────────────────────────────────────────────────────────
+        return {
+            "score":             round(score, 4),
+            "local_wr":          round(local_wr, 4),
+            "global_wr":         round(global_wr, 4),
+            "signals":           total,
+            "confidence_lower":  round(confidence_lower, 4),
+            "lifecycle":         lifecycle,
+            "level":             level,
+        }
+
     def _update_trust_matrix(self, template_id, symbol, stock_state, outcome):
         """Update trust matrix cell for template+symbol+state after a resolved outcome.
 

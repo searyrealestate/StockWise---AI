@@ -1,5 +1,17 @@
 # Changelog
 
+## [2026-04-08] Trust Score Calculation + Lifecycle per (template × symbol × state)
+
+### Added
+- `ShadowLedger._wilson_ci_lower(wins, total, z=None)`: Wilson score interval lower bound; z from `confidence_interval_pct` config; returns 0.0 for zero total
+- `ShadowLedger.determine_lifecycle(signals, decayed_wr, prev_lifecycle=None)`: state machine with correct hysteresis — prevents downgrade within band, allows real degradation below band; returns BURN_IN / PROVEN / MONITORING / DEGRADED / DISABLED
+- `ShadowLedger.compute_trust_score(template_id, symbol, state_key)`: Bayesian-blended score with L3→L2→L1 state fallback, normalized weights, Wilson CI, decayed WR, and lifecycle; logs `[TRUST]` line; returns 7-key dict
+- 8 unit tests in `TestTrustScoreCalculation`
+
+### Notes
+- These are standalone methods; no existing call sites — backtest integration is a separate task
+- `_determine_lifecycle_simple` and `_calculate_decayed_wr_simple` unchanged
+
 ## [2026-04-08] QG TEST-Period Safety Net + Auto-Disable Tightened to WR<25%
 
 ### Added
