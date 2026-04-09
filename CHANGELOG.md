@@ -1,5 +1,17 @@
 # Changelog
 
+## [2026-04-09] Opportunity Scanner — 4-Quadrant Analysis
+
+### Added
+- `BacktestEngine.scan_missed_opportunities(min_move_pct, lookahead)`: scans all bars for profitable moves ≥5% in next 20 bars, classifies into GOOD_CALL / MISSED / BAD_CALL / CORRECT_SKIP quadrants
+- For each MISSED bar: runs template matching + evaluates all enabled/disabled templates, diagnoses which blocks failed (nearest miss analysis)
+- Captures full 124-indicator snapshot per bar for MISSED opportunities
+- Indicator profile (avg/p25/p75/min/max) for key indicators across all MISSED bars
+- State distribution for MISSED vs GOOD_CALL quadrants
+- Top blocker analysis: which conditions most frequently prevent entry on profitable bars
+- Disabled template analysis: which disabled templates WOULD have caught the opportunity
+- Output saved to `data/opportunity_scan.json`
+
 ## [2026-04-08] Trust Lifecycle Signal Gate (DDR #38)
 
 ### Added

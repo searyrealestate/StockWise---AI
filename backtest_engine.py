@@ -1875,6 +1875,276 @@ class BacktestEngine:
             "survival_verdict":                  verdict,
         }
 
+    # ──────────────────────────────────────────────────────────────────────
+    # Opportunity Scanner — 4-Quadrant Analysis
+    # ──────────────────────────────────────────────────────────────────────
+
+    def scan_missed_opportunities(self, min_move_pct=5.0, lookahead=20):
+        """4-quadrant opportunity analysis.
+
+        Order of analysis (per spec):
+        1. Check system signal (did we enter?)
+        2. Snapshot all indicators (what did the world look like?)
+        3. Check profitability (was there money to make?)
+        4. Cross-reference and analyze patterns
+
+        Implementation: for efficiency, Step 3 runs as pre-filter,
+        then Steps 1+2 only on bars with profitable moves.
+        """
+        from setup_templates import SetupTemplate
+
+        if not self.data_cache:
+            self._ensure_data()
+
+        warmup = self.config["min_candles_warmup"]
+        results = []
+
+        for sym in self.symbols:
+            df = self.data_cache.get(sym)
+            if df is None or len(df) < warmup + lookahead:
+                continue
+
+            for i in range(warmup, len(df) - lookahead):
+                entry_price = float(df.iloc[i]["close"])
+                if entry_price <= 0:
+                    continue
+
+                # --- Step 3 (pre-filter): profitable move ahead? ---
+                future = df.iloc[i + 1: i + 1 + lookahead]
+                max_high = float(future["high"].max())
+                move_pct = ((max_high - entry_price) / entry_price) * 100
+
+                if move_pct < min_move_pct:
+                    continue  # Skip non-profitable bars for efficiency
+
+                # --- Step 1: did the system generate a signal? ---
+                df_slice = df.iloc[: i + 1]
+                row = df.iloc[i]
+                entry_date = df.index[i]
+
+                stock_state = {}
+                if self.hunter:
+                    try:
+                        stock_state = self.hunter.classify_stock_state(
+                            df_slice, timeframe=self.timeframe)
+                    except Exception:
+                        pass
+
+                try:
+                    signals = self.matcher.scan_ticker(
+                        sym, df_slice, stock_state, timeframe=self.timeframe)
+                except Exception:
+                    signals = []
+
+                captured = len(signals) > 0
+
+                # --- Step 2: snapshot ALL indicators ---
+                snapshot = {}
+                for col in df.columns:
+                    val = row.get(col, None)
+                    if val is not None:
+                        try:
+                            if isinstance(val, (bool, np.bool_)):
+                                snapshot[col] = bool(val)
+                            elif isinstance(val, (int, float, np.integer, np.floating)):
+                                if not (isinstance(val, float) and math.isnan(val)):
+                                    snapshot[col] = round(float(val), 6)
+                        except (TypeError, ValueError):
+                            pass
+
+                # --- Diagnosis for MISSED ---
+                diagnosis = []
+                if not captured:
+                    tm = self.matcher.tm
+                    matching = tm.get_for_state(
+                        stock_state, symbol=sym, timeframe=self.timeframe)
+                    for tmpl in matching:
+                        try:
+                            passed, details = tmpl.evaluate_conditions(row)
+                        except Exception:
+                            continue
+                        p_blocks = [d["block"] for d in details if d.get("passed")]
+                        f_blocks = [d["block"] for d in details if not d.get("passed")]
+                        diagnosis.append({
+                            "template_id": tmpl.id, "enabled": True,
+                            "all_passed": passed,
+                            "passed": p_blocks, "failed": f_blocks,
+                            "pass_rate": len(p_blocks) / max(len(details), 1),
+                        })
+
+                    # Check disabled templates (near-misses)
+                    templates_dir = getattr(cfg, "TEMPLATES_DIR", "data/templates")
+                    if os.path.isdir(templates_dir):
+                        enabled_ids = {t.id for t in tm.get_enabled()}
+                        for fname in os.listdir(templates_dir):
+                            if not fname.endswith(".json"):
+                                continue
+                            tid = fname.replace(".json", "")
+                            if tid in enabled_ids:
+                                continue
+                            try:
+                                tdata = safe_json_read(
+                                    os.path.join(templates_dir, fname), default={})
+                                t = SetupTemplate(tdata)
+                                if t.timeframe != self.timeframe:
+                                    continue
+                                if not tm._state_matches(
+                                        t.required_state, stock_state):
+                                    continue
+                                passed_d, details_d = t.evaluate_conditions(row)
+                                p_d = [d["block"] for d in details_d if d.get("passed")]
+                                f_d = [d["block"] for d in details_d if not d.get("passed")]
+                                diagnosis.append({
+                                    "template_id": t.id, "enabled": False,
+                                    "all_passed": passed_d,
+                                    "passed": p_d, "failed": f_d,
+                                    "pass_rate": len(p_d) / max(len(details_d), 1),
+                                })
+                            except Exception:
+                                pass
+
+                    diagnosis.sort(key=lambda d: (-d["pass_rate"], -len(d["passed"])))
+
+                state_key = (
+                    f"{stock_state.get('trend', '?')}:"
+                    f"{stock_state.get('structure', '?')}:"
+                    f"{stock_state.get('volume', '?')}:"
+                    f"{stock_state.get('volatility', '?')}"
+                )
+
+                results.append({
+                    "symbol": sym,
+                    "date": (str(entry_date.date())
+                             if hasattr(entry_date, "date") else str(entry_date)),
+                    "move_pct": round(move_pct, 2),
+                    "captured": captured,
+                    "template": (signals[0].get("template_id")
+                                 if captured and signals else None),
+                    "state_key": state_key,
+                    "snapshot": snapshot,
+                    "diagnosis": diagnosis,
+                    "nearest": diagnosis[0] if diagnosis else None,
+                })
+
+        # --- Step 4: Analyze ---
+        missed = [r for r in results if not r["captured"]]
+        good   = [r for r in results if r["captured"]]
+
+        missed_states = Counter(r["state_key"] for r in missed)
+        good_states   = Counter(r["state_key"] for r in good)
+
+        blocker_counts = Counter()
+        for r in missed:
+            for d in r.get("diagnosis", []):
+                if d.get("enabled"):
+                    for block in d.get("failed", []):
+                        blocker_counts[block] += 1
+
+        would_catch = [
+            r for r in missed
+            if r.get("nearest")
+            and r["nearest"].get("all_passed")
+            and not r["nearest"].get("enabled")
+        ]
+
+        key_indicators = [
+            "rsi", "macd", "macd_hist", "rvol", "squeeze_on", "er_slow", "er_fast",
+            "adx", "bb_width_pct", "cmf", "daily_return", "stoch_k", "willr",
+            "obv", "vwap", "atr", "cci", "roc", "supertrend_direction",
+            "trend_alignment", "vsa_squat_bar", "is_consolidating",
+        ]
+        indicator_profile = {}
+        for ind in key_indicators:
+            vals = [r["snapshot"].get(ind) for r in missed if ind in r["snapshot"]]
+            nums = [v for v in vals if isinstance(v, (int, float))]
+            if nums:
+                nums_sorted = sorted(nums)
+                n = len(nums_sorted)
+                indicator_profile[ind] = {
+                    "avg": round(sum(nums_sorted) / n, 4),
+                    "min": round(nums_sorted[0], 4),
+                    "max": round(nums_sorted[-1], 4),
+                    "p25": round(nums_sorted[n // 4], 4),
+                    "p75": round(nums_sorted[3 * n // 4], 4),
+                    "n": n,
+                }
+
+        summary = {
+            "total_opportunities": len(results),
+            "captured": len(good),
+            "missed": len(missed),
+            "capture_rate_pct": round(len(good) / max(len(results), 1) * 100, 1),
+            "avg_missed_move": round(
+                sum(r["move_pct"] for r in missed) / max(len(missed), 1), 2),
+            "avg_captured_move": round(
+                sum(r["move_pct"] for r in good) / max(len(good), 1), 2),
+            "would_catch_if_enabled": len(would_catch),
+            "missed_states_top10": dict(missed_states.most_common(10)),
+            "good_states_top5": dict(good_states.most_common(5)),
+            "top_blockers": dict(blocker_counts.most_common(10)),
+        }
+
+        output = {
+            "summary": summary,
+            "indicator_profile": indicator_profile,
+            "opportunities": results[:200],
+        }
+
+        safe_json_write("data/opportunity_scan.json", output)
+
+        # --- Print Report ---
+        print("\n" + "=" * 70)
+        print("OPPORTUNITY SCANNER — 4-QUADRANT ANALYSIS")
+        print("=" * 70)
+        s = summary
+        print(f"Opportunities (>{min_move_pct}% in {lookahead} bars): {s['total_opportunities']}")
+        print(f"  GOOD CALL  (captured):  {s['captured']} ({s['capture_rate_pct']}%)")
+        print(f"  MISSED OPP:             {s['missed']}")
+        print(f"  Would catch if enabled: {s['would_catch_if_enabled']}")
+        print(f"  Avg missed move:  {s['avg_missed_move']}%")
+        print(f"  Avg captured move: {s['avg_captured_move']}%")
+
+        print(f"\nMISSED — State Distribution:")
+        for state, count in missed_states.most_common(10):
+            pct = count / max(len(missed), 1) * 100
+            print(f"  {state:50s} : {count:4d} ({pct:.0f}%)")
+
+        print(f"\nMISSED — Top Blocker Blocks (enabled templates):")
+        for block, count in blocker_counts.most_common(10):
+            print(f"  {block:30s} : {count:4d}")
+
+        print(f"\nMISSED — Disabled templates that WOULD catch:")
+        would_catch_templates = Counter(
+            r["nearest"]["template_id"] for r in would_catch)
+        for tmpl, count in would_catch_templates.most_common(5):
+            print(f"  {tmpl:40s} : {count:4d}")
+
+        print(f"\nINDICATOR PROFILE — Missed opportunities avg:")
+        print(f"  {'Indicator':20s} {'Avg':>8} {'P25':>8} {'P75':>8} "
+              f"{'Min':>8} {'Max':>8}")
+        print("  " + "-" * 60)
+        for ind in key_indicators:
+            if ind in indicator_profile:
+                p = indicator_profile[ind]
+                print(f"  {ind:20s} {p['avg']:>8.2f} {p['p25']:>8.2f} "
+                      f"{p['p75']:>8.2f} {p['min']:>8.2f} {p['max']:>8.2f}")
+
+        print(f"\nTOP 20 MISSED (by move size):")
+        print(f"  {'#':>3} {'Sym':>5} {'Date':>12} {'Move':>6} "
+              f"{'State':>40} {'Nearest':>25} {'Pass%':>6} {'En':>3}")
+        print("  " + "-" * 110)
+        for idx, r in enumerate(
+                sorted(missed, key=lambda x: x["move_pct"], reverse=True)[:20]):
+            nt = r.get("nearest") or {}
+            print(f"  {idx+1:3d} {r['symbol']:>5} {r['date']:>12} "
+                  f"{r['move_pct']:>+5.1f}% "
+                  f"{r['state_key']:>40} "
+                  f"{nt.get('template_id', 'NONE'):>25} "
+                  f"{nt.get('pass_rate', 0):>5.0%} "
+                  f"{'Y' if nt.get('enabled') else 'N':>3}")
+
+        return output
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Walk-Forward Validator
