@@ -2577,6 +2577,96 @@ class TestReEnablePerState:
 
 
 # ============================================================
+# BEARISH_VOLATILITY_EXPANSION Template Tests (Chat #11)
+# ============================================================
+
+class TestBearishVolatilityExpansion:
+    """Tests for the first discrimination-driven template."""
+
+    TEMPLATE_PATH = os.path.join("data", "templates", "BEARISH_VOLATILITY_EXPANSION.json")
+
+    def _load_template(self):
+        import json
+        from setup_templates import SetupTemplate
+        with open(self.TEMPLATE_PATH, 'r') as f:
+            data = json.load(f)
+        return SetupTemplate(data)
+
+    def test_bearish_vol_expansion_loads(self):
+        """Template JSON loads correctly into SetupTemplate object."""
+        assert os.path.exists(self.TEMPLATE_PATH), f"Template file not found: {self.TEMPLATE_PATH}"
+        t = self._load_template()
+        assert t.id == "BEARISH_VOLATILITY_EXPANSION"
+        assert t.timeframe == "1d"
+        assert t.category == "mean_reversion"
+        assert t.enabled is True
+        assert t.source == "discrimination_v3"
+        assert len(t.conditions) == 2
+        assert t.conditions[0]['block'] == "atr_percent_above"
+        assert abs(t.conditions[0]['params'][0] - 0.04955) < 1e-9
+        assert t.conditions[1]['block'] == "bullish_candle"
+        assert t.entry.get('confirmation_candles') == 1
+        assert t.take_profit.get('use_runner_mode') is False
+
+    def test_bearish_vol_expansion_state_filter(self):
+        """Template matches BEARISH:OPEN_FIELD:HEALTHY:NORMAL only, rejects other states."""
+        t = self._load_template()
+        rs = t.required_state
+
+        # Must match BEARISH trend
+        assert 'BEARISH' in rs.get('trend', [])
+        # Must match OPEN_FIELD structure
+        assert 'OPEN_FIELD' in rs.get('structure', [])
+        # Must match NORMAL volatility
+        assert 'NORMAL' in rs.get('volatility', [])
+        # Must match HEALTHY or SURGING volume
+        assert 'HEALTHY' in rs.get('volume', [])
+        assert 'SURGING' in rs.get('volume', [])
+
+        # Must NOT match BULLISH trend
+        assert 'BULLISH' not in rs.get('trend', [])
+        # Must NOT match COMPRESSED or VOLATILE volatility
+        assert 'COMPRESSED' not in rs.get('volatility', [])
+        assert 'VOLATILE' not in rs.get('volatility', [])
+        # Must NOT match NEAR_SUPPORT or NEAR_RESISTANCE structure
+        assert 'NEAR_SUPPORT' not in rs.get('structure', [])
+        assert 'NEAR_RESISTANCE' not in rs.get('structure', [])
+
+    def test_bearish_vol_expansion_atr_threshold(self):
+        """atr_pct=5% (atr=5, close=100) passes; atr_pct=4% fails."""
+        t = self._load_template()
+
+        # atr/close = 5/100 = 0.05 > 0.04955 → should pass atr_percent_above
+        row_pass = {'close': 100.0, 'open': 99.0, 'atr': 5.0,
+                    'high': 101.0, 'low': 98.0, 'volume': 1_000_000}
+        all_p, details_p = t.evaluate_conditions(row_pass)
+        passed_blocks = [d['block'] for d in details_p if d.get('passed')]
+        assert 'atr_percent_above' in passed_blocks
+
+        # atr/close = 4/100 = 0.04 < 0.04955 → should fail atr_percent_above
+        row_fail = {'close': 100.0, 'open': 99.0, 'atr': 4.0,
+                    'high': 101.0, 'low': 98.0, 'volume': 1_000_000}
+        _, details_f = t.evaluate_conditions(row_fail)
+        passed_blocks_fail = [d['block'] for d in details_f if d.get('passed')]
+        assert 'atr_percent_above' not in passed_blocks_fail
+
+    def test_bearish_vol_expansion_needs_bullish_candle(self):
+        """Red candle (close < open) fails all_passed even when atr_pct passes threshold."""
+        t = self._load_template()
+
+        # Red candle with high atr_pct (atr/close = 6/95 ≈ 6.3% > 4.955%)
+        row_red = {'close': 95.0, 'open': 100.0, 'atr': 6.0,
+                   'high': 101.0, 'low': 94.0, 'volume': 1_000_000}
+        all_passed, details = t.evaluate_conditions(row_red)
+        # atr_percent_above should pass, bullish_candle should fail → all_passed = False
+        assert all_passed is False
+        atr_block   = next((d for d in details if d['block'] == 'atr_percent_above'), None)
+        candle_block= next((d for d in details if d['block'] == 'bullish_candle'), None)
+        assert atr_block   is not None and atr_block['passed']   is True
+        assert candle_block is not None and candle_block['passed'] is False
+
+
+# ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
 if __name__ == '__main__':
@@ -2584,7 +2674,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough, TestVolumeTimeframeThreshold, TestDuplicateTimeframeAware, TestNewRecipes, TestIndicatorScaling, TestSignalStackingCooldown, TestQGTestPeriodSafetyNet, TestTrustScoreCalculation, TestRollingTrust, TestReEnablePerState, TestTrustGate]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough, TestVolumeTimeframeThreshold, TestDuplicateTimeframeAware, TestNewRecipes, TestIndicatorScaling, TestSignalStackingCooldown, TestQGTestPeriodSafetyNet, TestTrustScoreCalculation, TestRollingTrust, TestReEnablePerState, TestTrustGate, TestBearishVolatilityExpansion]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

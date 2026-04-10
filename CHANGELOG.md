@@ -1,5 +1,17 @@
 # Changelog
 
+## [Chat #11] - 2026-04-10
+
+### Added
+- `BEARISH_VOLATILITY_EXPANSION` template (data/templates/BEARISH_VOLATILITY_EXPANSION.json)
+  - First data-driven template from Discrimination Test v3
+  - State: BEARISH:OPEN_FIELD:HEALTHY:NORMAL
+  - Conditions: atr_percent_above(0.04955) + bullish_candle
+  - Category: mean_reversion (LONG bounce in bearish market)
+  - Source: discrimination_v3, Cohen's d=1.07, STABLE
+  - Theoretical PF: 2.13, success threshold: PF ≥ 1.5
+- 4 unit tests for BEARISH_VOLATILITY_EXPANSION template (205 total, 0 regressions)
+
 ## [2026-04-10] SPEC +DRD v13.6 — Trust Gate, Opportunity Scanner, Statistical Mining
 
 ### Updated
