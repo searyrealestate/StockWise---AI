@@ -1,5 +1,17 @@
 # Changelog
 
+## [2026-04-10] SPEC +DRD v13.6 — Trust Gate, Opportunity Scanner, Statistical Mining
+
+### Updated
+- `Documents/SPEC +DRD v13.6.docx`: bumped from v13.5
+- Added §4.7 Trust Lifecycle Signal Gate (DDR #38, gate logic, empirical results: WR 44.9%→50.6%, PF 1.55→1.68, net +$136)
+- Added §6 Opportunity Scanner (4-quadrant, 5,101 opportunities, 3% capture, top blockers)
+- Added §7 Statistical Mining Investigation (hypothesis failed: 0/3 states validated, base rate + price-level artifact)
+- Updated §3 with indicator coverage note (70 implemented, ~61 missing, 3 partial)
+- Updated §4 with template generator limitation note (fixed RECIPES, not data-driven)
+- Updated §5 with current template status (5 active, 6 disabled, 0 BULLISH daily coverage)
+- Added DDRs #38–#42: Trust Gate scoping, Scanner as diagnostic-only, Mining failure, 3% capture root cause, Reshuffling effect
+
 ## [2026-04-09] Opportunity Scanner — 4-Quadrant Analysis
 
 ### Added
