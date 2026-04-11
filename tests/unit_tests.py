@@ -2851,6 +2851,72 @@ class TestDiscriminationTemplateBuilder:
         assert data['category'] == 'momentum'
 
 
+# ============================================================
+# TemplateHealthMonitor Tests (Chat #12)
+# ============================================================
+
+class TestTemplateHealthMonitor:
+
+    def test_health_monitor_instantiates(self):
+        """
+        What: Monitor creates with config keys populated.
+        Why: Guards against missing TEMPLATE_HEALTH_CONFIG in system_config.
+        """
+        from setup_templates import TemplateHealthMonitor
+        monitor = TemplateHealthMonitor()
+        assert monitor.config is not None, "config must not be None"
+        assert 'disable_pf_below' in monitor.config, "disable_pf_below key missing"
+        assert 'never_reenable' in monitor.config, "never_reenable key missing"
+
+    def test_health_monitor_disable_threshold_below_reenable(self):
+        """
+        What: disable_pf_below < reenable_pf_above.
+        Why: Threshold asymmetry prevents oscillation — re-enable bar must be higher than disable bar.
+        """
+        from setup_templates import TemplateHealthMonitor
+        monitor = TemplateHealthMonitor()
+        disable_pf  = monitor.config.get('disable_pf_below', 1.0)
+        reenable_pf = monitor.config.get('reenable_pf_above', 1.5)
+        assert disable_pf < reenable_pf, \
+            f"disable_pf ({disable_pf}) must be < reenable_pf ({reenable_pf})"
+
+    def test_health_monitor_never_reenable_list(self):
+        """
+        What: Known overfitters are in never_reenable list.
+        Why: GEN_SIDEWAYS_ACCUMULATION and GEN_BEARISH_SQUEEZE_BREAK must never return.
+        """
+        from setup_templates import TemplateHealthMonitor
+        monitor = TemplateHealthMonitor()
+        never_list = monitor.config.get('never_reenable', [])
+        assert 'GEN_SIDEWAYS_ACCUMULATION' in never_list, \
+            "GEN_SIDEWAYS_ACCUMULATION must be in never_reenable (known overfitter)"
+        assert 'GEN_BEARISH_SQUEEZE_BREAK' in never_list, \
+            "GEN_BEARISH_SQUEEZE_BREAK must be in never_reenable (WR=22.5%, catastrophic)"
+
+    def test_health_monitor_trade_thresholds_asymmetric(self):
+        """
+        What: min_trades_for_reenable > min_trades_for_disable.
+        Why: Re-enabling requires more evidence than disabling — conservative by design.
+        """
+        from setup_templates import TemplateHealthMonitor
+        monitor = TemplateHealthMonitor()
+        min_disable  = monitor.config.get('min_trades_for_disable', 10)
+        min_reenable = monitor.config.get('min_trades_for_reenable', 15)
+        assert min_reenable > min_disable, \
+            f"min_trades_for_reenable ({min_reenable}) must be > min_trades_for_disable ({min_disable})"
+
+    def test_health_monitor_protect_list_is_list(self):
+        """
+        What: protect_from_disable is a list (may be empty).
+        Why: Code iterates over it — must not be None or wrong type.
+        """
+        from setup_templates import TemplateHealthMonitor
+        monitor = TemplateHealthMonitor()
+        protect_list = monitor.config.get('protect_from_disable', [])
+        assert isinstance(protect_list, list), \
+            f"protect_from_disable must be a list, got {type(protect_list)}"
+
+
 # RUNNER (also compatible with pytest)
 # ============================================================
 if __name__ == '__main__':
@@ -2859,7 +2925,7 @@ if __name__ == '__main__':
     errors = []
 
     test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough, TestVolumeTimeframeThreshold, TestDuplicateTimeframeAware, TestNewRecipes, TestIndicatorScaling, TestSignalStackingCooldown, TestQGTestPeriodSafetyNet, TestTrustScoreCalculation, TestRollingTrust, TestReEnablePerState, TestTrustGate, TestBearishVolatilityExpansion, TestWeeklyGateReversalBypass,
-                  TestDiscriminationTemplateBuilder]
+                  TestDiscriminationTemplateBuilder, TestTemplateHealthMonitor]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

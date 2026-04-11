@@ -1878,3 +1878,220 @@ class DiscriminationTemplateBuilder:
                 "block_stats": {},
             },
         }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TEMPLATE HEALTH MONITOR
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TemplateHealthMonitor:
+    """
+    Evaluates ALL templates (enabled and disabled) against backtest results.
+    Auto-disables underperformers and re-enables recovered templates.
+
+    Flow:
+    1. prepare_full_evaluation() temporarily enables ALL disabled 1d templates
+    2. Caller runs backtest (saves results to data/backtest_results.json)
+    3. apply_decisions() reads per_template stats and applies:
+       - ENABLED + PF < disable_pf + trades >= min_trades → DISABLE
+       - DISABLED + PF >= reenable_pf + trades >= min_trades → RE-ENABLE
+       - In never_reenable list → BLOCKED (stays disabled regardless of PF)
+       - In protect_from_disable → PROTECTED (stays enabled regardless of PF)
+       - trades < threshold → NO_CHANGE (insufficient sample)
+    4. Saves decision report to health_monitor_report.json
+
+    Config: system_config.TEMPLATE_HEALTH_CONFIG
+
+    NOTE: prepare_full_evaluation() stores the list of originally-disabled template
+    IDs in self._temp_enabled so apply_decisions() can reconstruct was_enabled.
+    This survives across a single Python session. For cross-session usage, pass
+    the temp_enabled list explicitly to apply_decisions().
+    """
+
+    def __init__(self):
+        self.config = getattr(cfg, 'TEMPLATE_HEALTH_CONFIG', {})
+        self.manager = TemplateManager()
+        self._temp_enabled: list = []   # IDs that were OFF before prepare_full_evaluation
+
+    def prepare_full_evaluation(self) -> list:
+        """
+        Temporarily enable ALL disabled 1d templates for a full backtest sweep.
+
+        Reads template files directly (bypasses TemplateManager.load_all() which
+        skips disabled templates). Saves updated files so the backtest engine picks
+        them up.
+
+        Returns:
+            list of template IDs that were originally disabled and are now
+            temporarily enabled. Pass this to apply_decisions() if calling
+            across separate Python processes.
+        """
+        templates_dir = self.manager.templates_dir
+        temp_enabled = []
+
+        for filename in sorted(os.listdir(templates_dir)):
+            if not filename.endswith('.json'):
+                continue
+            filepath = os.path.join(templates_dir, filename)
+            data = safe_json_read(filepath, default={})
+            if not data:
+                continue
+            if data.get('timeframe') != '1d':
+                continue
+            if not data.get('enabled', False):
+                data['enabled'] = True
+                safe_json_write(filepath, data)
+                tid = data.get('id', filename.replace('.json', ''))
+                temp_enabled.append(tid)
+                logger.info(f"[HEALTH-MONITOR] Temporarily enabled: {tid}")
+
+        self._temp_enabled = temp_enabled
+        logger.info(f"[HEALTH-MONITOR] {len(temp_enabled)} templates temporarily enabled for evaluation")
+        return temp_enabled
+
+    def apply_decisions(self, backtest_results=None, results_path=None,
+                        temp_enabled=None) -> list:
+        """
+        Read backtest results and apply enable/disable decisions.
+
+        Args:
+            backtest_results: dict from BacktestEngine — OR —
+            results_path:     path to backtest_results.json (default location used if both None)
+            temp_enabled:     list of originally-disabled IDs (from prepare_full_evaluation).
+                              If None, uses self._temp_enabled set in this session.
+
+        Returns:
+            list of decision dicts: [{template_id, was_enabled, trades, pf, wr, pnl, action, reason}]
+        """
+        if backtest_results is None:
+            path = results_path or 'data/backtest_results.json'
+            backtest_results = safe_json_read(path, default={})
+
+        per_template = backtest_results.get('per_template', {})
+        if not per_template:
+            logger.warning("[HEALTH-MONITOR] No per_template data in backtest results")
+            return []
+
+        # Resolve which templates were originally disabled
+        originally_disabled = set(temp_enabled if temp_enabled is not None else self._temp_enabled)
+
+        # Build PF lookup from full trades list (per_template has no profit_factor field)
+        all_trades = backtest_results.get('trades', [])
+        pf_by_template: dict = {}
+        gross_wins: dict = {}
+        gross_losses: dict = {}
+        for t in all_trades:
+            tid = t.get('template_id', '')
+            pnl = t.get('pnl', 0)
+            if pnl > 0:
+                gross_wins[tid] = gross_wins.get(tid, 0.0) + pnl
+            else:
+                gross_losses[tid] = gross_losses.get(tid, 0.0) + abs(pnl)
+        for tid in set(list(gross_wins) + list(gross_losses)):
+            gw = gross_wins.get(tid, 0.0)
+            gl = gross_losses.get(tid, 0.0)
+            pf_by_template[tid] = gw / gl if gl > 0 else (float('inf') if gw > 0 else 0.0)
+
+        # Config thresholds
+        disable_pf       = self.config.get('disable_pf_below', 1.0)
+        reenable_pf      = self.config.get('reenable_pf_above', 1.5)
+        min_dis_trades   = self.config.get('min_trades_for_disable', 10)
+        min_reen_trades  = self.config.get('min_trades_for_reenable', 15)
+        protect_list     = set(self.config.get('protect_from_disable', []))
+        never_reenable   = set(self.config.get('never_reenable', []))
+
+        decisions = []
+        templates_dir = self.manager.templates_dir
+
+        for tid, stats in per_template.items():
+            # Load current file state
+            filepath = os.path.join(templates_dir, f"{tid}.json")
+            if not os.path.exists(filepath):
+                continue
+            data = safe_json_read(filepath, default={})
+            if not data or data.get('timeframe') != '1d':
+                continue
+
+            was_enabled = tid not in originally_disabled
+            trades      = stats.get('trades', 0)
+            wr          = stats.get('win_rate', 0)
+            pnl         = stats.get('total_pnl', 0)
+            pf          = pf_by_template.get(tid, 0.0)
+            pf_display  = round(pf, 2) if pf != float('inf') else 999.0
+
+            decision = {
+                'template_id': tid,
+                'was_enabled': was_enabled,
+                'trades':      trades,
+                'pf':          pf_display,
+                'wr':          round(wr, 1),
+                'pnl':         round(pnl, 2),
+                'action':      'NO_CHANGE',
+                'reason':      '',
+            }
+
+            if was_enabled:
+                # Originally ENABLED — should we disable?
+                if tid in protect_list:
+                    decision['action'] = 'PROTECTED'
+                    decision['reason'] = 'In protect_from_disable list'
+                    data['enabled'] = True
+                elif trades < min_dis_trades:
+                    decision['action'] = 'NO_CHANGE'
+                    decision['reason'] = f'Insufficient trades ({trades} < {min_dis_trades})'
+                    data['enabled'] = True
+                elif pf < disable_pf:
+                    decision['action'] = 'DISABLE'
+                    decision['reason'] = f'PF {pf:.2f} < {disable_pf}'
+                    data['enabled'] = False
+                    logger.warning(f"[HEALTH-MONITOR] DISABLED {tid}: PF={pf:.2f}, trades={trades}")
+                else:
+                    decision['action'] = 'NO_CHANGE'
+                    decision['reason'] = f'PF {pf:.2f} >= {disable_pf} — healthy'
+                    data['enabled'] = True
+            else:
+                # Originally DISABLED — should we re-enable?
+                if tid in never_reenable:
+                    decision['action'] = 'BLOCKED'
+                    decision['reason'] = 'In never_reenable list (known overfitter)'
+                    data['enabled'] = False
+                elif trades < min_reen_trades:
+                    decision['action'] = 'NO_CHANGE'
+                    decision['reason'] = f'Insufficient trades ({trades} < {min_reen_trades})'
+                    data['enabled'] = False
+                elif pf >= reenable_pf:
+                    decision['action'] = 'RE-ENABLE'
+                    decision['reason'] = f'PF {pf:.2f} >= {reenable_pf}'
+                    data['enabled'] = True
+                    logger.info(f"[HEALTH-MONITOR] RE-ENABLED {tid}: PF={pf:.2f}, trades={trades}")
+                else:
+                    decision['action'] = 'KEEP_DISABLED'
+                    decision['reason'] = f'PF {pf:.2f} < {reenable_pf}'
+                    data['enabled'] = False
+
+            safe_json_write(filepath, data)
+            decisions.append(decision)
+
+        # Save report
+        report = {
+            'timestamp': datetime.now().isoformat(),
+            'decisions': decisions,
+            'summary': {
+                'total_evaluated':  len(decisions),
+                'disabled':         sum(1 for d in decisions if d['action'] == 'DISABLE'),
+                're_enabled':       sum(1 for d in decisions if d['action'] == 'RE-ENABLE'),
+                'blocked':          sum(1 for d in decisions if d['action'] == 'BLOCKED'),
+                'no_change':        sum(1 for d in decisions
+                                        if d['action'] in ('NO_CHANGE', 'PROTECTED', 'KEEP_DISABLED')),
+            }
+        }
+        report_path = self.config.get('report_path', 'data/health_monitor_report.json')
+        safe_json_write(report_path, report)
+
+        s = report['summary']
+        logger.info(
+            f"[HEALTH-MONITOR] Evaluation complete: "
+            f"{s['disabled']} disabled, {s['re_enabled']} re-enabled, "
+            f"{s['blocked']} blocked, {s['no_change']} unchanged"
+        )
+        return decisions

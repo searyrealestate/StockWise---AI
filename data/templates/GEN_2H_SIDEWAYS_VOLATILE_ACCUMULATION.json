@@ -1,21 +1,23 @@
 {
-    "id": "BEARISH_VOLATILITY_EXPANSION",
-    "name": "Bearish Volatility Expansion Bounce",
-    "description": "Mean-reversion bounce when ATR expands in bearish open field - data-driven from discrimination v3 (Cohen's d=1.07, STABLE)",
+    "id": "GEN_2H_SIDEWAYS_VOLATILE_ACCUMULATION",
+    "name": "Accumulation in volatile sideways with volume confirmation (2h) (Generated)",
+    "description": "Accumulation in volatile sideways with volume confirmation (2h)",
     "version": 1,
-    "source": "discrimination_v3",
-    "timeframe": "1d",
-    "category": "mean_reversion",
+    "source": "generated",
+    "timeframe": "2h",
+    "category": "momentum",
     "enabled": true,
     "required_state": {
         "trend": [
-            "BEARISH"
+            "SIDEWAYS"
         ],
         "structure": [
-            "OPEN_FIELD"
+            "OPEN_FIELD",
+            "NEAR_SUPPORT",
+            "NEAR_RESISTANCE"
         ],
         "volatility": [
-            "NORMAL"
+            "VOLATILE"
         ],
         "volume": [
             "HEALTHY",
@@ -24,9 +26,22 @@
     },
     "conditions": [
         {
-            "block": "atr_percent_above",
+            "block": "obv_rising",
             "params": [
-                0.04955
+                20
+            ]
+        },
+        {
+            "block": "rsi_between",
+            "params": [
+                35,
+                65
+            ]
+        },
+        {
+            "block": "volume_surge",
+            "params": [
+                1.2
             ]
         },
         {
@@ -40,7 +55,7 @@
     },
     "stop_loss": {
         "method": "atr",
-        "atr_multiplier": 1.8,
+        "atr_multiplier": 2.0,
         "fallback_pct": 0.02
     },
     "take_profit": {
@@ -72,8 +87,8 @@
         "last_activated": null,
         "last_win_ticker": null,
         "last_loss_ticker": null,
-        "created_at": null,
-        "updated_at": null,
+        "created_at": "2026-04-08T15:15:14.934889",
+        "updated_at": "2026-04-08T15:15:14.934889",
         "block_stats": {}
     }
 }

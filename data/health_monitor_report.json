@@ -1,0 +1,182 @@
+{
+    "timestamp": "2026-04-11T14:46:00.167774",
+    "decisions": [
+        {
+            "template_id": "DISC_SIDEWAYS_NORMAL_5D",
+            "was_enabled": true,
+            "trades": 36,
+            "pf": 2.99,
+            "wr": 58.3,
+            "pnl": 4708.14,
+            "action": "NO_CHANGE",
+            "reason": "PF 2.99 >= 1.0 \u2014 healthy"
+        },
+        {
+            "template_id": "BEARISH_VOLATILITY_EXPANSION",
+            "was_enabled": true,
+            "trades": 14,
+            "pf": 2.81,
+            "wr": 64.3,
+            "pnl": 1749.4,
+            "action": "NO_CHANGE",
+            "reason": "PF 2.81 >= 1.0 \u2014 healthy"
+        },
+        {
+            "template_id": "GEN_SIDEWAYS_ACCUMULATION",
+            "was_enabled": false,
+            "trades": 34,
+            "pf": 1.26,
+            "wr": 44.1,
+            "pnl": 596.8,
+            "action": "BLOCKED",
+            "reason": "In never_reenable list (known overfitter)"
+        },
+        {
+            "template_id": "GEN_BEARISH_SQUEEZE_BREAK",
+            "was_enabled": false,
+            "trades": 34,
+            "pf": 0.6,
+            "wr": 23.5,
+            "pnl": -1311.65,
+            "action": "BLOCKED",
+            "reason": "In never_reenable list (known overfitter)"
+        },
+        {
+            "template_id": "GEN_TREND_EXHAUSTION_BOUNCE",
+            "was_enabled": false,
+            "trades": 4,
+            "pf": 0.06,
+            "wr": 25.0,
+            "pnl": -548.81,
+            "action": "NO_CHANGE",
+            "reason": "Insufficient trades (4 < 15)"
+        },
+        {
+            "template_id": "VSA_INSTITUTIONAL",
+            "was_enabled": false,
+            "trades": 4,
+            "pf": 0.47,
+            "wr": 25.0,
+            "pnl": -342.59,
+            "action": "NO_CHANGE",
+            "reason": "Insufficient trades (4 < 15)"
+        },
+        {
+            "template_id": "DISC_BEARISH_VOLATILE_5D",
+            "was_enabled": true,
+            "trades": 3,
+            "pf": 999.0,
+            "wr": 100.0,
+            "pnl": 757.48,
+            "action": "NO_CHANGE",
+            "reason": "Insufficient trades (3 < 10)"
+        },
+        {
+            "template_id": "DISC_BEARISH_COMPRESSED_10D",
+            "was_enabled": true,
+            "trades": 10,
+            "pf": 3.6,
+            "wr": 60.0,
+            "pnl": 1920.27,
+            "action": "NO_CHANGE",
+            "reason": "PF 3.60 >= 1.0 \u2014 healthy"
+        },
+        {
+            "template_id": "MOMENTUM_BREAKOUT",
+            "was_enabled": false,
+            "trades": 28,
+            "pf": 1.83,
+            "wr": 39.3,
+            "pnl": 1588.43,
+            "action": "RE-ENABLE",
+            "reason": "PF 1.83 >= 1.5"
+        },
+        {
+            "template_id": "GEN_BULLISH_TREND_RIDE",
+            "was_enabled": false,
+            "trades": 25,
+            "pf": 2.46,
+            "wr": 52.0,
+            "pnl": 2568.76,
+            "action": "RE-ENABLE",
+            "reason": "PF 2.46 >= 1.5"
+        },
+        {
+            "template_id": "TREND_PULLBACK_EMA",
+            "was_enabled": false,
+            "trades": 18,
+            "pf": 1.59,
+            "wr": 44.4,
+            "pnl": 727.45,
+            "action": "RE-ENABLE",
+            "reason": "PF 1.59 >= 1.5"
+        },
+        {
+            "template_id": "DISC_BULLISH_COMPRESSED_10D",
+            "was_enabled": true,
+            "trades": 45,
+            "pf": 1.07,
+            "wr": 46.7,
+            "pnl": 326.12,
+            "action": "NO_CHANGE",
+            "reason": "PF 1.07 >= 1.0 \u2014 healthy"
+        },
+        {
+            "template_id": "DISC_SIDEWAYS_COMPRESSED_10D",
+            "was_enabled": true,
+            "trades": 23,
+            "pf": 2.37,
+            "wr": 52.2,
+            "pnl": 2418.63,
+            "action": "NO_CHANGE",
+            "reason": "PF 2.37 >= 1.0 \u2014 healthy"
+        },
+        {
+            "template_id": "GEN_BULLISH_BREAKOUT_VOLUME",
+            "was_enabled": false,
+            "trades": 17,
+            "pf": 1.08,
+            "wr": 35.3,
+            "pnl": 131.93,
+            "action": "KEEP_DISABLED",
+            "reason": "PF 1.08 < 1.5"
+        },
+        {
+            "template_id": "SQUEEZE_BREAKOUT",
+            "was_enabled": true,
+            "trades": 12,
+            "pf": 4.97,
+            "wr": 50.0,
+            "pnl": 2733.58,
+            "action": "NO_CHANGE",
+            "reason": "PF 4.97 >= 1.0 \u2014 healthy"
+        },
+        {
+            "template_id": "GEN_SIDEWAYS_BREAKOUT_CLEAN",
+            "was_enabled": true,
+            "trades": 1,
+            "pf": 999.0,
+            "wr": 100.0,
+            "pnl": 691.33,
+            "action": "NO_CHANGE",
+            "reason": "Insufficient trades (1 < 10)"
+        },
+        {
+            "template_id": "OVERSOLD_BOUNCE",
+            "was_enabled": true,
+            "trades": 1,
+            "pf": 999.0,
+            "wr": 100.0,
+            "pnl": 519.16,
+            "action": "NO_CHANGE",
+            "reason": "Insufficient trades (1 < 10)"
+        }
+    ],
+    "summary": {
+        "total_evaluated": 17,
+        "disabled": 0,
+        "re_enabled": 3,
+        "blocked": 2,
+        "no_change": 12
+    }
+}

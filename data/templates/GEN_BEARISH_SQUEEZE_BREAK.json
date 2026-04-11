@@ -1,21 +1,23 @@
 {
-    "id": "BEARISH_VOLATILITY_EXPANSION",
-    "name": "Bearish Volatility Expansion Bounce",
-    "description": "Mean-reversion bounce when ATR expands in bearish open field - data-driven from discrimination v3 (Cohen's d=1.07, STABLE)",
+    "id": "GEN_BEARISH_SQUEEZE_BREAK",
+    "name": "Squeeze breakout from bearish compression (Generated)",
+    "description": "Squeeze breakout from bearish compression",
     "version": 1,
-    "source": "discrimination_v3",
+    "source": "generated",
     "timeframe": "1d",
-    "category": "mean_reversion",
-    "enabled": true,
+    "category": "breakout",
+    "enabled": false,
     "required_state": {
         "trend": [
-            "BEARISH"
+            "BEARISH",
+            "SIDEWAYS"
         ],
         "structure": [
-            "OPEN_FIELD"
+            "OPEN_FIELD",
+            "NEAR_RESISTANCE"
         ],
         "volatility": [
-            "NORMAL"
+            "COMPRESSED"
         ],
         "volume": [
             "HEALTHY",
@@ -24,9 +26,17 @@
     },
     "conditions": [
         {
-            "block": "atr_percent_above",
+            "block": "squeeze_active",
+            "params": []
+        },
+        {
+            "block": "squeeze_momentum_positive",
+            "params": []
+        },
+        {
+            "block": "rsi_above",
             "params": [
-                0.04955
+                40
             ]
         },
         {
@@ -36,17 +46,17 @@
     ],
     "entry": {
         "type": "close",
-        "confirmation_candles": 1
+        "confirmation_candles": 0
     },
     "stop_loss": {
         "method": "atr",
-        "atr_multiplier": 1.8,
+        "atr_multiplier": 2.0,
         "fallback_pct": 0.02
     },
     "take_profit": {
         "method": "atr",
-        "atr_multiplier": 3.0,
-        "use_runner_mode": false
+        "atr_multiplier": 3.5,
+        "use_runner_mode": true
     },
     "statistics": {
         "total_activations": 0,
@@ -72,8 +82,8 @@
         "last_activated": null,
         "last_win_ticker": null,
         "last_loss_ticker": null,
-        "created_at": null,
-        "updated_at": null,
+        "created_at": "2026-04-08T17:25:16.017121",
+        "updated_at": "2026-04-08T17:25:16.017121",
         "block_stats": {}
     }
 }

@@ -5,7 +5,7 @@
     "version": 4,
     "source": "seed",
     "timeframe": "1d",
-    "enabled": false,
+    "enabled": true,
     "required_state": {
         "trend": [
             "BULLISH"

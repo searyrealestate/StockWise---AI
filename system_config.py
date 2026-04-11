@@ -1153,6 +1153,31 @@ DISCRIMINATION_BUILDER_CONFIG = {
     "min_trades_for_decision": 10,    # Need >=10 trades before deciding
 }
 
+# ═══════════════════════════════════════════════════════════════════════════
+# TEMPLATE HEALTH MONITOR CONFIG
+# ═══════════════════════════════════════════════════════════════════════════
+TEMPLATE_HEALTH_CONFIG = {
+    "enabled": True,
+
+    # Disable thresholds (for currently ENABLED templates)
+    "disable_pf_below": 1.0,          # PF < 1.0 → auto-disable
+    "min_trades_for_disable": 10,      # Need ≥10 trades before disabling
+
+    # Re-enable thresholds (for currently DISABLED templates)
+    "reenable_pf_above": 1.5,         # PF ≥ 1.5 → auto-re-enable
+    "min_trades_for_reenable": 15,     # Need ≥15 trades before re-enabling
+
+    # Protection lists
+    "protect_from_disable": [],        # Never auto-disable these template IDs
+    "never_reenable": [                # Known overfitters — never auto-re-enable
+        "GEN_SIDEWAYS_ACCUMULATION",
+        "GEN_BEARISH_SQUEEZE_BREAK",
+    ],
+
+    # Report output
+    "report_path": "data/health_monitor_report.json",
+}
+
 SCAN_ROUTING_CONFIG = {
     "daily_scan_limit": 4000,             # Maximum symbols to scan per nightly run
     "priority_scan_limit": 100,           # Top N symbols from ledger scanned first (by score)

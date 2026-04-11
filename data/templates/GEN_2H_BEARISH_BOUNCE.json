@@ -1,10 +1,10 @@
 {
-    "id": "BEARISH_VOLATILITY_EXPANSION",
-    "name": "Bearish Volatility Expansion Bounce",
-    "description": "Mean-reversion bounce when ATR expands in bearish open field - data-driven from discrimination v3 (Cohen's d=1.07, STABLE)",
+    "id": "GEN_2H_BEARISH_BOUNCE",
+    "name": "2h oversold bounce in bearish intraday regime (Generated)",
+    "description": "2h oversold bounce in bearish intraday regime",
     "version": 1,
-    "source": "discrimination_v3",
-    "timeframe": "1d",
+    "source": "generated",
+    "timeframe": "2h",
     "category": "mean_reversion",
     "enabled": true,
     "required_state": {
@@ -12,10 +12,12 @@
             "BEARISH"
         ],
         "structure": [
-            "OPEN_FIELD"
+            "OPEN_FIELD",
+            "NEAR_RESISTANCE"
         ],
         "volatility": [
-            "NORMAL"
+            "NORMAL",
+            "VOLATILE"
         ],
         "volume": [
             "HEALTHY",
@@ -24,14 +26,20 @@
     },
     "conditions": [
         {
-            "block": "atr_percent_above",
+            "block": "rsi_below",
             "params": [
-                0.04955
+                35
             ]
         },
         {
             "block": "bullish_candle",
             "params": []
+        },
+        {
+            "block": "volume_surge",
+            "params": [
+                1.2
+            ]
         }
     ],
     "entry": {
@@ -45,7 +53,7 @@
     },
     "take_profit": {
         "method": "atr",
-        "atr_multiplier": 3.0,
+        "atr_multiplier": 2.5,
         "use_runner_mode": false
     },
     "statistics": {
@@ -72,8 +80,8 @@
         "last_activated": null,
         "last_win_ticker": null,
         "last_loss_ticker": null,
-        "created_at": null,
-        "updated_at": null,
+        "created_at": "2026-04-08T15:15:14.939888",
+        "updated_at": "2026-04-08T15:15:14.939888",
         "block_stats": {}
     }
 }

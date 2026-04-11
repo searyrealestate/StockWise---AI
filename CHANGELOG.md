@@ -3,6 +3,35 @@
 ## [Chat #12] - 2026-04-11
 
 ### Added
+- `TemplateHealthMonitor` class in `setup_templates.py`
+  - Auto-disables templates with PF < 1.0 (≥10 trades)
+  - Auto-re-enables disabled templates with PF ≥ 1.5 (≥15 trades)
+  - `never_reenable` list blocks known overfitters (GEN_SIDEWAYS_ACCUMULATION, GEN_BEARISH_SQUEEZE_BREAK)
+  - `protect_from_disable` list prevents accidental disable of critical templates
+  - Threshold asymmetry: disable bar (1.0) < re-enable bar (1.5) to prevent oscillation
+  - Saves decision report to `data/health_monitor_report.json`
+- `TEMPLATE_HEALTH_CONFIG` in `system_config.py`
+- 5 unit tests for `TemplateHealthMonitor` (218 total, 0 regressions)
+  - `test_health_monitor_instantiates` — config keys present
+  - `test_health_monitor_disable_threshold_below_reenable` — threshold asymmetry enforced
+  - `test_health_monitor_never_reenable_list` — overfitters in block list
+  - `test_health_monitor_trade_thresholds_asymmetric` — min_reenable > min_disable
+  - `test_health_monitor_protect_list_is_list` — protect list type check
+
+### Changed (by Health Monitor — 2026-04-11 run)
+- Templates re-enabled: `GEN_BULLISH_TREND_RIDE` (PF=2.46, 25t), `MOMENTUM_BREAKOUT` (PF=1.83, 28t), `TREND_PULLBACK_EMA` (PF=1.59, 18t)
+- Templates kept disabled: `GEN_BULLISH_BREAKOUT_VOLUME` (PF=1.08 < 1.5), `GEN_TREND_EXHAUSTION_BOUNCE` (4t < 15), `VSA_INSTITUTIONAL` (4t < 15)
+- Templates blocked: `GEN_SIDEWAYS_ACCUMULATION`, `GEN_BEARISH_SQUEEZE_BREAK` (never_reenable)
+
+### Backtest Impact (Health Monitor)
+| Metric | Before | After |
+|---|---|---|
+| Trades | 185 | 250 |
+| PF | 1.89 | 2.00 |
+| WR | 46.2% | 48.4% |
+| Return | 15.23% | 20.34% |
+| MaxDD | 2.21% | 2.79% |
+
 - `DiscriminationTemplateBuilder` class in `setup_templates.py`
   - Auto-generates templates from discrimination test results JSON
   - Filters: Cohen's d ≥ 0.8, base_rate ≥ 5%, n ≥ 50

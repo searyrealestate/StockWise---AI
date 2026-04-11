@@ -1,21 +1,22 @@
 {
-    "id": "BEARISH_VOLATILITY_EXPANSION",
-    "name": "Bearish Volatility Expansion Bounce",
-    "description": "Mean-reversion bounce when ATR expands in bearish open field - data-driven from discrimination v3 (Cohen's d=1.07, STABLE)",
+    "id": "GEN_BULLISH_TREND_RIDE",
+    "name": "Ride confirmed bullish trend with momentum (Generated)",
+    "description": "Ride confirmed bullish trend with momentum",
     "version": 1,
-    "source": "discrimination_v3",
+    "source": "generated",
     "timeframe": "1d",
-    "category": "mean_reversion",
+    "category": "momentum",
     "enabled": true,
     "required_state": {
         "trend": [
-            "BEARISH"
+            "BULLISH"
         ],
         "structure": [
             "OPEN_FIELD"
         ],
         "volatility": [
-            "NORMAL"
+            "NORMAL",
+            "VOLATILE"
         ],
         "volume": [
             "HEALTHY",
@@ -24,10 +25,21 @@
     },
     "conditions": [
         {
-            "block": "atr_percent_above",
+            "block": "close_above_ema",
             "params": [
-                0.04955
+                20
             ]
+        },
+        {
+            "block": "rsi_between",
+            "params": [
+                45,
+                70
+            ]
+        },
+        {
+            "block": "macd_above_signal",
+            "params": []
         },
         {
             "block": "bullish_candle",
@@ -36,7 +48,7 @@
     ],
     "entry": {
         "type": "close",
-        "confirmation_candles": 1
+        "confirmation_candles": 0
     },
     "stop_loss": {
         "method": "atr",
@@ -45,8 +57,8 @@
     },
     "take_profit": {
         "method": "atr",
-        "atr_multiplier": 3.0,
-        "use_runner_mode": false
+        "atr_multiplier": 3.5,
+        "use_runner_mode": true
     },
     "statistics": {
         "total_activations": 0,
@@ -72,8 +84,8 @@
         "last_activated": null,
         "last_win_ticker": null,
         "last_loss_ticker": null,
-        "created_at": null,
-        "updated_at": null,
+        "created_at": "2026-04-08T17:25:16.012043",
+        "updated_at": "2026-04-08T17:25:16.012043",
         "block_stats": {}
     }
 }
