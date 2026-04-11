@@ -32,6 +32,11 @@
 - Previous (111 trades): PF=1.57, WR=45.0%, Return=5.27%
 - Current (222 trades): PF=1.80, WR=47.3%, Return=15.25%, MaxDD=2.66%
 
+### Disabled
+- `GEN_SIDEWAYS_ACCUMULATION` — overfitting (PF=2.65 training, PF=0.61 full data)
+  - SIDEWAYS coverage maintained by DISC_SIDEWAYS_COMPRESSED_10D (PF=1.59) and DISC_SIDEWAYS_NORMAL_5D (PF=1.66)
+  - After disable: 222 → 197 trades, PF=1.80 → 1.86, Return unchanged (15.25% → 15.23%)
+
 ## [Chat #11] - 2026-04-11
 
 ### Fixed
