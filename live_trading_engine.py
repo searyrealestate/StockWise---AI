@@ -1056,7 +1056,8 @@ if __name__ == "__main__":
                                     df=df,
                                     open_positions=live_engine.positions,
                                     market_data=market_data,
-                                    portfolio_value=getattr(live_engine, 'portfolio_value', 0)
+                                    portfolio_value=getattr(live_engine, 'portfolio_value', 0),
+                                    is_reversal=best.get("is_reversal", False),
                                 )
 
                                 if not risk_ok:

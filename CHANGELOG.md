@@ -1,5 +1,18 @@
 # Changelog
 
+## [Chat #11] - 2026-04-11
+
+### Fixed
+- Weekly Trend Gate (Gate 3) now bypasses for reversal signals (`is_reversal=True`)
+  - Enables `BEARISH_VOLATILITY_EXPANSION` to trade during bearish weekly trends
+  - Controlled by `weekly_trend_bypass_for_reversal` config flag (default: True)
+  - Non-reversal templates still blocked as before (zero behavior change)
+  - Applied to both `backtest_engine.py` and `live_trading_engine.py`
+- 3 unit tests for weekly gate reversal bypass (208 total, 0 regressions)
+  - `test_weekly_gate_blocks_non_reversal` — non-reversal blocked as before
+  - `test_weekly_gate_bypasses_reversal` — reversal bypasses gate
+  - `test_weekly_gate_bypass_config_off` — bypass disabled → reversal also blocked
+
 ## [Chat #11] - 2026-04-10
 
 ### Added

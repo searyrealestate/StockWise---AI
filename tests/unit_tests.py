@@ -2667,6 +2667,72 @@ class TestBearishVolatilityExpansion:
 
 
 # ============================================================
+# Weekly Trend Gate Reversal Bypass Tests (Chat #11)
+# ============================================================
+
+class TestWeeklyGateReversalBypass:
+
+    def _make_bearish_df(self):
+        """300-bar daily df with steadily declining price — weekly close < SMA_40."""
+        import pandas as pd
+        import numpy as np
+        dates = pd.date_range(end='2025-04-15', periods=300, freq='B')
+        prices = np.linspace(300, 200, len(dates))
+        return pd.DataFrame({
+            'open':   prices + 1,
+            'high':   prices + 3,
+            'low':    prices - 3,
+            'close':  prices,
+            'volume': [1_000_000] * len(dates)
+        }, index=dates)
+
+    def test_weekly_gate_blocks_non_reversal(self):
+        """Non-reversal signal is blocked by weekly bearish trend."""
+        from portfolio_risk import PortfolioRiskManager
+        mgr = PortfolioRiskManager()
+        mgr.config['weekly_trend_enabled'] = True
+        mgr.config['weekly_trend_must_be_bullish'] = True
+        mgr.config['weekly_trend_bypass_for_reversal'] = True
+
+        approved, reasons = mgr.check_all_gates(
+            'TSLA', self._make_bearish_df(), {}, market_data=None, portfolio_value=100000,
+            is_reversal=False
+        )
+        assert approved is False
+        assert any('Weekly trend BEARISH' in r for r in reasons)
+
+    def test_weekly_gate_bypasses_reversal(self):
+        """Reversal signal bypasses weekly bearish trend gate."""
+        from portfolio_risk import PortfolioRiskManager
+        mgr = PortfolioRiskManager()
+        mgr.config['weekly_trend_enabled'] = True
+        mgr.config['weekly_trend_must_be_bullish'] = True
+        mgr.config['weekly_trend_bypass_for_reversal'] = True
+
+        approved, reasons = mgr.check_all_gates(
+            'TSLA', self._make_bearish_df(), {}, market_data=None, portfolio_value=100000,
+            is_reversal=True
+        )
+        assert approved is True
+        assert len(reasons) == 0
+
+    def test_weekly_gate_bypass_config_off(self):
+        """When bypass config is False, reversal is also blocked."""
+        from portfolio_risk import PortfolioRiskManager
+        mgr = PortfolioRiskManager()
+        mgr.config['weekly_trend_enabled'] = True
+        mgr.config['weekly_trend_must_be_bullish'] = True
+        mgr.config['weekly_trend_bypass_for_reversal'] = False
+
+        approved, reasons = mgr.check_all_gates(
+            'TSLA', self._make_bearish_df(), {}, market_data=None, portfolio_value=100000,
+            is_reversal=True
+        )
+        assert approved is False
+        assert any('Weekly trend BEARISH' in r for r in reasons)
+
+
+# ============================================================
 # RUNNER (also compatible with pytest)
 # ============================================================
 if __name__ == '__main__':
@@ -2674,7 +2740,7 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough, TestVolumeTimeframeThreshold, TestDuplicateTimeframeAware, TestNewRecipes, TestIndicatorScaling, TestSignalStackingCooldown, TestQGTestPeriodSafetyNet, TestTrustScoreCalculation, TestRollingTrust, TestReEnablePerState, TestTrustGate, TestBearishVolatilityExpansion]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough, TestVolumeTimeframeThreshold, TestDuplicateTimeframeAware, TestNewRecipes, TestIndicatorScaling, TestSignalStackingCooldown, TestQGTestPeriodSafetyNet, TestTrustScoreCalculation, TestRollingTrust, TestReEnablePerState, TestTrustGate, TestBearishVolatilityExpansion, TestWeeklyGateReversalBypass]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

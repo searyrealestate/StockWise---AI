@@ -48,7 +48,7 @@ class PortfolioRiskManager:
         self.circuit_breaker_active = False
         self.circuit_breaker_time = None
 
-    def check_all_gates(self, symbol, df, open_positions, market_data=None, portfolio_value=0):
+    def check_all_gates(self, symbol, df, open_positions, market_data=None, portfolio_value=0, is_reversal=False):
         """
         Run all three risk gates. Returns (approved, reasons).
 
@@ -58,6 +58,7 @@ class PortfolioRiskManager:
             open_positions: dict of {symbol: position_dict} currently held
             market_data: DataSourceManager instance (for fetching correlation data)
             portfolio_value: Total portfolio value in dollars
+            is_reversal: If True and weekly_trend_bypass_for_reversal=True, Gate 3 is skipped
 
         Returns:
             (True, []) if all gates pass
@@ -76,9 +77,12 @@ class PortfolioRiskManager:
             reasons.append(dd_reason)
 
         # Gate 3: Weekly Trend Check
-        wt_ok, wt_reason = self.check_weekly_trend_gate(symbol, df)
-        if not wt_ok:
-            reasons.append(wt_reason)
+        if is_reversal and self.config.get('weekly_trend_bypass_for_reversal', True):
+            logger.debug(f"[{symbol}] Weekly trend gate BYPASSED (reversal signal, is_reversal=True)")
+        else:
+            wt_ok, wt_reason = self.check_weekly_trend_gate(symbol, df)
+            if not wt_ok:
+                reasons.append(wt_reason)
 
         approved = len(reasons) == 0
         if not approved:

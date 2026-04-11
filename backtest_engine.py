@@ -535,7 +535,7 @@ class BacktestEngine:
 
             # Portfolio risk gates
             if self.risk_mgr and self.use_risk_gates:
-                if not self._check_risk_gates(sym, df_slice):
+                if not self._check_risk_gates(sym, df_slice, sig):
                     continue
 
             # Position sizing
@@ -586,7 +586,7 @@ class BacktestEngine:
             logger.debug(f"  OPEN {sym} @{actual_px:.2f} x{shares} stop={stop_loss:.2f} "
                          f"tmpl={template_id}")
 
-    def _check_risk_gates(self, symbol, df) -> bool:
+    def _check_risk_gates(self, symbol, df, signal=None) -> bool:
         """Run check_all_gates; return True if approved."""
         try:
             open_pos_dict = {
@@ -594,9 +594,11 @@ class BacktestEngine:
                 for p in self.open_positions
             }
             pv = self._calc_equity_fast()
+            is_reversal = signal.get("is_reversal", False) if signal else False
             approved, _ = self.risk_mgr.check_all_gates(
                 symbol, df, open_pos_dict,
                 market_data=None, portfolio_value=pv,
+                is_reversal=is_reversal,
             )
             return approved
         except Exception:
