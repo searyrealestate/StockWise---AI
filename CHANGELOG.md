@@ -33,6 +33,10 @@
 - Current (222 trades): PF=1.80, WR=47.3%, Return=15.25%, MaxDD=2.66%
 
 ### Disabled
+- `GEN_TREND_EXHAUSTION_BOUNCE` — underperforming (PF=0.83, 5 trades)
+  - BEARISH coverage maintained by DISC_BEARISH_* templates (PF 1.72-3.58)
+  - NEAR_RESISTANCE state incompatible with ≥10% labels (proven in discrimination v2/v3)
+  - After disable: 197 → 185 trades, PF=1.86 → 1.89, Return=15.23% → 15.11%
 - `GEN_SIDEWAYS_ACCUMULATION` — overfitting (PF=2.65 training, PF=0.61 full data)
   - SIDEWAYS coverage maintained by DISC_SIDEWAYS_COMPRESSED_10D (PF=1.59) and DISC_SIDEWAYS_NORMAL_5D (PF=1.66)
   - After disable: 222 → 197 trades, PF=1.80 → 1.86, Return unchanged (15.25% → 15.23%)
