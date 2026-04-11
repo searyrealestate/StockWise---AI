@@ -1117,6 +1117,42 @@ PORTFOLIO_RISK_CONFIG = {
     "event_horizon_buffer_days": 2,      # Force-sell 2 days before earnings/FDA events
 }
 
+# ═══════════════════════════════════════════════════════════════════════════
+# DISCRIMINATION TEMPLATE BUILDER CONFIG
+# ═══════════════════════════════════════════════════════════════════════════
+DISCRIMINATION_BUILDER_CONFIG = {
+    "enabled": True,
+    "results_path": "data/discrimination_test_v3.json",
+
+    # Filtering thresholds
+    "min_cohens_d": 0.8,             # Minimum Cohen's d for top discriminator
+    "min_base_rate": 0.05,           # Minimum base rate (5%)
+    "min_sample_size": 50,           # Minimum bars in state
+    "prefer_stable": True,           # If same state has STABLE and UNKNOWN, prefer STABLE
+
+    # Template generation
+    "prefix": "DISC",                # Template ID prefix: DISC_{TREND}_{VOL}_{HORIZON}
+    "default_confirmation_candles": 1,
+    "add_bullish_candle": True,      # Always add bullish_candle as second condition
+
+    # ATR calibration by volatility state
+    "atr_by_volatility": {
+        "COMPRESSED": {"stop_mult": 1.5, "tp_mult": 2.5, "runner": False},
+        "NORMAL":     {"stop_mult": 1.8, "tp_mult": 3.0, "runner": False},
+        "VOLATILE":   {"stop_mult": 2.0, "tp_mult": 3.5, "runner": False},
+    },
+
+    # Horizon adjustment for take-profit
+    "tp_factor_by_horizon": {
+        "5d":  0.85,    # Tighter TP for shorter horizon
+        "10d": 1.0,     # Baseline
+    },
+
+    # Quality gate after backtest
+    "auto_disable_pf_below": 1.0,    # Disable template if PF < 1.0 after backtest
+    "min_trades_for_decision": 10,    # Need >=10 trades before deciding
+}
+
 SCAN_ROUTING_CONFIG = {
     "daily_scan_limit": 4000,             # Maximum symbols to scan per nightly run
     "priority_scan_limit": 100,           # Top N symbols from ledger scanned first (by score)

@@ -2733,6 +2733,124 @@ class TestWeeklyGateReversalBypass:
 
 
 # ============================================================
+# ============================================================
+# DiscriminationTemplateBuilder Tests (Chat #12)
+# ============================================================
+
+class TestDiscriminationTemplateBuilder:
+
+    def test_disc_builder_loads_results(self):
+        """Builder instantiates with correct config keys."""
+        from setup_templates import DiscriminationTemplateBuilder
+        builder = DiscriminationTemplateBuilder()
+        assert builder.config is not None
+        assert 'min_cohens_d' in builder.config
+
+    def test_disc_builder_filter_thresholds(self):
+        """Builder filters by Cohen's d, base rate, and sample size."""
+        from setup_templates import DiscriminationTemplateBuilder
+        builder = DiscriminationTemplateBuilder()
+
+        mock_results = {
+            "horizon_10d": {
+                "BEARISH:OPEN_FIELD:HEALTHY:COMPRESSED": {
+                    "status": "VALID",
+                    "n_total": 572,
+                    "base_rate": 0.098,
+                    "discriminators": [
+                        {"name": "atr_pct", "cohen_d": 1.33, "tier": "STRONG",
+                         "stability": {"tag": "UNKNOWN"}}
+                    ],
+                    "funnel_top_discriminator": {
+                        "threshold": 3.8087, "direction": "above",
+                        "precision": 0.36, "lift_vs_naive": 3.68,
+                    }
+                },
+                "BULLISH:OPEN_FIELD:HEALTHY:NORMAL": {
+                    "status": "VALID",
+                    "n_total": 1034,
+                    "base_rate": 0.177,
+                    "discriminators": [
+                        {"name": "atr_pct", "cohen_d": 0.40, "tier": "WEAK",
+                         "stability": None}
+                    ],
+                    "funnel_top_discriminator": {
+                        "threshold": 2.28, "direction": "above",
+                        "precision": 0.22, "lift_vs_naive": 1.27,
+                    }
+                },
+            }
+        }
+
+        opps = builder._extract_opportunities(mock_results)
+        assert len(opps) == 1
+        assert opps[0]['state'] == 'BEARISH:OPEN_FIELD:HEALTHY:COMPRESSED'
+
+    def test_disc_builder_dedup_prefers_stable(self):
+        """Dedup picks STABLE over UNKNOWN for same state."""
+        from setup_templates import DiscriminationTemplateBuilder
+        builder = DiscriminationTemplateBuilder()
+
+        opps = [
+            {'state': 'BEARISH:OPEN_FIELD:HEALTHY:NORMAL', 'horizon': '5d',
+             'cohens_d': 1.09, 'stability': 'UNKNOWN', 'feature': 'atr_pct',
+             'threshold': 4.95, 'direction': 'above', 'n_total': 379,
+             'base_rate': 0.158, 'precision': 0.35, 'lift': 2.19},
+            {'state': 'BEARISH:OPEN_FIELD:HEALTHY:NORMAL', 'horizon': '10d',
+             'cohens_d': 1.07, 'stability': 'STABLE', 'feature': 'atr_pct',
+             'threshold': 4.95, 'direction': 'above', 'n_total': 379,
+             'base_rate': 0.267, 'precision': 0.50, 'lift': 1.86},
+        ]
+
+        deduped = builder._deduplicate_by_state(opps)
+        assert len(deduped) == 1
+        assert deduped[0]['stability'] == 'STABLE'
+        assert deduped[0]['horizon'] == '10d'
+
+    def test_disc_builder_creates_valid_template(self):
+        """Builder creates a valid template dict from an opportunity."""
+        from setup_templates import DiscriminationTemplateBuilder
+        builder = DiscriminationTemplateBuilder()
+
+        opp = {
+            'state': 'SIDEWAYS:OPEN_FIELD:HEALTHY:COMPRESSED',
+            'horizon': '10d', 'cohens_d': 1.35, 'stability': 'STABLE',
+            'feature': 'atr_pct', 'threshold': 3.6735, 'direction': 'above',
+            'n_total': 2521, 'base_rate': 0.102, 'precision': 0.31, 'lift': 3.05,
+        }
+
+        data = builder._create_template_data(opp)
+        assert data is not None
+        assert data['id'] == 'DISC_SIDEWAYS_COMPRESSED_10D'
+        assert data['category'] == 'breakout'
+        assert data['required_state']['trend'] == ['SIDEWAYS']
+        assert data['required_state']['volatility'] == ['COMPRESSED']
+        # Threshold conversion: 3.6735 / 100 = 0.036735
+        assert abs(data['conditions'][0]['params'][0] - 0.036735) < 1e-5
+        # ATR calibration for COMPRESSED: stop=1.5, tp=2.5*1.0=2.5
+        assert data['stop_loss']['atr_multiplier'] == 1.5
+        assert data['take_profit']['atr_multiplier'] == 2.5
+
+    def test_disc_builder_state_parsing(self):
+        """Builder correctly parses state string into required_state dict."""
+        from setup_templates import DiscriminationTemplateBuilder
+        builder = DiscriminationTemplateBuilder()
+
+        opp = {
+            'state': 'BULLISH:OPEN_FIELD:HEALTHY:COMPRESSED',
+            'horizon': '10d', 'cohens_d': 0.96, 'stability': 'UNKNOWN',
+            'feature': 'atr_pct', 'threshold': 2.3578, 'direction': 'above',
+            'n_total': 1513, 'base_rate': 0.095, 'precision': 0.21, 'lift': 2.16,
+        }
+
+        data = builder._create_template_data(opp)
+        assert data['required_state']['trend'] == ['BULLISH']
+        assert data['required_state']['structure'] == ['OPEN_FIELD']
+        assert data['required_state']['volume'] == ['HEALTHY', 'SURGING']
+        assert data['required_state']['volatility'] == ['COMPRESSED']
+        assert data['category'] == 'momentum'
+
+
 # RUNNER (also compatible with pytest)
 # ============================================================
 if __name__ == '__main__':
@@ -2740,7 +2858,8 @@ if __name__ == '__main__':
     failed = 0
     errors = []
 
-    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough, TestVolumeTimeframeThreshold, TestDuplicateTimeframeAware, TestNewRecipes, TestIndicatorScaling, TestSignalStackingCooldown, TestQGTestPeriodSafetyNet, TestTrustScoreCalculation, TestRollingTrust, TestReEnablePerState, TestTrustGate, TestBearishVolatilityExpansion, TestWeeklyGateReversalBypass]
+    test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough, TestVolumeTimeframeThreshold, TestDuplicateTimeframeAware, TestNewRecipes, TestIndicatorScaling, TestSignalStackingCooldown, TestQGTestPeriodSafetyNet, TestTrustScoreCalculation, TestRollingTrust, TestReEnablePerState, TestTrustGate, TestBearishVolatilityExpansion, TestWeeklyGateReversalBypass,
+                  TestDiscriminationTemplateBuilder]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

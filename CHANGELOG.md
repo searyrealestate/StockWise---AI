@@ -1,5 +1,37 @@
 # Changelog
 
+## [Chat #12] - 2026-04-11
+
+### Added
+- `DiscriminationTemplateBuilder` class in `setup_templates.py`
+  - Auto-generates templates from discrimination test results JSON
+  - Filters: Cohen's d ≥ 0.8, base_rate ≥ 5%, n ≥ 50
+  - Dedup: same state + multiple horizons → picks best (STABLE preferred over UNKNOWN, then highest d)
+  - `_is_covered()`: skips states already covered by existing templates (e.g., BEARISH_VOLATILITY_EXPANSION)
+  - ATR calibration by volatility state: COMPRESSED (1.5/2.5), NORMAL (1.8/3.0), VOLATILE (2.0/3.5)
+  - `FEATURE_TO_BLOCK` mapping: atr_pct → atr_percent_above (unit_divisor=100, extensible)
+- `DISCRIMINATION_BUILDER_CONFIG` in `system_config.py`
+- 5 unit tests for `DiscriminationTemplateBuilder` (213 total, 0 regressions)
+  - `test_disc_builder_loads_results` — instantiation and config
+  - `test_disc_builder_filter_thresholds` — Cohen's d < 0.8 filtered out
+  - `test_disc_builder_dedup_prefers_stable` — STABLE > UNKNOWN for same state
+  - `test_disc_builder_creates_valid_template` — full template dict validation
+  - `test_disc_builder_state_parsing` — state string → required_state mapping
+
+### Auto-Generated Templates (from discrimination_test_v3.json)
+| Template | State | d | Stability | Trades | WR% | PF |
+|---|---|---|---|---|---|---|
+| DISC_BULLISH_COMPRESSED_10D | BULLISH:OPEN_FIELD:HEALTHY:COMPRESSED | 0.96 | UNKNOWN | 71 | 42.3% | 1.50 |
+| DISC_SIDEWAYS_NORMAL_5D | SIDEWAYS:OPEN_FIELD:HEALTHY:NORMAL | 0.89 | STABLE | 37 | 48.6% | 1.56 |
+| DISC_SIDEWAYS_COMPRESSED_10D | SIDEWAYS:OPEN_FIELD:HEALTHY:COMPRESSED | 1.35 | STABLE | 27 | 44.4% | 2.44 |
+| DISC_BEARISH_COMPRESSED_10D | BEARISH:OPEN_FIELD:HEALTHY:COMPRESSED | 1.33 | UNKNOWN | 10 | 60.0% | 3.58 |
+| DISC_BEARISH_VOLATILE_5D | BEARISH:OPEN_FIELD:HEALTHY:VOLATILE | 0.90 | UNKNOWN | 3 | 100% | inf |
+| BEARISH_VOLATILITY_EXPANSION (skipped) | BEARISH:OPEN_FIELD:HEALTHY:NORMAL | 1.07 | STABLE | — | — | — |
+
+### Backtest Impact (with all DISC templates)
+- Previous (111 trades): PF=1.57, WR=45.0%, Return=5.27%
+- Current (222 trades): PF=1.80, WR=47.3%, Return=15.25%, MaxDD=2.66%
+
 ## [Chat #11] - 2026-04-11
 
 ### Fixed

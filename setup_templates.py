@@ -1604,3 +1604,277 @@ class TemplateGenerator:
             "total_generated": len(generated),
             "templates": generated,
         }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DISCRIMINATION TEMPLATE BUILDER
+# ═══════════════════════════════════════════════════════════════════════════
+
+class DiscriminationTemplateBuilder:
+    """
+    Auto-generates templates from Discrimination Test results.
+
+    Flow:
+    1. Read discrimination results JSON (from discrimination_test_v3.py output)
+    2. Filter opportunities: Cohen's d >= threshold, base_rate >= min, n >= min
+    3. For same state with multiple horizons: pick best (highest d, prefer STABLE)
+    4. Skip states already covered by existing templates
+    5. Generate template JSON with calibrated ATR stops
+    6. Save to templates/ directory
+
+    Config: system_config.DISCRIMINATION_BUILDER_CONFIG
+    """
+
+    # Feature name → block registry mapping
+    FEATURE_TO_BLOCK = {
+        "atr_pct":      {"block": "atr_percent_above",  "unit_divisor": 100.0},
+        "rvol":         {"block": "rvol_above",          "unit_divisor": 1.0},
+        "rsi_14":       {"block": "rsi_above",           "unit_divisor": 1.0},
+        "bb_width_pct": {"block": "bb_width_below",      "unit_divisor": 100.0},
+        "adx_14":       {"block": "adx_above",           "unit_divisor": 1.0},
+        "cmf_20":       {"block": "cmf_positive",        "unit_divisor": 1.0},
+        "er_slow":      {"block": "er_slow_above",       "unit_divisor": 1.0},
+    }
+
+    def __init__(self) -> None:
+        self.config = getattr(cfg, 'DISCRIMINATION_BUILDER_CONFIG', {})
+        self.manager = TemplateManager()  # load_all() is called in __init__
+
+    def build_from_results(self, results_path: str = None) -> list:
+        """
+        Main entry point. Reads discrimination results, generates templates.
+
+        Returns:
+            list of dicts: [{id, state, horizon, cohens_d, status: 'created'|
+                             'skipped_duplicate'|'skipped_filter'|'skipped_unsupported'}, ...]
+        """
+        path = results_path or self.config.get('results_path', 'data/discrimination_test_v3.json')
+
+        data = safe_json_read(path, default={})
+        if not data or 'results' not in data:
+            logger.error(f"[DISC-BUILDER] No results found in {path}")
+            return []
+
+        opportunities = self._extract_opportunities(data['results'])
+        logger.info(f"[DISC-BUILDER] Found {len(opportunities)} opportunities passing filters")
+
+        deduplicated = self._deduplicate_by_state(opportunities)
+        logger.info(f"[DISC-BUILDER] After dedup: {len(deduplicated)} unique state opportunities")
+
+        report = []
+        created_count = 0
+        for opp in deduplicated:
+            if self._is_covered(opp):
+                logger.info(f"[DISC-BUILDER] SKIP {opp['state']} — already covered by existing template")
+                report.append({**opp, 'status': 'skipped_duplicate'})
+                continue
+
+            template_data = self._create_template_data(opp)
+            if template_data is None:
+                logger.warning(f"[DISC-BUILDER] SKIP {opp['state']} — unsupported feature: {opp['feature']}")
+                report.append({**opp, 'status': 'skipped_unsupported'})
+                continue
+
+            template = SetupTemplate(template_data)
+            self.manager.save_template(template)
+            created_count += 1
+            logger.info(
+                f"[DISC-BUILDER] CREATED {template.id} | state={opp['state']} | "
+                f"d={opp['cohens_d']:.2f} | threshold={opp['threshold']:.4f} | "
+                f"stability={opp['stability']}"
+            )
+            report.append({**opp, 'status': 'created', 'template_id': template.id})
+
+        logger.info(
+            f"[DISC-BUILDER] Done: {created_count} templates created, "
+            f"{len(deduplicated) - created_count} skipped"
+        )
+        return report
+
+    def _extract_opportunities(self, results: dict) -> list:
+        """Extract all opportunities passing config filters."""
+        min_d = self.config.get('min_cohens_d', 0.8)
+        min_br = self.config.get('min_base_rate', 0.05)
+        min_n = self.config.get('min_sample_size', 50)
+
+        opportunities = []
+        for horizon_key, states in results.items():
+            horizon = '5d' if '5d' in horizon_key else '10d'
+
+            for state_str, info in states.items():
+                if info.get('status') != 'VALID':
+                    continue
+
+                base_rate = info.get('base_rate', 0) or 0
+                if base_rate < min_br:
+                    continue
+
+                n_total = info.get('n_total', 0) or 0
+                if n_total < min_n:
+                    continue
+
+                discriminators = info.get('discriminators') or []
+                top_disc = None
+                for disc in discriminators:
+                    if abs(disc.get('cohen_d', 0)) >= min_d:
+                        if top_disc is None or abs(disc['cohen_d']) > abs(top_disc['cohen_d']):
+                            top_disc = disc
+
+                if top_disc is None:
+                    continue
+
+                funnel = info.get('funnel_top_discriminator') or {}
+
+                stability_info = top_disc.get('stability') or {}
+                stability = stability_info.get('tag', 'N/A') if stability_info else 'N/A'
+
+                opportunities.append({
+                    'state':     state_str,
+                    'horizon':   horizon,
+                    'n_total':   n_total,
+                    'base_rate': base_rate,
+                    'feature':   top_disc['name'],
+                    'cohens_d':  abs(top_disc['cohen_d']),
+                    'threshold': funnel.get('threshold', 0),
+                    'direction': funnel.get('direction', 'above'),
+                    'precision': funnel.get('precision', 0),
+                    'lift':      funnel.get('lift_vs_naive', 0),
+                    'stability': stability,
+                })
+
+        return opportunities
+
+    def _deduplicate_by_state(self, opportunities: list) -> list:
+        """For same state with multiple horizons, pick best one.
+
+        Priority: STABLE > UNKNOWN; then highest Cohen's d.
+        """
+        prefer_stable = self.config.get('prefer_stable', True)
+
+        by_state: dict = {}
+        for opp in opportunities:
+            state = opp['state']
+            if state not in by_state:
+                by_state[state] = opp
+            else:
+                existing = by_state[state]
+                if prefer_stable:
+                    if opp['stability'] == 'STABLE' and existing['stability'] != 'STABLE':
+                        by_state[state] = opp
+                        continue
+                    if existing['stability'] == 'STABLE' and opp['stability'] != 'STABLE':
+                        continue
+                if opp['cohens_d'] > existing['cohens_d']:
+                    by_state[state] = opp
+
+        return list(by_state.values())
+
+    def _is_covered(self, opp: dict) -> bool:
+        """Check if any existing enabled template already covers this state + atr block."""
+        parts = opp['state'].split(':')
+        if len(parts) != 4:
+            return False
+
+        trend, structure, volume, volatility = parts
+
+        for template in self.manager.get_enabled():
+            rs = template.required_state
+            if (trend in rs.get('trend', []) and
+                    structure in rs.get('structure', []) and
+                    volatility in rs.get('volatility', []) and
+                    volume in rs.get('volume', [])):
+                for cond in template.conditions:
+                    if cond.get('block') == 'atr_percent_above':
+                        return True
+        return False
+
+    def _create_template_data(self, opp: dict) -> dict | None:
+        """Generate a complete template dict from an opportunity.
+
+        Returns None if the feature has no block mapping.
+        """
+        feature_info = self.FEATURE_TO_BLOCK.get(opp['feature'])
+        if feature_info is None:
+            return None
+
+        parts = opp['state'].split(':')
+        if len(parts) != 4:
+            return None
+        trend, structure, volume, volatility = parts
+
+        category = 'mean_reversion' if trend == 'BEARISH' else ('momentum' if trend == 'BULLISH' else 'breakout')
+
+        prefix = self.config.get('prefix', 'DISC')
+        horizon = opp['horizon'].upper()
+        template_id = f"{prefix}_{trend}_{volatility}_{horizon}"
+
+        threshold_converted = round(opp['threshold'] / feature_info.get('unit_divisor', 1.0), 6)
+        block_name = feature_info['block']
+
+        conditions = [{"block": block_name, "params": [threshold_converted]}]
+        if self.config.get('add_bullish_candle', True):
+            conditions.append({"block": "bullish_candle", "params": []})
+
+        atr_defaults = {"stop_mult": 1.8, "tp_mult": 3.0, "runner": False}
+        atr_cfg = self.config.get('atr_by_volatility', {}).get(volatility, atr_defaults)
+        tp_factor = self.config.get('tp_factor_by_horizon', {}).get(opp['horizon'], 1.0)
+
+        stop_mult = atr_cfg['stop_mult']
+        tp_mult = round(atr_cfg['tp_mult'] * tp_factor, 2)
+        runner = atr_cfg['runner']
+        confirmation = self.config.get('default_confirmation_candles', 1)
+
+        from datetime import datetime
+        now = datetime.now().isoformat()
+
+        return {
+            "id": template_id,
+            "name": f"Discrimination-driven {trend.lower()} {volatility.lower()} {opp['horizon']} bounce",
+            "description": (
+                f"Auto-generated from discrimination v3: {opp['feature']} "
+                f"d={opp['cohens_d']:.2f}, n={opp['n_total']}, "
+                f"stability={opp['stability']}"
+            ),
+            "version": 1,
+            "source": "discrimination_v3_auto",
+            "timeframe": "1d",
+            "category": category,
+            "enabled": True,
+            "required_state": {
+                "trend":      [trend],
+                "structure":  [structure],
+                "volatility": [volatility],
+                "volume":     [volume, "SURGING"],
+            },
+            "conditions": conditions,
+            "entry": {
+                "type": "close",
+                "confirmation_candles": confirmation,
+            },
+            "stop_loss": {
+                "method": "atr",
+                "atr_multiplier": stop_mult,
+                "fallback_pct": 0.02,
+            },
+            "take_profit": {
+                "method": "atr",
+                "atr_multiplier": tp_mult,
+                "use_runner_mode": runner,
+            },
+            "statistics": {
+                "total_activations": 0, "wins": 0, "losses": 0,
+                "win_rate": 0.0, "avg_profit_pct": 0.0, "avg_loss_pct": 0.0,
+                "max_profit_pct": 0.0, "max_loss_pct": 0.0,
+                "avg_hold_duration_hours": 0.0,
+                "ticker_stats": {}, "volume_range_stats": {},
+                "trend_stats": {}, "volatility_stats": {},
+                "regime_stats": {}, "month_stats": {},
+                "day_of_week_stats": {},
+                "consecutive_wins": 0, "consecutive_losses": 0,
+                "max_consecutive_wins": 0, "max_consecutive_losses": 0,
+                "last_activated": None, "last_win_ticker": None,
+                "last_loss_ticker": None,
+                "created_at": now, "updated_at": now,
+                "block_stats": {},
+            },
+        }
