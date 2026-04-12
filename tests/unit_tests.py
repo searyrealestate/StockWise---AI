@@ -2917,6 +2917,78 @@ class TestTemplateHealthMonitor:
             f"protect_from_disable must be a list, got {type(protect_list)}"
 
 
+# ============================================================
+# TradeOutcomeAnalyzer Tests (Chat #13)
+# ============================================================
+
+class TestTradeOutcomeAnalyzer:
+
+    def test_outcome_analyzer_instantiates(self):
+        """
+        What: Analyzer creates with config keys populated.
+        Why: Guards against missing TRADE_OUTCOME_ANALYZER_CONFIG in system_config.
+        """
+        from setup_templates import TradeOutcomeAnalyzer
+        analyzer = TradeOutcomeAnalyzer()
+        assert analyzer.config is not None, "config must not be None"
+        assert 'min_cohens_d' in analyzer.config, "min_cohens_d key missing"
+        assert 'activity_guard' in analyzer.config, "activity_guard key missing"
+
+    def test_outcome_analyzer_cohens_d(self):
+        """
+        What: Cohen's d is large for well-separated groups, zero for identical groups.
+        Why: Core statistical engine — if d is wrong, all recommendations are wrong.
+        """
+        from setup_templates import TradeOutcomeAnalyzer
+        analyzer = TradeOutcomeAnalyzer()
+
+        # Two clearly separated groups: mean=10 vs mean=0, std=1
+        group_a = [9.5, 10.0, 10.5, 11.0, 9.0]
+        group_b = [0.5,  0.0, -0.5,  1.0, -1.0]
+        d, p = analyzer._cohens_d(group_a, group_b)
+        assert abs(d) > 5.0, f"Expected d > 5.0 for well-separated groups, got {d}"
+        assert p < 0.01, f"Expected p < 0.01, got {p}"
+
+        # Same group → d ≈ 0
+        d2, _ = analyzer._cohens_d(group_a, group_a)
+        assert abs(d2) < 0.1, f"Expected d ≈ 0 for identical groups, got {d2}"
+
+    def test_outcome_analyzer_activity_guard_pass(self):
+        """
+        What: Guard passes when trades remaining exceed minimums.
+        Why: Activity Guard is the safety check preventing over-filtering.
+        """
+        from setup_templates import TradeOutcomeAnalyzer
+        analyzer = TradeOutcomeAnalyzer()
+        result = analyzer._activity_guard(36, 22, "TEST_TEMPLATE")
+        assert result['passed'], f"Expected pass, reasons: {result['reasons']}"
+        assert abs(result['reduction_pct'] - 38.9) < 1.0, \
+            f"Expected ~38.9% reduction, got {result['reduction_pct']}"
+
+    def test_outcome_analyzer_activity_guard_fail_min_trades(self):
+        """
+        What: Guard fails when too few trades remain after filtering.
+        Why: A filter leaving 5 trades on a 20-trade template destroys statistical basis.
+        """
+        from setup_templates import TradeOutcomeAnalyzer
+        analyzer = TradeOutcomeAnalyzer()
+        result = analyzer._activity_guard(20, 5, "TEST_TEMPLATE")
+        assert not result['passed'], "Expected fail when only 5 trades remain"
+
+    def test_outcome_analyzer_activity_guard_fail_reduction(self):
+        """
+        What: Guard fails when reduction exceeds max_reduction_pct (60%).
+        Why: A 70% reduction means the filter is blocking legitimate trades.
+        """
+        from setup_templates import TradeOutcomeAnalyzer
+        analyzer = TradeOutcomeAnalyzer()
+        # 100 -> 30 = 70% reduction, max is 60%
+        result = analyzer._activity_guard(100, 30, "TEST_TEMPLATE")
+        assert not result['passed'], "Expected fail for 70% reduction"
+        assert result['reduction_pct'] > 60, \
+            f"Expected reduction > 60%, got {result['reduction_pct']}"
+
+
 # RUNNER (also compatible with pytest)
 # ============================================================
 if __name__ == '__main__':
@@ -2925,7 +2997,8 @@ if __name__ == '__main__':
     errors = []
 
     test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough, TestVolumeTimeframeThreshold, TestDuplicateTimeframeAware, TestNewRecipes, TestIndicatorScaling, TestSignalStackingCooldown, TestQGTestPeriodSafetyNet, TestTrustScoreCalculation, TestRollingTrust, TestReEnablePerState, TestTrustGate, TestBearishVolatilityExpansion, TestWeeklyGateReversalBypass,
-                  TestDiscriminationTemplateBuilder, TestTemplateHealthMonitor]
+                  TestDiscriminationTemplateBuilder, TestTemplateHealthMonitor,
+                  TestTradeOutcomeAnalyzer]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

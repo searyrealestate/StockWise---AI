@@ -1,0 +1,501 @@
+{
+    "timestamp": "2026-04-12T23:57:16.330124",
+    "total_templates": 12,
+    "actionable": 0,
+    "analyses": [
+        {
+            "template_id": "BEARISH_VOLATILITY_EXPANSION",
+            "total_trades": 12,
+            "winners": 9,
+            "losers": 3,
+            "current_wr": 75.0,
+            "discriminators": [
+                {
+                    "indicator": "macd_hist",
+                    "cohens_d": 2.1835,
+                    "p_value": 0.029,
+                    "winners_avg": 0.0788,
+                    "losers_avg": -3.5701,
+                    "threshold": {
+                        "threshold": -1.776365,
+                        "direction": "above",
+                        "precision": 1.0,
+                        "recall": 0.8889,
+                        "trades_passing": 8,
+                        "trades_blocked": 4
+                    },
+                    "suggested_block": {
+                        "block": "macd_histogram_positive",
+                        "params": [
+                            -1.776365
+                        ]
+                    },
+                    "activity_guard": {
+                        "passed": false,
+                        "trades_before": 12,
+                        "trades_after": 8,
+                        "reduction_pct": 33.3,
+                        "reasons": [
+                            "Only 8 trades remain (min 10)"
+                        ]
+                    },
+                    "recommendation": "SKIP_TOO_AGGRESSIVE"
+                },
+                {
+                    "indicator": "mom_sqz",
+                    "cohens_d": 2.1835,
+                    "p_value": 0.029,
+                    "winners_avg": 0.0788,
+                    "losers_avg": -3.5701,
+                    "threshold": {
+                        "threshold": -1.776365,
+                        "direction": "above",
+                        "precision": 1.0,
+                        "recall": 0.8889,
+                        "trades_passing": 8,
+                        "trades_blocked": 4
+                    },
+                    "suggested_block": null,
+                    "activity_guard": null,
+                    "recommendation": "SKIP_NO_BLOCK"
+                },
+                {
+                    "indicator": "stoch_d",
+                    "cohens_d": 1.3863,
+                    "p_value": 0.165644,
+                    "winners_avg": 34.6179,
+                    "losers_avg": 9.4927,
+                    "threshold": {
+                        "threshold": 16.408891,
+                        "direction": "above",
+                        "precision": 1.0,
+                        "recall": 0.7778,
+                        "trades_passing": 7,
+                        "trades_blocked": 5
+                    },
+                    "suggested_block": {
+                        "block": "stoch_oversold",
+                        "params": [
+                            16.408891
+                        ]
+                    },
+                    "activity_guard": {
+                        "passed": false,
+                        "trades_before": 12,
+                        "trades_after": 7,
+                        "reduction_pct": 41.7,
+                        "reasons": [
+                            "Only 7 trades remain (min 10)"
+                        ]
+                    },
+                    "recommendation": "SKIP_TOO_AGGRESSIVE"
+                },
+                {
+                    "indicator": "roc",
+                    "cohens_d": 1.2944,
+                    "p_value": 0.195538,
+                    "winners_avg": -2.9247,
+                    "losers_avg": -16.8798,
+                    "threshold": {
+                        "threshold": -10.811176,
+                        "direction": "above",
+                        "precision": 1.0,
+                        "recall": 0.7778,
+                        "trades_passing": 7,
+                        "trades_blocked": 5
+                    },
+                    "suggested_block": null,
+                    "activity_guard": null,
+                    "recommendation": "SKIP_NO_BLOCK"
+                },
+                {
+                    "indicator": "stoch_k",
+                    "cohens_d": 1.2836,
+                    "p_value": 0.199299,
+                    "winners_avg": 33.257,
+                    "losers_avg": 8.3676,
+                    "threshold": {
+                        "threshold": 10.702567,
+                        "direction": "above",
+                        "precision": 1.0,
+                        "recall": 0.7778,
+                        "trades_passing": 7,
+                        "trades_blocked": 5
+                    },
+                    "suggested_block": null,
+                    "activity_guard": null,
+                    "recommendation": "SKIP_NO_BLOCK"
+                }
+            ],
+            "verdict": "NO_SIGNAL"
+        },
+        {
+            "template_id": "DISC_BEARISH_COMPRESSED_10D",
+            "total_trades": 11,
+            "winners": 7,
+            "losers": 4,
+            "current_wr": 63.6,
+            "discriminators": [
+                {
+                    "indicator": "squeeze_on",
+                    "cohens_d": -1.4368,
+                    "p_value": 0.150786,
+                    "winners_avg": 0.1429,
+                    "losers_avg": 0.75,
+                    "threshold": null,
+                    "suggested_block": null,
+                    "activity_guard": null,
+                    "recommendation": "SKIP_NO_BLOCK"
+                },
+                {
+                    "indicator": "daily_return",
+                    "cohens_d": 0.9935,
+                    "p_value": 0.320466,
+                    "winners_avg": 0.0087,
+                    "losers_avg": -0.0191,
+                    "threshold": {
+                        "threshold": 0.003187,
+                        "direction": "above",
+                        "precision": 1.0,
+                        "recall": 0.5714,
+                        "trades_passing": 4,
+                        "trades_blocked": 7
+                    },
+                    "suggested_block": null,
+                    "activity_guard": null,
+                    "recommendation": "SKIP_NO_BLOCK"
+                },
+                {
+                    "indicator": "atr",
+                    "cohens_d": 0.9162,
+                    "p_value": 0.359554,
+                    "winners_avg": 10.3782,
+                    "losers_avg": 7.766,
+                    "threshold": {
+                        "threshold": 9.87507,
+                        "direction": "above",
+                        "precision": 1.0,
+                        "recall": 0.4286,
+                        "trades_passing": 3,
+                        "trades_blocked": 8
+                    },
+                    "suggested_block": null,
+                    "activity_guard": null,
+                    "recommendation": "SKIP_NO_BLOCK"
+                },
+                {
+                    "indicator": "ema_spread",
+                    "cohens_d": 0.8797,
+                    "p_value": 0.379047,
+                    "winners_avg": -0.0242,
+                    "losers_avg": -0.0371,
+                    "threshold": {
+                        "threshold": -0.0283,
+                        "direction": "above",
+                        "precision": 1.0,
+                        "recall": 0.5714,
+                        "trades_passing": 4,
+                        "trades_blocked": 7
+                    },
+                    "suggested_block": null,
+                    "activity_guard": null,
+                    "recommendation": "SKIP_NO_BLOCK"
+                },
+                {
+                    "indicator": "bb_width_pct",
+                    "cohens_d": -0.8177,
+                    "p_value": 0.413541,
+                    "winners_avg": 0.0675,
+                    "losers_avg": 0.0846,
+                    "threshold": {
+                        "threshold": 0.065677,
+                        "direction": "below",
+                        "precision": 1.0,
+                        "recall": 0.4286,
+                        "trades_passing": 3,
+                        "trades_blocked": 8
+                    },
+                    "suggested_block": {
+                        "block": "bb_width_below",
+                        "params": [
+                            0.000657
+                        ]
+                    },
+                    "activity_guard": {
+                        "passed": false,
+                        "trades_before": 11,
+                        "trades_after": 3,
+                        "reduction_pct": 72.7,
+                        "reasons": [
+                            "Only 3 trades remain (min 10)",
+                            "Reduction 73% exceeds max 60%"
+                        ]
+                    },
+                    "recommendation": "SKIP_TOO_AGGRESSIVE"
+                }
+            ],
+            "verdict": "NO_SIGNAL"
+        },
+        {
+            "template_id": "DISC_BEARISH_VOLATILE_5D",
+            "total_trades": 3,
+            "winners": 3,
+            "losers": 0,
+            "current_wr": 100.0,
+            "discriminators": [],
+            "verdict": "INSUFFICIENT_DATA"
+        },
+        {
+            "template_id": "DISC_BULLISH_COMPRESSED_10D",
+            "total_trades": 46,
+            "winners": 22,
+            "losers": 24,
+            "current_wr": 47.8,
+            "discriminators": [],
+            "verdict": "NO_SIGNAL"
+        },
+        {
+            "template_id": "DISC_SIDEWAYS_COMPRESSED_10D",
+            "total_trades": 24,
+            "winners": 9,
+            "losers": 15,
+            "current_wr": 37.5,
+            "discriminators": [
+                {
+                    "indicator": "volatility_20d",
+                    "cohens_d": 0.8025,
+                    "p_value": 0.422289,
+                    "winners_avg": 0.034,
+                    "losers_avg": 0.0283,
+                    "threshold": {
+                        "threshold": 0.040701,
+                        "direction": "above",
+                        "precision": 1.0,
+                        "recall": 0.3333,
+                        "trades_passing": 3,
+                        "trades_blocked": 21
+                    },
+                    "suggested_block": null,
+                    "activity_guard": null,
+                    "recommendation": "SKIP_NO_BLOCK"
+                }
+            ],
+            "verdict": "NO_SIGNAL"
+        },
+        {
+            "template_id": "DISC_SIDEWAYS_NORMAL_5D",
+            "total_trades": 41,
+            "winners": 21,
+            "losers": 20,
+            "current_wr": 51.2,
+            "discriminators": [],
+            "verdict": "NO_SIGNAL"
+        },
+        {
+            "template_id": "GEN_BULLISH_TREND_RIDE",
+            "total_trades": 24,
+            "winners": 12,
+            "losers": 12,
+            "current_wr": 50.0,
+            "discriminators": [],
+            "verdict": "NO_SIGNAL"
+        },
+        {
+            "template_id": "GEN_SIDEWAYS_BREAKOUT_CLEAN",
+            "total_trades": 4,
+            "winners": 2,
+            "losers": 2,
+            "current_wr": 50.0,
+            "discriminators": [],
+            "verdict": "INSUFFICIENT_DATA"
+        },
+        {
+            "template_id": "MOMENTUM_BREAKOUT",
+            "total_trades": 29,
+            "winners": 11,
+            "losers": 18,
+            "current_wr": 37.9,
+            "discriminators": [],
+            "verdict": "NO_SIGNAL"
+        },
+        {
+            "template_id": "OVERSOLD_BOUNCE",
+            "total_trades": 1,
+            "winners": 1,
+            "losers": 0,
+            "current_wr": 100.0,
+            "discriminators": [],
+            "verdict": "INSUFFICIENT_DATA"
+        },
+        {
+            "template_id": "SQUEEZE_BREAKOUT",
+            "total_trades": 20,
+            "winners": 6,
+            "losers": 14,
+            "current_wr": 30.0,
+            "discriminators": [
+                {
+                    "indicator": "rvol",
+                    "cohens_d": 0.8327,
+                    "p_value": 0.405024,
+                    "winners_avg": 1.9409,
+                    "losers_avg": 1.52,
+                    "threshold": {
+                        "threshold": 1.239614,
+                        "direction": "below",
+                        "precision": 1.0,
+                        "recall": 0.3333,
+                        "trades_passing": 2,
+                        "trades_blocked": 18
+                    },
+                    "suggested_block": {
+                        "block": "rvol_above",
+                        "params": [
+                            1.239614
+                        ]
+                    },
+                    "activity_guard": {
+                        "passed": false,
+                        "trades_before": 20,
+                        "trades_after": 2,
+                        "reduction_pct": 90.0,
+                        "reasons": [
+                            "Only 2 trades remain (min 10)",
+                            "Reduction 90% exceeds max 60%"
+                        ]
+                    },
+                    "recommendation": "SKIP_TOO_AGGRESSIVE"
+                }
+            ],
+            "verdict": "NO_SIGNAL"
+        },
+        {
+            "template_id": "TREND_PULLBACK_EMA",
+            "total_trades": 36,
+            "winners": 10,
+            "losers": 26,
+            "current_wr": 27.8,
+            "discriminators": [
+                {
+                    "indicator": "ema_spread",
+                    "cohens_d": 1.3692,
+                    "p_value": 0.170933,
+                    "winners_avg": 0.0358,
+                    "losers_avg": 0.0147,
+                    "threshold": {
+                        "threshold": 0.043432,
+                        "direction": "above",
+                        "precision": 0.75,
+                        "recall": 0.3,
+                        "trades_passing": 4,
+                        "trades_blocked": 32
+                    },
+                    "suggested_block": null,
+                    "activity_guard": null,
+                    "recommendation": "SKIP_NO_BLOCK"
+                },
+                {
+                    "indicator": "bb_width",
+                    "cohens_d": 1.1597,
+                    "p_value": 0.246182,
+                    "winners_avg": 23.0315,
+                    "losers_avg": 11.272,
+                    "threshold": {
+                        "threshold": 33.028015,
+                        "direction": "above",
+                        "precision": 1.0,
+                        "recall": 0.3,
+                        "trades_passing": 3,
+                        "trades_blocked": 33
+                    },
+                    "suggested_block": null,
+                    "activity_guard": null,
+                    "recommendation": "SKIP_NO_BLOCK"
+                },
+                {
+                    "indicator": "er_slow",
+                    "cohens_d": 0.9003,
+                    "p_value": 0.367983,
+                    "winners_avg": 0.3488,
+                    "losers_avg": 0.2829,
+                    "threshold": {
+                        "threshold": 0.358918,
+                        "direction": "above",
+                        "precision": 0.8,
+                        "recall": 0.4,
+                        "trades_passing": 5,
+                        "trades_blocked": 31
+                    },
+                    "suggested_block": {
+                        "block": "er_slow_above",
+                        "params": [
+                            0.358918
+                        ]
+                    },
+                    "activity_guard": {
+                        "passed": false,
+                        "trades_before": 36,
+                        "trades_after": 5,
+                        "reduction_pct": 86.1,
+                        "reasons": [
+                            "Only 5 trades remain (min 10)",
+                            "Reduction 86% exceeds max 60%"
+                        ]
+                    },
+                    "recommendation": "SKIP_TOO_AGGRESSIVE"
+                },
+                {
+                    "indicator": "volatility_20d",
+                    "cohens_d": 0.8952,
+                    "p_value": 0.370694,
+                    "winners_avg": 0.0283,
+                    "losers_avg": 0.0182,
+                    "threshold": {
+                        "threshold": 0.033448,
+                        "direction": "above",
+                        "precision": 0.6,
+                        "recall": 0.3,
+                        "trades_passing": 5,
+                        "trades_blocked": 31
+                    },
+                    "suggested_block": null,
+                    "activity_guard": null,
+                    "recommendation": "SKIP_NO_BLOCK"
+                },
+                {
+                    "indicator": "adx",
+                    "cohens_d": 0.8326,
+                    "p_value": 0.405052,
+                    "winners_avg": 33.6997,
+                    "losers_avg": 25.1457,
+                    "threshold": {
+                        "threshold": 39.856985,
+                        "direction": "above",
+                        "precision": 0.6,
+                        "recall": 0.3,
+                        "trades_passing": 5,
+                        "trades_blocked": 31
+                    },
+                    "suggested_block": {
+                        "block": "adx_above",
+                        "params": [
+                            39.856985
+                        ]
+                    },
+                    "activity_guard": {
+                        "passed": false,
+                        "trades_before": 36,
+                        "trades_after": 5,
+                        "reduction_pct": 86.1,
+                        "reasons": [
+                            "Only 5 trades remain (min 10)",
+                            "Reduction 86% exceeds max 60%"
+                        ]
+                    },
+                    "recommendation": "SKIP_TOO_AGGRESSIVE"
+                }
+            ],
+            "verdict": "NO_SIGNAL"
+        }
+    ]
+}

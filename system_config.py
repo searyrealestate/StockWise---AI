@@ -1178,6 +1178,54 @@ TEMPLATE_HEALTH_CONFIG = {
     "report_path": "data/health_monitor_report.json",
 }
 
+# ═══════════════════════════════════════════════════════════════════════════
+# TRADE OUTCOME ANALYZER CONFIG
+# ═══════════════════════════════════════════════════════════════════════════
+TRADE_OUTCOME_ANALYZER_CONFIG = {
+    "enabled": True,
+
+    # Statistical thresholds
+    "min_cohens_d": 0.8,               # Minimum effect size to recommend
+    "min_trades_per_group": 3,         # Need 3+ wins AND 3+ losses
+    "max_features_to_report": 5,       # Top N discriminators per template
+
+    # Skip columns (absolute prices, not normalized)
+    "skip_columns": [
+        "open", "high", "low", "close", "volume", "date", "Date",
+        "dynamic_stop_loss", "trade_count", "peak", "trough",
+        "sma_20", "sma_50", "sma_100", "sma_150", "sma_200",
+        "ema_12", "ema_26", "vwap", "bb_lower", "bb_middle", "bb_upper",
+        "kc_lower", "kc_upper", "dc_lower", "dc_upper", "dc_middle",
+        "supertrend", "ichimoku_conv", "ichimoku_base",
+        "fib_236", "fib_382", "fib_618", "fib_ext_1272", "fib_ext_1618",
+        "psar", "bb_mid", "spread_avg_20", "spread", "spread_avg",
+        "obv", "vol_avg_20",
+    ],
+
+    # Activity Guard
+    "activity_guard": {
+        "min_trades_after_filter": 10,   # Filter must leave at least 10 trades
+        "max_reduction_pct": 60,         # Filter can't block more than 60% of trades
+    },
+
+    # Block mapping: indicator name -> block registry name + conversion
+    "indicator_to_block": {
+        "adx":            {"block": "adx_above",               "unit_divisor": 1.0},
+        "rsi_14":         {"block": "rsi_above",               "unit_divisor": 1.0},
+        "rvol":           {"block": "rvol_above",              "unit_divisor": 1.0},
+        "er_slow":        {"block": "er_slow_above",           "unit_divisor": 1.0},
+        "atr_pct":        {"block": "atr_percent_above",       "unit_divisor": 100.0},
+        "cmf":            {"block": "cmf_positive",            "unit_divisor": 1.0},
+        "bb_width_pct":   {"block": "bb_width_below",          "unit_divisor": 100.0},
+        "macd_hist":      {"block": "macd_histogram_positive", "unit_divisor": 1.0},
+        "squeeze_on":     {"block": "squeeze_active",          "unit_divisor": 1.0},
+        "stoch_d":        {"block": "stoch_oversold",          "unit_divisor": 1.0},
+    },
+
+    # Report output
+    "report_path": "data/trade_outcome_analysis.json",
+}
+
 SCAN_ROUTING_CONFIG = {
     "daily_scan_limit": 4000,             # Maximum symbols to scan per nightly run
     "priority_scan_limit": 100,           # Top N symbols from ledger scanned first (by score)

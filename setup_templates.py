@@ -19,6 +19,7 @@ They can be:
 
 import os
 import json
+import math
 from safe_json_io import safe_json_read, safe_json_write
 import logging
 from datetime import datetime
@@ -2095,3 +2096,329 @@ class TemplateHealthMonitor:
             f"{s['blocked']} blocked, {s['no_change']} unchanged"
         )
         return decisions
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TRADE OUTCOME ANALYZER
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TradeOutcomeAnalyzer:
+    """
+    Learns from winning vs losing trades per template.
+
+    Reads backtest results (with indicator snapshots at entry), computes
+    Cohen's d for every numeric indicator, identifies strong discriminators
+    (d >= min_cohens_d), finds optimal thresholds, and checks Activity Guard
+    before emitting recommendations.
+
+    Flow:
+        analyzer = TradeOutcomeAnalyzer()
+        reports  = analyzer.analyze()   # reads data/backtest_results.json
+
+    Output: list of per-template dicts with discriminators + recommendations.
+    Saves JSON report to config['report_path'].
+
+    This class is REPORT ONLY — it never modifies template JSON files.
+
+    Config: system_config.TRADE_OUTCOME_ANALYZER_CONFIG
+    """
+
+    def __init__(self):
+        self.config = getattr(cfg, 'TRADE_OUTCOME_ANALYZER_CONFIG', {})
+        # Build skip set: config list + CDL_* prefix + absolute price extras
+        skip_list = self.config.get('skip_columns', [])
+        self.skip_columns: set = set(skip_list)
+
+    # ------------------------------------------------------------------ #
+    # Public API                                                           #
+    # ------------------------------------------------------------------ #
+
+    def analyze(self, backtest_results=None, results_path=None) -> list:
+        """
+        Main entry point. Reads backtest results and returns recommendations.
+
+        Args:
+            backtest_results: dict from BacktestEngine.run() — OR —
+            results_path:     path to backtest_results.json (uses default if both None)
+
+        Returns:
+            list of per-template analysis dicts
+        """
+        if backtest_results is None:
+            path = results_path or 'data/backtest_results.json'
+            backtest_results = safe_json_read(path, default={})
+
+        trades = backtest_results.get('trades', [])
+        if not trades:
+            logger.warning("[OUTCOME-ANALYZER] No trades in backtest results")
+            return []
+
+        # Group by template
+        by_template: dict = {}
+        for t in trades:
+            tid = t.get('template_id', 'UNKNOWN')
+            if t.get('indicators_at_entry'):
+                by_template.setdefault(tid, []).append(t)
+
+        results: list = []
+        for tid in sorted(by_template.keys()):
+            report = self._analyze_template(tid, by_template[tid])
+            results.append(report)
+
+        # Save JSON report
+        full_report = {
+            'timestamp':  datetime.now().isoformat(),
+            'total_templates': len(results),
+            'actionable': sum(1 for r in results if r['verdict'] == 'ACTIONABLE'),
+            'analyses':   results,
+        }
+        report_path = self.config.get('report_path', 'data/trade_outcome_analysis.json')
+        safe_json_write(report_path, full_report)
+
+        actionable = sum(1 for r in results if r['verdict'] == 'ACTIONABLE')
+        logger.info(
+            f"[OUTCOME-ANALYZER] Complete: {len(results)} templates analyzed, "
+            f"{actionable} actionable"
+        )
+        return results
+
+    # ------------------------------------------------------------------ #
+    # Per-template analysis                                                #
+    # ------------------------------------------------------------------ #
+
+    def _analyze_template(self, template_id: str, trades: list) -> dict:
+        """Analyze wins vs losses for a single template."""
+        min_group = self.config.get('min_trades_per_group', 3)
+        max_features = self.config.get('max_features_to_report', 5)
+        min_d = self.config.get('min_cohens_d', 0.8)
+        indicator_map = self.config.get('indicator_to_block', {})
+
+        winners = [t for t in trades if t.get('pnl', 0) > 0]
+        losers  = [t for t in trades if t.get('pnl', 0) <= 0]
+        total   = len(trades)
+        current_wr = round(len(winners) / total * 100, 1) if total > 0 else 0.0
+
+        base = {
+            'template_id': template_id,
+            'total_trades': total,
+            'winners':      len(winners),
+            'losers':       len(losers),
+            'current_wr':   current_wr,
+            'discriminators': [],
+            'verdict':      'INSUFFICIENT_DATA',
+        }
+
+        if len(winners) < min_group or len(losers) < min_group:
+            logger.info(
+                f"[OUTCOME-ANALYZER] {template_id}: {len(winners)}W/{len(losers)}L "
+                f"— SKIP (need {min_group}+ each)"
+            )
+            return base
+
+        # Collect all numeric, non-skip indicators
+        all_indicators: set = set()
+        for t in trades:
+            snap = t.get('indicators_at_entry', {})
+            for k, v in snap.items():
+                if (k not in self.skip_columns
+                        and not k.startswith('CDL_')
+                        and isinstance(v, (int, float))
+                        and not isinstance(v, bool)):
+                    all_indicators.add(k)
+
+        # Score each indicator
+        strong: list = []
+        for ind in sorted(all_indicators):
+            w_vals = [
+                float(t['indicators_at_entry'][ind])
+                for t in winners
+                if ind in t['indicators_at_entry']
+                and t['indicators_at_entry'][ind] is not None
+                and isinstance(t['indicators_at_entry'][ind], (int, float))
+                and not math.isnan(float(t['indicators_at_entry'][ind]))
+            ]
+            l_vals = [
+                float(t['indicators_at_entry'][ind])
+                for t in losers
+                if ind in t['indicators_at_entry']
+                and t['indicators_at_entry'][ind] is not None
+                and isinstance(t['indicators_at_entry'][ind], (int, float))
+                and not math.isnan(float(t['indicators_at_entry'][ind]))
+            ]
+
+            if len(w_vals) < min_group or len(l_vals) < min_group:
+                continue
+
+            d, p = self._cohens_d(w_vals, l_vals)
+            if abs(d) < min_d:
+                continue
+
+            thresh_info = self._find_optimal_threshold(w_vals, l_vals)
+            guard = None
+            recommendation = 'SKIP_NO_BLOCK'
+
+            # Look up suggested block mapping
+            block_info = indicator_map.get(ind)
+            if thresh_info and block_info:
+                passes_after = thresh_info.get('trades_passing', 0)
+                guard = self._activity_guard(total, passes_after, template_id)
+                if guard['passed']:
+                    recommendation = 'ADD_CONDITION'
+                else:
+                    recommendation = 'SKIP_TOO_AGGRESSIVE'
+            elif thresh_info:
+                recommendation = 'SKIP_NO_BLOCK'
+
+            # Build suggested_block
+            suggested_block = None
+            if block_info and thresh_info and thresh_info.get('threshold') is not None:
+                raw_thresh = thresh_info['threshold']
+                divisor = block_info.get('unit_divisor', 1.0)
+                param_val = round(raw_thresh / divisor, 6)
+                suggested_block = {
+                    'block':  block_info['block'],
+                    'params': [param_val],
+                }
+
+            strong.append({
+                'indicator':    ind,
+                'cohens_d':     d,
+                'p_value':      p,
+                'winners_avg':  round(sum(w_vals) / len(w_vals), 4),
+                'losers_avg':   round(sum(l_vals) / len(l_vals), 4),
+                'threshold':    thresh_info,
+                'suggested_block': suggested_block,
+                'activity_guard':  guard,
+                'recommendation':  recommendation,
+            })
+
+        # Sort by abs(d) descending, keep top N
+        strong.sort(key=lambda x: -abs(x['cohens_d']))
+        strong = strong[:max_features]
+
+        verdict = 'NO_SIGNAL'
+        if strong:
+            has_actionable = any(s['recommendation'] == 'ADD_CONDITION' for s in strong)
+            verdict = 'ACTIONABLE' if has_actionable else 'NO_SIGNAL'
+
+        logger.info(
+            f"[OUTCOME-ANALYZER] {template_id}: {len(winners)}W/{len(losers)}L "
+            f"| {len(all_indicators)} features | {len(strong)} STRONG | {verdict}"
+        )
+
+        base['discriminators'] = strong
+        base['verdict'] = verdict
+        return base
+
+    # ------------------------------------------------------------------ #
+    # Statistical helpers                                                  #
+    # ------------------------------------------------------------------ #
+
+    def _cohens_d(self, group_a: list, group_b: list) -> tuple:
+        """Calculate Cohen's d effect size between two groups."""
+        na, nb = len(group_a), len(group_b)
+        if na < 3 or nb < 3:
+            return 0.0, 1.0
+        mean_a = sum(group_a) / na
+        mean_b = sum(group_b) / nb
+        var_a = sum((x - mean_a) ** 2 for x in group_a) / (na - 1) if na > 1 else 0
+        var_b = sum((x - mean_b) ** 2 for x in group_b) / (nb - 1) if nb > 1 else 0
+        pooled_std = math.sqrt(((na - 1) * var_a + (nb - 1) * var_b) / (na + nb - 2))
+        if pooled_std == 0:
+            return 0.0, 1.0
+        d = (mean_a - mean_b) / pooled_std
+        # Approximate two-tailed p-value using error function
+        p = 2 * (1 - 0.5 * (1 + math.erf(abs(d) / math.sqrt(2))))
+        return round(d, 4), round(p, 6)
+
+    def _find_optimal_threshold(self, winner_vals: list, loser_vals: list) -> dict | None:
+        """
+        Find threshold that maximises precision while keeping recall >= 0.3.
+
+        Tests both 'above' and 'below' directions for every candidate value.
+        Returns best result dict or None if no valid threshold found.
+        """
+        all_vals = sorted(set(winner_vals + loser_vals))
+        if len(all_vals) < 3:
+            return None
+
+        total_winners = len(winner_vals)
+        total = total_winners + len(loser_vals)
+        best: dict = {
+            'threshold': None, 'direction': 'above',
+            'precision': 0.0, 'recall': 0.0,
+            'trades_passing': 0, 'trades_blocked': 0,
+        }
+
+        for val in all_vals:
+            # Direction 'above': trade when feature > val
+            tp  = sum(1 for v in winner_vals if v > val)
+            fp  = sum(1 for v in loser_vals  if v > val)
+            passing = tp + fp
+            if passing > 0:
+                prec   = tp / passing
+                recall = tp / total_winners if total_winners > 0 else 0
+                if recall >= 0.3 and prec > best['precision']:
+                    best = {
+                        'threshold':      round(val, 6),
+                        'direction':      'above',
+                        'precision':      round(prec,   4),
+                        'recall':         round(recall, 4),
+                        'trades_passing': passing,
+                        'trades_blocked': total - passing,
+                    }
+
+            # Direction 'below': trade when feature < val
+            tp2  = sum(1 for v in winner_vals if v < val)
+            fp2  = sum(1 for v in loser_vals  if v < val)
+            passing2 = tp2 + fp2
+            if passing2 > 0:
+                prec2   = tp2 / passing2
+                recall2 = tp2 / total_winners if total_winners > 0 else 0
+                if recall2 >= 0.3 and prec2 > best['precision']:
+                    best = {
+                        'threshold':      round(val, 6),
+                        'direction':      'below',
+                        'precision':      round(prec2,   4),
+                        'recall':         round(recall2, 4),
+                        'trades_passing': passing2,
+                        'trades_blocked': total - passing2,
+                    }
+
+        return best if best['threshold'] is not None else None
+
+    def _activity_guard(self, total_trades: int, trades_after: int,
+                        template_id: str) -> dict:
+        """
+        Reject filter if it leaves too few trades or blocks too large a fraction.
+        Fail-open: if total_trades is 0, return passed=False (cannot evaluate).
+        """
+        guard_cfg      = self.config.get('activity_guard', {})
+        min_after      = guard_cfg.get('min_trades_after_filter', 10)
+        max_reduction  = guard_cfg.get('max_reduction_pct', 60)
+
+        reduction_pct = (
+            (1 - trades_after / total_trades) * 100
+            if total_trades > 0 else 100.0
+        )
+
+        passed  = True
+        reasons = []
+
+        if trades_after < min_after:
+            passed = False
+            reasons.append(f"Only {trades_after} trades remain (min {min_after})")
+
+        if reduction_pct > max_reduction:
+            passed = False
+            reasons.append(
+                f"Reduction {reduction_pct:.0f}% exceeds max {max_reduction}%"
+            )
+
+        return {
+            'passed':         passed,
+            'trades_before':  total_trades,
+            'trades_after':   trades_after,
+            'reduction_pct':  round(reduction_pct, 1),
+            'reasons':        reasons,
+        }

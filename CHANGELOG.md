@@ -1,5 +1,36 @@
 # Changelog
 
+## [Chat #13] - 2026-04-12
+
+### Added
+- `TradeOutcomeAnalyzer` class in `setup_templates.py`
+  - Reads backtest trades with `indicators_at_entry` snapshots
+  - Computes Cohen's d per indicator per template (wins vs losses)
+  - Finds optimal threshold (max precision, recall ≥ 30%) for each STRONG discriminator
+  - Activity Guard: min 10 trades after filter, max 60% reduction — prevents over-filtering
+  - Outputs `data/trade_outcome_analysis.json` report
+  - REPORT ONLY — never modifies template JSON files
+  - Skip logic: absolute prices, CDL_* (binary candle patterns), Fibonacci levels, spread
+- `TRADE_OUTCOME_ANALYZER_CONFIG` in `system_config.py`
+- 5 unit tests for `TradeOutcomeAnalyzer` (223 total, 0 regressions)
+  - `test_outcome_analyzer_instantiates` — config keys present
+  - `test_outcome_analyzer_cohens_d` — separation detection + zero for identical groups
+  - `test_outcome_analyzer_activity_guard_pass` — guard passes when enough trades remain
+  - `test_outcome_analyzer_activity_guard_fail_min_trades` — guard fails < 10 trades
+  - `test_outcome_analyzer_activity_guard_fail_reduction` — guard fails > 60% reduction
+
+### Analysis Results (first run on current backtest)
+- 9 templates evaluated | 0 ACTIONABLE (activity guard blocked all recommendations)
+- **Signals are REAL** — 5/9 templates have STRONG discriminators (d ≥ 0.8):
+  - BEARISH_VOLATILITY_EXPANSION: macd_hist d=+2.18, stoch_d d=+1.39
+  - DISC_BEARISH_COMPRESSED_10D: bb_width_pct d=-0.82
+  - DISC_SIDEWAYS_COMPRESSED_10D: volatility_20d d=+0.80
+  - SQUEEZE_BREAKOUT: rvol d=+0.83
+  - TREND_PULLBACK_EMA: ema_spread d=+1.37, bb_width d=+1.16, adx d=+0.83
+- **Root cause for 0 actionable**: templates have 12-36 trades → Activity Guard requires ≥10
+  remaining. Any meaningful filter on small templates leaves < 10 trades.
+- **Next step**: re-run after 6 more months of live/backtest data → larger sample sizes
+
 ## [Chat #12] - 2026-04-11
 
 ### Added
