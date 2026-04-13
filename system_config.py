@@ -1226,6 +1226,16 @@ TRADE_OUTCOME_ANALYZER_CONFIG = {
     "report_path": "data/trade_outcome_analysis.json",
 }
 
+# ═══════════════════════════════════════════════════════════════════════════
+# FILTER USAGE TRACKER CONFIG
+# ═══════════════════════════════════════════════════════════════════════════
+FILTER_USAGE_CONFIG = {
+    "enabled": True,
+    "report_path": "data/filter_usage_report.json",
+    "min_evaluations": 5,              # Minimum evals before stats are meaningful
+    "high_fail_rate_threshold": 0.8,   # Log warning if block fails > 80%
+}
+
 SCAN_ROUTING_CONFIG = {
     "daily_scan_limit": 4000,             # Maximum symbols to scan per nightly run
     "priority_scan_limit": 100,           # Top N symbols from ledger scanned first (by score)

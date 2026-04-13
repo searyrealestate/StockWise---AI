@@ -33,6 +33,117 @@ except Exception:
     _dl = None
 
 
+class FilterUsageTracker:
+    """
+    Collects per-template, per-symbol, per-block pass/fail stats.
+    In-memory during scan loop. save() flushes to disk once (end of backtest).
+    Data: _data[template_id][symbol][block_name] = {"passes": int, "fails": int}
+    """
+
+    def __init__(self):
+        self.config = getattr(cfg, 'FILTER_USAGE_CONFIG', {})
+        self._data = {}
+        self._total_evals = 0
+        self._enabled = self.config.get('enabled', True)
+
+    def record(self, template_id, symbol, details):
+        if not self._enabled or not details:
+            return
+        self._total_evals += 1
+        tmpl_data = self._data.setdefault(template_id, {})
+        sym_data = tmpl_data.setdefault(symbol, {})
+        for d in details:
+            block_name = d.get('block', '')
+            if not block_name:
+                continue
+            block_stats = sym_data.setdefault(block_name, {"passes": 0, "fails": 0})
+            if d.get('passed', False):
+                block_stats["passes"] += 1
+            else:
+                block_stats["fails"] += 1
+
+    def reset(self):
+        self._data = {}
+        self._total_evals = 0
+
+    def get_block_stats(self, template_id, block_name):
+        total_p, total_f = 0, 0
+        for sym_data in self._data.get(template_id, {}).values():
+            bs = sym_data.get(block_name, {})
+            total_p += bs.get("passes", 0)
+            total_f += bs.get("fails", 0)
+        total = total_p + total_f
+        return {"passes": total_p, "fails": total_f, "total": total,
+                "fail_rate": round(total_f / total, 4) if total > 0 else 0.0}
+
+    def get_symbol_stats(self, template_id, symbol):
+        sym_data = self._data.get(template_id, {}).get(symbol, {})
+        blocks = {}
+        total_evals = 0
+        for block_name, stats in sym_data.items():
+            p, f = stats.get("passes", 0), stats.get("fails", 0)
+            t = p + f
+            total_evals = max(total_evals, t)
+            blocks[block_name] = {"passes": p, "fails": f, "total": t,
+                                  "fail_rate": round(f / t, 4) if t > 0 else 0.0}
+        return {"evaluations": total_evals, "blocks": blocks}
+
+    def get_report(self):
+        min_evals = self.config.get('min_evaluations', 5)
+        high_fail = self.config.get('high_fail_rate_threshold', 0.8)
+        templates = {}
+        high_fail_alerts = []
+        for tid, sym_dict in self._data.items():
+            all_blocks = {}
+            for sym, block_dict in sym_dict.items():
+                for bname, stats in block_dict.items():
+                    agg = all_blocks.setdefault(bname, {"passes": 0, "fails": 0})
+                    agg["passes"] += stats["passes"]
+                    agg["fails"] += stats["fails"]
+            by_block = {}
+            for bname, agg in all_blocks.items():
+                t = agg["passes"] + agg["fails"]
+                fr = round(agg["fails"] / t, 4) if t > 0 else 0.0
+                by_block[bname] = {"passes": agg["passes"], "fails": agg["fails"],
+                                   "total": t, "fail_rate": fr}
+                if t >= min_evals and fr >= high_fail:
+                    high_fail_alerts.append({"template": tid, "block": bname,
+                                             "fail_rate": fr, "evaluations": t})
+            by_symbol = {}
+            for sym, block_dict in sym_dict.items():
+                sym_blocks = {}
+                sym_evals = 0
+                for bname, stats in block_dict.items():
+                    p, f = stats["passes"], stats["fails"]
+                    t = p + f
+                    sym_evals = max(sym_evals, t)
+                    sym_blocks[bname] = {"passes": p, "fails": f, "total": t,
+                                         "fail_rate": round(f / t, 4) if t > 0 else 0.0}
+                by_symbol[sym] = {"evaluations": sym_evals, "blocks": sym_blocks}
+            templates[tid] = {
+                "total_evaluations": sum(
+                    max((s["passes"] + s["fails"]) for s in bd.values()) if bd else 0
+                    for bd in sym_dict.values()
+                ),
+                "by_block": by_block,
+                "by_symbol": by_symbol,
+            }
+        for alert in high_fail_alerts:
+            logger.info(f"[FILTER-TRACKER] HIGH_FAIL: {alert['template']}:{alert['block']} "
+                        f"fail_rate={alert['fail_rate']:.1%} ({alert['evaluations']} evals)")
+        return {"timestamp": datetime.now().isoformat(), "total_evaluations": self._total_evals,
+                "templates": templates, "high_fail_alerts": high_fail_alerts}
+
+    def save(self, path=None):
+        if not self._enabled:
+            return
+        report = self.get_report()
+        out_path = path or self.config.get('report_path', 'data/filter_usage_report.json')
+        safe_json_write(out_path, report)
+        logger.info(f"[FILTER-TRACKER] Report saved: {len(report['templates'])} templates, "
+                    f"{self._total_evals} evaluations → {out_path}")
+
+
 class TemplateMatcher:
     """
     Evaluates all enabled templates against a stock's current data.
@@ -54,6 +165,13 @@ class TemplateMatcher:
         self.total_signals = 0
         self._trust_cache = None   # In-memory trust matrix (set by BacktestEngine)
         self._suit_cache  = None   # In-memory suit assignments (set by BacktestEngine)
+
+        # Filter usage tracking
+        self.filter_tracker = (
+            FilterUsageTracker()
+            if getattr(cfg, 'FILTER_USAGE_CONFIG', {}).get('enabled', True)
+            else None
+        )
 
     def scan_ticker(self, symbol, df, stock_state=None, timeframe=None):
         """
@@ -138,6 +256,9 @@ class TemplateMatcher:
                 continue
 
             all_passed, details = template.evaluate_conditions(last_row)
+
+            if self.filter_tracker:
+                self.filter_tracker.record(template.id, symbol, details)
 
             if all_passed:
                 # Step 3: Calculate entry, stop, target

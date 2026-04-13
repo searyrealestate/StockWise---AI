@@ -1,5 +1,20 @@
 # Changelog
 
+## [Chat #14] - 2026-04-12
+
+### Added
+- `FilterUsageTracker` class in `template_matcher.py`
+  - Collects per-template, per-symbol, per-block pass/fail stats during `scan_ticker` evaluations
+  - Records EVERY template evaluation (pass AND fail) — pure observer, never blocks signals
+  - `get_block_stats(template_id, block_name)` — aggregate fail_rate across all symbols
+  - `get_symbol_stats(template_id, symbol)` — per-symbol block breakdown
+  - `get_report()` — full report with high-fail alerts (configurable threshold)
+  - `save()` → `data/filter_usage_report.json`
+  - In-memory during scan loop (zero disk I/O overhead), flushed once at end of backtest
+- `FILTER_USAGE_CONFIG` in `system_config.py`
+- Integration hooks: `TemplateMatcher.__init__` + `scan_ticker()` + `BacktestEngine.run()` (reset + save)
+- 9 unit tests for `FilterUsageTracker` (232 total, 0 regressions)
+
 ## [Chat #13] - 2026-04-12
 
 ### Added

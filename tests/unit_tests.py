@@ -2989,6 +2989,101 @@ class TestTradeOutcomeAnalyzer:
             f"Expected reduction > 60%, got {result['reduction_pct']}"
 
 
+class TestFilterUsageTracker:
+    """9 tests for FilterUsageTracker in template_matcher.py"""
+
+    def _make_tracker(self, enabled=True):
+        from template_matcher import FilterUsageTracker
+        tracker = FilterUsageTracker()
+        tracker._enabled = enabled
+        tracker.config = {
+            'enabled': enabled,
+            'min_evaluations': 3,
+            'high_fail_rate_threshold': 0.8,
+            'report_path': 'data/filter_usage_report.json',
+        }
+        return tracker
+
+    def _make_details(self, block_results):
+        """block_results: list of (block_name, passed)"""
+        return [{'block': b, 'passed': p, 'params': [], 'value': None}
+                for b, p in block_results]
+
+    def test_record_increments_total_evals(self):
+        t = self._make_tracker()
+        d = self._make_details([('volume_surge', True), ('rsi_oversold', False)])
+        t.record('T1', 'AAPL', d)
+        assert t._total_evals == 1
+
+    def test_record_counts_passes_and_fails(self):
+        t = self._make_tracker()
+        d = self._make_details([('vol', True), ('rsi', False), ('macd', True)])
+        t.record('T1', 'AAPL', d)
+        stats = t._data['T1']['AAPL']
+        assert stats['vol']['passes'] == 1 and stats['vol']['fails'] == 0
+        assert stats['rsi']['passes'] == 0 and stats['rsi']['fails'] == 1
+
+    def test_record_disabled_skips(self):
+        t = self._make_tracker(enabled=False)
+        d = self._make_details([('vol', True)])
+        t.record('T1', 'AAPL', d)
+        assert t._total_evals == 0
+        assert 'T1' not in t._data
+
+    def test_record_empty_details_skips(self):
+        t = self._make_tracker()
+        t.record('T1', 'AAPL', [])
+        assert t._total_evals == 0
+
+    def test_reset_clears_data(self):
+        t = self._make_tracker()
+        d = self._make_details([('vol', True)])
+        t.record('T1', 'AAPL', d)
+        assert t._total_evals == 1
+        t.reset()
+        assert t._total_evals == 0
+        assert t._data == {}
+
+    def test_get_block_stats_aggregates_across_symbols(self):
+        t = self._make_tracker()
+        t.record('T1', 'AAPL', self._make_details([('vol', True)]))
+        t.record('T1', 'TSLA', self._make_details([('vol', False)]))
+        t.record('T1', 'MSFT', self._make_details([('vol', True)]))
+        stats = t.get_block_stats('T1', 'vol')
+        assert stats['passes'] == 2
+        assert stats['fails'] == 1
+        assert stats['total'] == 3
+        assert abs(stats['fail_rate'] - round(1/3, 4)) < 0.0001
+
+    def test_get_block_stats_zero_for_unknown(self):
+        t = self._make_tracker()
+        stats = t.get_block_stats('NONE', 'noop')
+        assert stats['total'] == 0
+        assert stats['fail_rate'] == 0.0
+
+    def test_get_symbol_stats_returns_block_breakdown(self):
+        t = self._make_tracker()
+        t.record('T1', 'AAPL', self._make_details([('vol', True), ('rsi', False)]))
+        t.record('T1', 'AAPL', self._make_details([('vol', False), ('rsi', False)]))
+        result = t.get_symbol_stats('T1', 'AAPL')
+        assert result['blocks']['vol']['passes'] == 1
+        assert result['blocks']['vol']['fails'] == 1
+        assert result['blocks']['rsi']['fails'] == 2
+
+    def test_get_report_flags_high_fail_alerts(self):
+        t = self._make_tracker()
+        # 4 evals, 4 fails on 'rsi' → fail_rate=1.0 ≥ 0.8, evals=4 ≥ 3 → alert
+        for _ in range(4):
+            t.record('T1', 'AAPL', self._make_details([('rsi', False)]))
+        report = t.get_report()
+        assert report['total_evaluations'] == 4
+        alerts = report['high_fail_alerts']
+        assert len(alerts) == 1
+        assert alerts[0]['template'] == 'T1'
+        assert alerts[0]['block'] == 'rsi'
+        assert alerts[0]['fail_rate'] == 1.0
+
+
 # RUNNER (also compatible with pytest)
 # ============================================================
 if __name__ == '__main__':
@@ -2998,7 +3093,7 @@ if __name__ == '__main__':
 
     test_classes = [TestBug1_1_AIFeatureMismatch, TestBug1_2_ColumnCaseMismatch, TestBug1_3_ErTrend, TestBug1_4_CooldownWrite, TestBug1_5_DualThreshold, TestBug1_6a_SqueezeColumns, TestBug1_6b_SafeFillna, TestBug1_6c_DateSplit, TestBug2_1_MacdSignalName, TestBug2_2_SqueezeBonus, TestBug2_3_RegimeGate, TestBug2_4_LabelConfig, TestPhase2_5_MilestoneAlerts, TestPhase3_3_BlockRegistry, TestPhase3_3_TemplateValidation, TestPhase3_4_TemplateMatcher, TestPhase3_7_ExtendedStats, TestPhase1AtrMult, TestPauseMinHealthyPullback, TestConfigDedup, TestRealtimeStateRefresh, TestHaltRegimeBlocking, TestTemplateFilteringLogging, TestWeeklyRetrain, TestGenTemplatesDisabled, TestForceProviderDSM, TestQualityGate, TestThreeWaySplit, TestShadowLedgerMaxDate, TestFullPipeline, TestPipelineBugFixes, TestTemplateTimeframe, TestRTHFilter, TestPipelineTimeframe, TestDSM2HourSupport, TestTimeframePassThrough, TestVolumeTimeframeThreshold, TestDuplicateTimeframeAware, TestNewRecipes, TestIndicatorScaling, TestSignalStackingCooldown, TestQGTestPeriodSafetyNet, TestTrustScoreCalculation, TestRollingTrust, TestReEnablePerState, TestTrustGate, TestBearishVolatilityExpansion, TestWeeklyGateReversalBypass,
                   TestDiscriminationTemplateBuilder, TestTemplateHealthMonitor,
-                  TestTradeOutcomeAnalyzer]
+                  TestTradeOutcomeAnalyzer, TestFilterUsageTracker]
 
     for cls in test_classes:
         print(f"\n--- {cls.__name__} ---")

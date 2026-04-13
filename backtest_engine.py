@@ -228,6 +228,10 @@ class BacktestEngine:
             self.rolling_bar_counter  = 0
             logger.info("[ROLLING] Trust cache initialized — backtest runs in RAM mode")
 
+        # ── FilterUsageTracker: reset before scan loop ──
+        if hasattr(self.matcher, 'filter_tracker') and self.matcher.filter_tracker:
+            self.matcher.filter_tracker.reset()
+
         timeline = self._build_timeline()
         if not timeline:
             return {"error": "Empty timeline after warmup exclusion",
@@ -299,6 +303,13 @@ class BacktestEngine:
                 save_versioned_copy(BACKTEST_RESULTS_PATH, "backtest_history")
         except Exception as exc:
             logger.warning(f"Could not save results: {exc}")
+
+        # ── FilterUsageTracker: save report after results ──
+        try:
+            if hasattr(self.matcher, 'filter_tracker') and self.matcher.filter_tracker:
+                self.matcher.filter_tracker.save()
+        except Exception as exc:
+            logger.warning(f"FilterUsageTracker save failed (non-fatal): {exc}")
 
         # Feed results into Shadow Ledger for DDR #1 Asset-Specific
         if self.feed_shadow_ledger:
