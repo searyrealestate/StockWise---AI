@@ -152,7 +152,7 @@ PROVIDER_DELAY = {
 }
 
 API_TIMEOUTS = {
-    "IBKR_HISTORICAL_TIMEOUT": 30,  # seconds to wait for historicalDataEnd
+    "IBKR_HISTORICAL_TIMEOUT": 60,  # seconds to wait for historicalDataEnd
 }
 
 # ═══ WATERFALL ROUTING (2026-03-24 — DDR #2) ════════════════════════════
