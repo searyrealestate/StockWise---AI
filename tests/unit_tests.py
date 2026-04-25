@@ -3338,6 +3338,54 @@ class TestIBKRDataAppFetch:
         assert "Test error" in str(ctx.value)
 
 
+# ============================================================
+# Subprocess cleanup tests — Prompt P0.2-fix
+# ============================================================
+
+def test_fetch_one_symbol_calls_disconnect_on_error():
+    """fetch_one_symbol must call dsm.disconnect() even when fetch raises.
+
+    Regression guard for P0.2 subprocess hang bug (2026-04-26):
+    Without disconnect in finally, EClient.run() thread keeps subprocess alive
+    until parent timeout fires (verified: 61s vs 3s).
+    """
+    from unittest.mock import patch, MagicMock
+    from tests.test_ibkr_determinism import fetch_one_symbol
+
+    mock_dsm = MagicMock()
+    mock_dsm.connect_to_ibkr.return_value = True
+    mock_dsm._download_from_ibkr.side_effect = RuntimeError("simulated fetch error")
+
+    with patch('data_source_manager.DataSourceManager', return_value=mock_dsm):
+        result = fetch_one_symbol('AAPL')
+
+    assert 'error' in result, f"Expected error key in result: {result}"
+    mock_dsm.disconnect.assert_called_once(), \
+        "dsm.disconnect() must be called in finally block even on exception"
+
+
+def test_fetch_one_symbol_calls_disconnect_on_success():
+    """fetch_one_symbol must call dsm.disconnect() after successful fetch."""
+    from unittest.mock import patch, MagicMock
+    import pandas as pd
+    from tests.test_ibkr_determinism import fetch_one_symbol
+
+    mock_dsm = MagicMock()
+    mock_dsm.connect_to_ibkr.return_value = True
+    mock_dsm._download_from_ibkr.return_value = pd.DataFrame({
+        'open': [1.0]*20, 'high': [1.1]*20, 'low': [0.9]*20,
+        'close': [1.05]*20, 'volume': [1000]*20
+    }, index=pd.date_range('2025-01-01', periods=20))
+
+    with patch('data_source_manager.DataSourceManager', return_value=mock_dsm):
+        result = fetch_one_symbol('AAPL')
+
+    assert result.get('rows') == 20, f"Expected 20 rows: {result}"
+    assert 'md5' in result, f"Expected md5 in result: {result}"
+    mock_dsm.disconnect.assert_called_once(), \
+        "dsm.disconnect() must be called after successful fetch"
+
+
 # RUNNER (also compatible with pytest)
 # ============================================================
 if __name__ == '__main__':

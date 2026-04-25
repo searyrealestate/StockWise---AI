@@ -34,54 +34,68 @@ INTERVAL = "1d"
 DAYS_BACK = 30
 WAIT_BETWEEN_RUNS_SEC = 30
 MIN_ROWS_REQUIRED = 15
-SUBPROCESS_TIMEOUT_SEC = 120
+SUBPROCESS_TIMEOUT_SEC = 30   # Was 120; clean fetch takes ~3s, 30s = 10x safety
 
 
 def fetch_one_symbol(symbol: str) -> dict:
-    """Subprocess entry point: fetch one symbol via IBKR, return hash + meta."""
+    """Subprocess entry point: fetch one symbol via IBKR, return hash + meta.
+
+    CRITICAL: dsm.disconnect() in finally is mandatory.
+    Without it, EClient.run() thread stays alive and the subprocess hangs
+    until the parent's timeout kills it (verified 2026-04-26: 61s timeout
+    vs 3s clean exit with disconnect).
+    """
     from data_source_manager import DataSourceManager
 
     dsm = DataSourceManager()
-    if not dsm.connect_to_ibkr():
-        return {"symbol": symbol, "error": "IBKR connection failed"}
-
     try:
-        df = dsm._download_from_ibkr(
-            symbol=symbol,
-            start_date=None,
-            end_date=None,
-            days_back=DAYS_BACK,
-            interval=INTERVAL,
-            min_rows=MIN_ROWS_REQUIRED
-        )
-    except Exception as e:
-        return {"symbol": symbol, "error": f"Fetch exception: {e}"}
+        if not dsm.connect_to_ibkr():
+            return {"symbol": symbol, "error": "IBKR connection failed"}
 
-    if df is None or df.empty:
-        return {"symbol": symbol, "error": "Empty DataFrame"}
+        try:
+            df = dsm._download_from_ibkr(
+                symbol=symbol,
+                start_date=None,
+                end_date=None,
+                days_back=DAYS_BACK,
+                interval=INTERVAL,
+                min_rows=MIN_ROWS_REQUIRED
+            )
+        except Exception as e:
+            return {"symbol": symbol, "error": f"Fetch exception: {e}"}
 
-    # Deterministic hash via canonical CSV bytes
-    cols_lower = [c.lower() for c in df.columns]
-    df_lower = df.copy()
-    df_lower.columns = cols_lower
+        if df is None or df.empty:
+            return {"symbol": symbol, "error": "Empty DataFrame"}
 
-    required = ['open', 'high', 'low', 'close', 'volume']
-    missing = [c for c in required if c not in df_lower.columns]
-    if missing:
-        return {"symbol": symbol, "error": f"Missing columns: {missing}"}
+        # Deterministic hash via canonical CSV bytes
+        cols_lower = [c.lower() for c in df.columns]
+        df_lower = df.copy()
+        df_lower.columns = cols_lower
 
-    canonical = df_lower[required].copy()
-    payload = canonical.to_csv(index=True, lineterminator='\n').encode('utf-8')
-    md5 = hashlib.md5(payload).hexdigest()
+        required = ['open', 'high', 'low', 'close', 'volume']
+        missing = [c for c in required if c not in df_lower.columns]
+        if missing:
+            return {"symbol": symbol, "error": f"Missing columns: {missing}"}
 
-    return {
-        "symbol": symbol,
-        "rows": len(df),
-        "first_date": str(df.index[0]),
-        "last_date": str(df.index[-1]),
-        "md5": md5,
-        "error": None
-    }
+        canonical = df_lower[required].copy()
+        payload = canonical.to_csv(index=True, lineterminator='\n').encode('utf-8')
+        md5 = hashlib.md5(payload).hexdigest()
+
+        return {
+            "symbol": symbol,
+            "rows": len(df),
+            "first_date": str(df.index[0]),
+            "last_date": str(df.index[-1]),
+            "md5": md5,
+            "error": None
+        }
+    finally:
+        # Mandatory cleanup — without disconnect, EClient.run() thread
+        # keeps the subprocess alive until parent timeout
+        try:
+            dsm.disconnect()
+        except Exception:
+            pass
 
 
 def run_one_round(round_id: int) -> dict:
@@ -93,9 +107,12 @@ def run_one_round(round_id: int) -> dict:
         print(f"  Fetching {symbol}...", end=" ", flush=True)
         cmd = [
             sys.executable, "-c",
-            f"import sys; sys.path.insert(0, r'{PROJECT_ROOT}'); "
+            f"import sys, os; sys.path.insert(0, r'{PROJECT_ROOT}'); "
             f"from tests.test_ibkr_determinism import fetch_one_symbol; "
-            f"import json; print('===RESULT===' + json.dumps(fetch_one_symbol('{symbol}')))"
+            f"import json; "
+            f"print('===RESULT===' + json.dumps(fetch_one_symbol('{symbol}'))); "
+            f"sys.stdout.flush(); "
+            f"os._exit(0)"
         ]
         try:
             proc = subprocess.run(
