@@ -1,5 +1,21 @@
 # Changelog
 
+## [P0.2] - 2026-04-24
+
+### Added
+- `tests/test_ibkr_determinism.py` — cross-process determinism test
+  - Forks 2 rounds x 5 symbols (AAPL, AMD, NFLX, SPY, CRM) as subprocesses
+  - Computes md5 of canonical OHLCV CSV per symbol
+  - Compares hashes between rounds -> STABLE / DIVERGENT / ERROR
+  - 30s wait between rounds (IBKR rate limit safety)
+  - Output: data/ibkr_determinism_test/{round_1.json, round_2.json, comparison.json}
+  - Exit code: 0 if all STABLE, 1 otherwise
+
+### Notes
+- Standalone integration test; requires IB Gateway running
+- NOT auto-run by pytest (manual gate before P0.3 decision)
+- 244 unit tests still pass (no production code touched)
+
 ## [P0.1] - 2026-04-24
 
 ### Fixed
