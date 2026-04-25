@@ -359,6 +359,8 @@ class IBKRDataApp(EWrapper, EClient):
         self.logger = logging.getLogger(f"IBKR_Client_{client_id}")
         self.error_occurred = False
         self.error_message = ""
+        self._req_id_counter = 1000
+        self._req_id_lock = threading.Lock()
 
     def error(self, reqId, errorCode, errorString, advancedOrderRejectJson=""):
         if errorCode in [2104, 2106, 2158]: return  # Ignore connectivity msgs
@@ -387,6 +389,105 @@ class IBKRDataApp(EWrapper, EClient):
 
     def contractDetailsEnd(self, reqId):
         self.contract_event.set()
+
+    def _next_req_id(self):
+        """Thread-safe request ID generator."""
+        with self._req_id_lock:
+            self._req_id_counter += 1
+            return self._req_id_counter
+
+    def fetch_historical_data(self, contract, durationStr, barSizeSetting,
+                              whatToShow, useRTH, timeout=30):
+        """
+        Synchronous wrapper around reqHistoricalData().
+        Blocks until historicalDataEnd callback fires (or timeout).
+
+        Returns: DataFrame with DatetimeIndex (Date) and OHLCV columns.
+                  Empty DataFrame if no bars returned.
+        Raises:  TimeoutError if no completion within `timeout` seconds.
+                  RuntimeError on IBKR error response.
+        """
+        import time as _time
+        start_ts = _time.time()
+
+        # 1. Reset state
+        self.data = []
+        self.data_event.clear()
+        self.error_occurred = False
+        self.error_message = ""
+
+        # 2. Generate request ID
+        req_id = self._next_req_id()
+
+        # 3. Log start
+        self.logger.info(
+            f"IBKR_FETCH_START | reqId={req_id} | "
+            f"duration={durationStr} | bar_size={barSizeSetting} | "
+            f"useRTH={useRTH} | timeout={timeout}s"
+        )
+
+        # 4. Issue request
+        self.reqHistoricalData(
+            reqId=req_id,
+            contract=contract,
+            endDateTime='',
+            durationStr=durationStr,
+            barSizeSetting=barSizeSetting,
+            whatToShow=whatToShow,
+            useRTH=useRTH,
+            formatDate=1,
+            keepUpToDate=False,
+            chartOptions=[]
+        )
+
+        # 5. Wait for completion
+        completed = self.data_event.wait(timeout=timeout)
+        elapsed = _time.time() - start_ts
+
+        # 6. Handle timeout
+        if not completed:
+            try:
+                self.cancelHistoricalData(req_id)
+            except Exception:
+                pass
+            self.logger.error(
+                f"IBKR_FETCH_FAIL | reqId={req_id} | "
+                f"reason=timeout | duration_ms={int(elapsed * 1000)}"
+            )
+            raise TimeoutError(
+                f"IBKR fetch timed out after {timeout}s "
+                f"(reqId={req_id}, bars={barSizeSetting})"
+            )
+
+        # 7. Handle IBKR error
+        if self.error_occurred:
+            self.logger.error(
+                f"IBKR_FETCH_FAIL | reqId={req_id} | "
+                f"reason=error | msg={self.error_message} | "
+                f"duration_ms={int(elapsed * 1000)}"
+            )
+            raise RuntimeError(
+                f"IBKR error during fetch: {self.error_message} (reqId={req_id})"
+            )
+
+        # 8. Build DataFrame
+        if not self.data:
+            self.logger.warning(
+                f"IBKR_FETCH_OK | reqId={req_id} | bars=0 | "
+                f"duration_ms={int(elapsed * 1000)}"
+            )
+            return pd.DataFrame()
+
+        df = pd.DataFrame(self.data)
+        df['Date'] = pd.to_datetime(df['Date'], format='mixed', errors='coerce')
+        df = df.dropna(subset=['Date'])
+        df = df.set_index('Date').sort_index()
+
+        self.logger.info(
+            f"IBKR_FETCH_OK | reqId={req_id} | bars={len(df)} | "
+            f"duration_ms={int(elapsed * 1000)}"
+        )
+        return df
 
 
 class DataSourceManager:
@@ -823,7 +924,8 @@ class DataSourceManager:
                 durationStr=duration,
                 barSizeSetting=bar_size,
                 whatToShow="TRADES",
-                useRTH=1
+                useRTH=1,
+                timeout=cfg.API_TIMEOUTS.get("IBKR_HISTORICAL_TIMEOUT", 30)
             )
             
             # 6. Integrity Check

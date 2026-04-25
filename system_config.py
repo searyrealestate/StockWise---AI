@@ -151,6 +151,10 @@ PROVIDER_DELAY = {
     "MASSIVE_TIMEOUT": 10
 }
 
+API_TIMEOUTS = {
+    "IBKR_HISTORICAL_TIMEOUT": 30,  # seconds to wait for historicalDataEnd
+}
+
 # ═══ WATERFALL ROUTING (2026-03-24 — DDR #2) ════════════════════════════
 # ARCHITECTURAL CHANGE: DATA_PROVIDER = "ALPACA" was removed here.
 # Previous comment said "DO NOT DELETE" — reason was to prevent DSM from
@@ -454,6 +458,9 @@ SHADOW_LEDGER_CONFIG = {
     "min_bars_between_signals": 20,      # Cooldown: prevent correlated signals from same template
     "run_mode": "offline",               # "offline" = weekend batch only
     "restrict_to_train": True,           # NEW: pipeline restricts SL to TRAIN period only
+    "deterministic_mode_default": False,   # When True, trust_matrix/suit_assignments
+                                           # are neither loaded nor saved. Used for
+                                           # before/after validation.
 }
 
 # Asset-Specific Optimization (DDR #1)
@@ -1083,6 +1090,26 @@ def validate_template_evolution_config():
     assert isinstance(sa.get("max_history_entries", None), int) and sa["max_history_entries"] > 0, \
         "suit_assignment.max_history_entries must be int > 0"
     return True
+
+
+def validate_shadow_ledger_config():
+    """Validate SHADOW_LEDGER_CONFIG has required keys and sane values."""
+    det = SHADOW_LEDGER_CONFIG.get("deterministic_mode_default", None)
+    assert isinstance(det, bool), \
+        "SHADOW_LEDGER_CONFIG.deterministic_mode_default must be bool"
+
+
+def validate_ibkr_timeouts():
+    """Validate IBKR-specific timeout values."""
+    timeout = API_TIMEOUTS.get("IBKR_HISTORICAL_TIMEOUT", 30)
+    if not isinstance(timeout, (int, float)):
+        raise ValueError(
+            f"IBKR_HISTORICAL_TIMEOUT must be numeric, got {type(timeout)}"
+        )
+    if not (5 <= timeout <= 120):
+        raise ValueError(
+            f"IBKR_HISTORICAL_TIMEOUT must be in [5, 120]s, got {timeout}"
+        )
 
 
 TELEGRAM_HELP_TEXT = (

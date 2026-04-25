@@ -1,5 +1,25 @@
 # Changelog
 
+## [P0.1] - 2026-04-24
+
+### Fixed
+- `IBKRDataApp.fetch_historical_data()` — synchronous wrapper added
+  - Was missing entirely; `_download_from_ibkr()` raised AttributeError
+  - New impl: thread-safe req_id counter, configurable timeout,
+    structured logging (`IBKR_FETCH_START/OK/FAIL`), DataFrame output
+  - Cancels pending request on timeout to prevent zombies
+  - Raises TimeoutError or RuntimeError (no silent failures)
+
+### Added
+- `API_TIMEOUTS["IBKR_HISTORICAL_TIMEOUT"] = 30` in system_config.py
+- `validate_ibkr_timeouts()` in system_config.py
+- 5 unit tests in tests/unit_tests.py::TestIBKRDataAppFetch
+
+### Notes
+- Does NOT change provider waterfall behavior or HISTORICAL_SOURCE
+- IBKR will now succeed when Gateway is running; falls through to next
+  provider as before when not
+
 ## [Chat #14] - 2026-04-12
 
 ### Added
