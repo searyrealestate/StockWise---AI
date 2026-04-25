@@ -1,5 +1,24 @@
 # Changelog
 
+## [P0.2-fix] - 2026-04-26
+
+### Fixed
+- `tests/test_ibkr_determinism.py`: Subprocess hang bug — added `dsm.disconnect()`
+  in `finally` block + `sys.stdout.flush()` + `os._exit(0)` after result print.
+  Without these, `EClient.run()` thread kept subprocess alive until parent timeout
+  (verified live: 61s timeout → 3s clean exit).
+- `SUBPROCESS_TIMEOUT_SEC`: 120 → 30 (clean fetch ~3s, 10x safety margin).
+
+### Added
+- 2 unit tests in `tests/unit_tests.py`:
+  - `test_fetch_one_symbol_calls_disconnect_on_error`
+  - `test_fetch_one_symbol_calls_disconnect_on_success`
+
+### Verified
+- Live PoC confirmed fix: 3s clean exit vs 61s timeout.
+- All 246 tests pass (244 baseline + 2 new).
+- System test PASSED: 5/5 symbols STABLE, VERDICT: DETERMINISTIC
+
 ## [P0.2] - 2026-04-24
 
 ### Added
