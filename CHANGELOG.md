@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased] - 2026-05-15
+
+### Added
+- Architecture Anatomy Analysis (Wave 1) under `.claude-workspace/architecture-analysis/`
+  - 13 markdown files documenting modules, dependencies, configs, templates, magic numbers, tests, logging, external deps, pain signals, and architecture alignment
+  - Read-only analysis: no production code modified
+
 ## [P0.2-fix] - 2026-04-26
 
 ### Fixed
