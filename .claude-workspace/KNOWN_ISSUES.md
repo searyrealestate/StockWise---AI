@@ -1,5 +1,5 @@
 # StockWise AI — Known Issues & Lessons Learned
-**Last updated (UTC):** 2026-05-16T11:02:04Z
+**Last updated (UTC):** 2026-05-16T13:14:03Z
 **Purpose:** Bugs found, fixes that failed, traps. APPEND-ONLY.
 **Rule:** to update an issue, ADD a new row with a new UTC timestamp.
 Never edit or delete an old row. Latest timestamp = current status.
@@ -12,6 +12,8 @@ Never edit or delete an old row. Latest timestamp = current status.
 | 2026-05-16T11:02:04Z | KI-3 | Data files stale (months old) & mixed format (parquet/csv) | OPEN |
 | 2026-05-16T11:02:04Z | KI-4 | Uncommitted +88 lines in backtest_engine.py, origin unknown | OPEN |
 | 2026-05-16T11:02:04Z | KI-5 | 04_magic_numbers.md still says slippage "50x" — actually 2x | OPEN — doc fix needed |
+| 2026-05-16T13:14:03Z | KI-1 | UPDATE: zero-trades root cause is NOT missing columns. feature_engine healthy. Likely bearish test period. Re-test on bullish range pending. | RE-DIAGNOSED |
+| 2026-05-16T13:14:03Z | KI-6 | DIAGNOSIS_zero_trades.md contains a WRONG primary verdict (checked wrong column names). Kept for history; superseded by DIAGNOSIS_missing_columns.md | DOCUMENTED |
 
 ## Traps — DO NOT do these
 | Logged (UTC) | Trap |
@@ -25,3 +27,5 @@ Never edit or delete an old row. Latest timestamp = current status.
 | Logged (UTC) | Lesson |
 |--------------|--------|
 | 2026-05-16T11:02:04Z | "WR is bad" was actually "0 trades" — verify the metric, not the memory of it |
+| 2026-05-16T13:14:03Z | A diagnosis can be confidently wrong. DIAGNOSIS_zero_trades.md asserted "missing columns" with evidence, but checked the wrong names. ALWAYS verify a root cause with a second independent check before coding a fix. The second diagnosis saved us from editing healthy code. |
+| 2026-05-16T13:14:03Z | When checking if a column is "missing", list ALL actual output columns first and match by meaning, not by assumed name. |

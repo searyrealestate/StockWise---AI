@@ -1,5 +1,5 @@
 # StockWise AI — Task List
-**Last updated (UTC):** 2026-05-16T11:02:04Z
+**Last updated (UTC):** 2026-05-16T13:14:03Z
 **Legend:** ⬜ TODO | 🔵 IN_PROGRESS | ✅ DONE | ⏸️ BLOCKED | ❌ CANCELLED
 **Rule:** never delete a task. Change status by ADDING a status-change
 row in the Status Change Log with a UTC timestamp.
@@ -41,6 +41,17 @@ row in the Status Change Log with a UTC timestamp.
 |-----------------|---------|--------|------|
 | 2026-05-16T11:02:04Z | P0-0 | ⬜ → 🔵 | Diagnosis prompt issued |
 | 2026-05-16T11:02:04Z | P1-3 | ⬜ → 🔵 | Being created in this setup task |
+| 2026-05-16T13:14:03Z | P0-0 | 🔵 → ✅ | Zero-trades diagnosis complete (two passes) |
+| 2026-05-16T13:14:03Z | P0-1 | ⬜ → ❌ | CANCELLED — NumPy/SciPy proven NOT the cause; argrelextrema works |
+| 2026-05-16T13:14:03Z | P0-2 | ⏸️ → 🔵 | Re-scoped: root cause is bearish test period, not a bug. Next: prove via bullish-period backtest |
 
 ## Completed
 (none yet)
+
+## Open Questions (must resolve before any fix)
+| ID | Question | Why it matters |
+|----|----------|----------------|
+| OQ-1 | Does the system generate trades in a BULLISH period? | If yes → no bug, move to baseline. If no → real pipeline bug |
+| OQ-2 | What exact date range + symbols had confirmed uptrend? | Needed to design the OQ-1 test fairly |
+| OQ-3 | Is the WIP in backtest_engine.py (+88 lines) safe to keep? | Still uncommitted, origin unconfirmed (P1-2) |
+| OQ-4 | macd_signal=NaN on early bars — does it cause spurious PASS? | Potential silent wrong-signal bug, separate from zero-trades |
