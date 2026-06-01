@@ -1,224 +1,151 @@
 # micha7_analyzer — Project Structure
 
-> **Version:** 2.0.0
-> **Last Modified:** 2026-06-01T08:50:00Z
+> **Version:** 2.1.0
+> **Last Modified:** 2026-06-01T09:40:00Z
 
 ---
 
-## 1. File Layout — Standalone Project
+## 1. File Layout — Minimal Standalone Project
 
-### Project Root
+**Design principle:** one source file per pipeline layer. 9 source files total
+(was 26 in the previous draft). Files are flat under `micha7/micha7/` — no
+subpackage directories. Rationale: minimize file count per project policy and
+ADR-010 (avoid artificial file splits). Split trigger: any file exceeding
+800 LOC is split per IMP-004 (IMPROVEMENT_ROADMAP.md).
 
 ```
 StockWise - AI/
 └── micha7/                         ← Standalone project root
-    ├── pyproject.toml              ← Independent dependencies
-    ├── config.json                 ← All parameters (no hardcoded)
+    ├── pyproject.toml              ← Dependencies + pytest config
+    ├── config.json                 ← All parameters (no hardcoded values)
     ├── README.md
     ├── .gitignore
     │
-    ├── micha7/                     ← Python package
-    │   ├── __init__.py
+    ├── micha7/                     ← Python package (flat)
+    │   ├── __init__.py             ← __version__
+    │   ├── __main__.py             ← CLI (--version)
+    │   ├── config.py               ← ConfigLoader + Logger
+    │   ├── data.py                 ← DataProvider(s) + DataAdapter + metrics
+    │   ├── features.py             ← DAG + F1–F7 + ScoringEngine
+    │   ├── state.py                ← StateManager + WAL + PivotDetector
+    │   ├── trade.py                ← EntryPlanner + RiskManager
     │   ├── analyzer.py             ← Micha7Analyzer (facade)
-    │   ├── config_loader.py
-    │   ├── logger.py
-    │   │
-    │   ├── data/
-    │   │   ├── __init__.py
-    │   │   ├── base_provider.py    ← BaseDataProvider (ABC)
-    │   │   ├── yfinance_provider.py
-    │   │   ├── data_adapter.py
-    │   │   └── shared_metrics.py   ← ATR, returns, etc.
-    │   │
-    │   ├── features/
-    │   │   ├── __init__.py
-    │   │   ├── base_feature.py
-    │   │   ├── feature_dag.py
-    │   │   ├── f1_candle.py
-    │   │   ├── f2_trend.py
-    │   │   ├── f3_volume.py
-    │   │   ├── f4_ma_distance.py
-    │   │   ├── f5_gaps.py
-    │   │   ├── f6_sr_levels.py
-    │   │   ├── f7_cci.py
-    │   │   └── scoring.py          ← ScoringEngine
-    │   │
-    │   ├── state/
-    │   │   ├── __init__.py
-    │   │   ├── state_manager.py    ← Atomic + schema versioning
-    │   │   ├── wal.py              ← Write-Ahead Log
-    │   │   └── pivot_detector.py   ← State machine
-    │   │
-    │   ├── trade/
-    │   │   ├── __init__.py
-    │   │   ├── entry_planner.py
-    │   │   └── risk_manager.py     ← Standalone (no StockWise dependency)
-    │   │
-    │   └── backtest/
-    │       ├── __init__.py
-    │       ├── runner.py
-    │       └── report.py
+    │   └── backtest.py             ← BacktestRunner + BacktestReport
     │
-    ├── tests/
-    │   ├── conftest.py             ← Shared fixtures (mock provider, sample data)
-    │   ├── unit/                   ← Per-module unit tests
-    │   ├── integration/            ← E2E flows
-    │   └── fixtures/               ← Deterministic test data (sample_ohlcv.csv)
+    ├── tests/                      ← One test module per source file
+    │   ├── __init__.py
+    │   ├── conftest.py             ← Shared fixtures (mock provider, sample OHLCV)
+    │   ├── test_smoke.py
+    │   ├── test_config.py
+    │   ├── test_data.py
+    │   ├── test_features.py
+    │   ├── test_state.py
+    │   ├── test_trade.py
+    │   └── test_integration.py     ← Full pipeline + backtest E2E
     │
     ├── state/                      ← Runtime (gitignored)
-    │   ├── live/
-    │   ├── paper/
-    │   ├── backtest/
-    │   └── _system/
+    │   ├── live/  paper/  backtest/  _system/
     │
     └── outputs/                    ← Runtime (gitignored)
-        ├── charts/
-        └── reports/
+        ├── charts/  reports/
 ```
 
-### Key Differences from Previous Layout (ADR-001 → ADR-014)
-
-| Previous | Current |
-|----------|---------|
-| `micha7_*.py` files in StockWise root | All code under `micha7/` subfolder |
-| Modified StockWise core files | No StockWise file modifications |
-| Used StockWise data + risk modules | Standalone DataProvider + RiskManager |
-| Tests in `unit_tests.py` | Dedicated `tests/` directory with pytest |
+### File count: 9 source + ~8 test modules. Previous draft: 26 source files.
 
 ---
 
 ## 2. Module Responsibilities
 
+### `micha7/__init__.py`
+**Contains:** `__version__` string.
+**Why:** Standard Python package marker. Single source of truth for version.
+**Dependencies:** none
+
+---
+
+### `micha7/__main__.py` — CLI
+**Contains:** `main()` — `--version` argument; exits cleanly.
+**Why:** Enables `python -m micha7` invocation without an installer.
+**Dependencies:** `micha7` (self); standard library (`argparse`, `sys`)
+
+---
+
+### `micha7/config.py` — ConfigLoader + Logger
+**Contains:** `ConfigLoader` (loads `config.json`, merges `config.local.json` overrides, validates schema); structured JSON logger used by all other modules.
+**Why:** All modules receive a single validated config object; consistent log format enables log parsing and alerting in later phases.
+**Dependencies:** standard library only (`json`, `pathlib`, `logging`)
+
+---
+
+### `micha7/data.py` — Data Layer
+**Contains:** `BaseDataProvider` (ABC — `fetch_ohlcv(symbol, start, end)` contract), `YFinanceProvider` (Phase 1 implementation with retry logic), `DataAdapter` (validates + normalizes provider output), shared metrics (ATR, returns, volume ratios pre-calculated once for all features).
+**Why:** `BaseDataProvider` is the main seam for future data source replacement (ADR-015). Changing from yfinance to IBKR = swap one class, touch nothing else. All data concerns cohesive in one file.
+**Dependencies:** `yfinance`, `pandas`, `numpy`; `micha7.config`
+
+---
+
+### `micha7/features.py` — Feature Pipeline
+**Contains:** `BaseFeature` ABC, `FeatureDAG` (topological sort + executor, ADR-003), F1_Candle through F7_CCI (7 concrete features — pure functions), `ScoringEngine` (aggregates scores, maintains history).
+**Why:** All feature logic cohesive in one file; DAG enforces ordering and validates no cycles at startup. **Split trigger: 800 LOC** (IMP-004 — split into `features/` subpackage when reached).
+**Dependencies:** `pandas`, `numpy`; `micha7.data`, `micha7.config`
+
+---
+
+### `micha7/state.py` — Persistence Layer
+**Contains:** `StateManager` (atomic writes via rename pattern, schema versioning, migration, startup recovery), `WriteAheadLog` (transition log; enables replay after crash), `PivotDetector` (state machine: Idle → Armed → Triggered → Invalidated).
+**Why:** Persistence infrastructure is generic and reusable for future analyzers. Kept separate from domain logic (ADR-005, ADR-006).
+**Dependencies:** standard library (`json`, `pathlib`); `micha7.config`
+
+---
+
+### `micha7/trade.py` — Trade Layer
+**Contains:** `EntryPlanner` (computes entry price, stop loss, 3 targets, R:R ratio), `RiskManager` (standalone position sizing validated against config limits — no StockWise dependency).
+**Why:** Trade logic is distinct from analysis. Standalone `RiskManager` can later be replaced by a StockWise adapter (Phase 6+) without touching the analysis pipeline.
+**Dependencies:** `pandas`, `numpy`; `micha7.config`
+
+---
+
 ### `micha7/analyzer.py` — Micha7Analyzer (Facade)
-**Contains:** `Micha7Analyzer` class — single entry point that orchestrates the full pipeline: data → features → scoring → pivot → entry → risk.
-
-**Why:** All subpackages have well-defined interfaces; the facade composes them without owning their logic. Keeps orchestration separate from domain logic.
-
-**Dependencies:** `micha7.data`, `micha7.features`, `micha7.state`, `micha7.trade`, `micha7.config_loader`, `micha7.logger`
+**Contains:** `Micha7Analyzer` — single entry point orchestrating the full pipeline: data → features → scoring → pivot detection → entry planning → risk validation.
+**Why:** Facade pattern (ADR-010); composes all layers without owning their logic. Thin by design (~150 LOC).
+**Dependencies:** `micha7.data`, `micha7.features`, `micha7.state`, `micha7.trade`, `micha7.config`
 
 ---
 
-### `micha7/config_loader.py`
-**Contains:** `ConfigLoader` — loads `config.json`, optionally merges `config.local.json` overrides, validates schema.
-
-**Why:** All modules receive a validated config object; no module does its own file I/O for config.
-
-**Dependencies:** standard library only (`json`, `pathlib`)
-
----
-
-### `micha7/logger.py`
-**Contains:** Structured JSON logger setup used by all modules.
-
-**Why:** Consistent log format; enables log parsing and alerting in later phases.
-
-**Dependencies:** standard library only (`logging`)
-
----
-
-### `micha7/data/` subpackage
-
-| Module | Contains | Notes |
-|--------|----------|-------|
-| `base_provider.py` | `BaseDataProvider` (ABC) | Defines `fetch_ohlcv(symbol, start, end)` contract |
-| `yfinance_provider.py` | `YFinanceProvider` | Phase 1 implementation; includes retry logic |
-| `data_adapter.py` | `DataAdapter` | Validates + normalizes provider output; rejects bad data |
-| `shared_metrics.py` | Pre-calculated ATR, returns, volume ratios | Shared across all features to avoid duplication |
-
-**Why separate:** `BaseDataProvider` is the main seam for future data source replacement (ADR-015). Changing from yfinance to IBKR = swap one class, touch nothing else.
-
-**Dependencies:** `yfinance`, `pandas`, `numpy`; `micha7.config_loader`, `micha7.logger`
-
----
-
-### `micha7/features/` subpackage
-
-| Module | Contains | Notes |
-|--------|----------|-------|
-| `base_feature.py` | `BaseFeature` ABC | Declares `compute(ohlcv, context) → FeatureResult` contract |
-| `feature_dag.py` | `FeatureDAG` | Topological sort; validates no cycles; executes in order |
-| `f1_candle.py` | Candle pattern scoring | |
-| `f2_trend.py` | Monthly trend direction | |
-| `f3_volume.py` | Volume momentum | |
-| `f4_ma_distance.py` | Distance from MA20 | |
-| `f5_gaps.py` | Gap detection above/below | |
-| `f6_sr_levels.py` | Support/Resistance levels | |
-| `f7_cci.py` | CCI(14) scoring | |
-| `scoring.py` | `ScoringEngine` | Aggregates feature scores; maintains score history |
-
-**Why separate:** Each feature is independently testable as a pure function. Adding a new feature = add a node, no refactoring required (ADR-003).
-
-**Dependencies:** `pandas`, `numpy`; `micha7.data.shared_metrics`, `micha7.config_loader`
-
----
-
-### `micha7/state/` subpackage
-
-| Module | Contains | Notes |
-|--------|----------|-------|
-| `state_manager.py` | `StateManager` | Atomic writes, schema versioning, migration, startup recovery |
-| `wal.py` | `WriteAheadLog` | Logs transitions; enables replay after crash |
-| `pivot_detector.py` | `PivotDetector` | State machine: Idle → Armed → Triggered → Invalidated |
-
-**Why separate:** Persistence infrastructure is generic and reusable for future analyzers. Strong separation from domain logic (ADR-005, ADR-006).
-
-**Dependencies:** standard library (`json`, `pathlib`); `micha7.config_loader`, `micha7.logger`
-
----
-
-### `micha7/trade/` subpackage
-
-| Module | Contains | Notes |
-|--------|----------|-------|
-| `entry_planner.py` | `EntryPlanner` | Computes entry price, stop loss, 3 targets, R:R ratio |
-| `risk_manager.py` | `RiskManager` (standalone) | Position sizing against config limits — no StockWise dependency |
-
-**Why separate:** Trade logic is distinct from analysis; the standalone RiskManager can later be replaced by a StockWise adapter (Phase 6+) without touching the analysis pipeline.
-
-**Dependencies:** `pandas`, `numpy`; `micha7.config_loader`
-
----
-
-### `micha7/backtest/` subpackage
-
-| Module | Contains | Notes |
-|--------|----------|-------|
-| `runner.py` | `BacktestRunner` | Loops over historical data bar-by-bar; calls `Micha7Analyzer` |
-| `report.py` | `BacktestReport` | Assembles metrics: PF, WR, max drawdown, trade log |
-
-**Why separate:** Backtest is an application layer over the analysis pipeline. Analysis modules have no knowledge of backtesting.
-
-**Dependencies:** `pandas`, `numpy`; `micha7.analyzer`, `micha7.data`, `micha7.config_loader`
+### `micha7/backtest.py` — Backtest Engine
+**Contains:** `BacktestRunner` (loops over historical data bar-by-bar, calls `Micha7Analyzer`), `BacktestReport` (assembles PF, WR, max drawdown, trade log).
+**Why:** Application layer over the analysis pipeline. Analysis modules have no knowledge of backtesting — clean separation.
+**Dependencies:** `pandas`, `numpy`; `micha7.analyzer`, `micha7.data`, `micha7.config`
 
 ---
 
 ## 3. Class Hierarchy & Interactions
 
 ```
-BacktestRunner  (application layer — micha7/backtest/runner.py)
+BacktestRunner  (backtest.py)
     │
-    └── drives: Micha7Analyzer  (facade — micha7/analyzer.py)
+    └── drives: Micha7Analyzer  (analyzer.py)
                     │
-                    ├── uses: DataAdapter  (micha7/data/data_adapter.py)
-                    │            └── uses: BaseDataProvider  (ABC)
-                    │                         └── impl: YFinanceProvider
+                    ├── uses: DataAdapter  (data.py)
+                    │            └── uses: BaseDataProvider (ABC)
+                    │                         └── impl: YFinanceProvider (data.py)
                     │
-                    ├── uses: FeatureDAG  (micha7/features/feature_dag.py)
-                    │            ├── executes: F1_Candle … F7_CCI
-                    │            └── reads: shared_metrics (ATR, returns)
+                    ├── uses: FeatureDAG  (features.py)
+                    │            ├── executes: F1_Candle … F7_CCI (features.py)
+                    │            └── reads: shared_metrics (data.py)
                     │
-                    ├── uses: ScoringEngine  (micha7/features/scoring.py)
+                    ├── uses: ScoringEngine  (features.py)
                     │
-                    ├── uses: PivotDetector  (micha7/state/pivot_detector.py)
-                    │            └── uses: StateManager  (micha7/state/state_manager.py)
-                    │                         └── uses: WriteAheadLog  (micha7/state/wal.py)
+                    ├── uses: PivotDetector  (state.py)
+                    │            └── uses: StateManager (state.py)
+                    │                         └── uses: WriteAheadLog (state.py)
                     │
-                    ├── uses: EntryPlanner  (micha7/trade/entry_planner.py)
+                    ├── uses: EntryPlanner  (trade.py)
                     │
-                    └── uses: RiskManager  (micha7/trade/risk_manager.py)
+                    └── uses: RiskManager  (trade.py)
                                  — standalone, no StockWise dependency
 
-Third-party libraries: yfinance (data only), pandas, numpy.
+Third-party: yfinance (data.py only), pandas, numpy.
 No StockWise modules anywhere in this diagram.
 ```
 
@@ -228,10 +155,9 @@ No StockWise modules anywhere in this diagram.
 
 | Pattern | Usage |
 |---------|-------|
-| `micha7/<subpackage>/<module>.py` | All package modules |
-| `tests/unit/test_<module>.py` | Unit tests — one file per module |
-| `tests/integration/test_<flow>.py` | Integration / E2E tests |
-| `tests/fixtures/<name>.csv` | Deterministic test data |
+| `micha7/<module>.py` | All package source files (flat — no subpackages) |
+| `tests/test_<module>.py` | One test file per source module |
+| `tests/test_integration.py` | Full pipeline + backtest E2E tests |
 | `config.json` | Public config schema (committed) |
 | `config.local.json` | Private values (gitignored) |
 | `*.local.md` | Private documentation (gitignored) |
@@ -243,50 +169,41 @@ No StockWise modules anywhere in this diagram.
 ## 5. Import Graph (No Circular Dependencies)
 
 ```
-          config_loader    logger
-                ↑              ↑
-                │  (all modules read from both)
-     ┌──────────┼──────────────┼──────────────┐
-     │          │              │              │
-   data/    features/       state/         trade/
-     ↑          ↑              ↑              ↑
-     │          └──────────────┴──────────────┘
-     │                         │
-     └──────── analyzer ────────┘
-                    ↑
-                    │
-             backtest/runner
+              config.py
+                  ↑
+                  │ (all modules import config)
+     ┌────────────┼────────────┬────────────┐
+     │            │            │            │
+  data.py    features.py   state.py     trade.py
+     ↑            ↑
+     │            │ (features imports data for shared_metrics)
+     └────────────┘
+                  ↑
+             analyzer.py
+                  ↑
+             backtest.py
 
-Third-party (external): yfinance → data/ only; pandas, numpy → data/, features/, trade/, backtest/
+Third-party: yfinance → data.py only; pandas, numpy → data.py, features.py, trade.py, backtest.py
 ```
 
-**Verified:** No circular imports. No StockWise imports anywhere in this graph. All dependencies flow downward from `backtest/runner` to leaf modules.
+**Verified:** No circular imports. No StockWise imports anywhere in this graph. All dependencies flow downward from `backtest.py` to `config.py`.
 
 ---
 
 ## 6. Lines of Code Estimates
 
-| Module | Estimated LOC | Justification |
-|--------|---------------|---------------|
-| `micha7/analyzer.py` | 150–250 | Thin facade; delegates to subpackages |
-| `micha7/config_loader.py` | 60–100 | Load + validate config.json |
-| `micha7/logger.py` | 40–60 | Logger setup |
-| `micha7/data/base_provider.py` | 30–50 | ABC only |
-| `micha7/data/yfinance_provider.py` | 100–150 | Fetch + retry logic |
-| `micha7/data/data_adapter.py` | 100–150 | Validation + normalization |
-| `micha7/data/shared_metrics.py` | 80–120 | ATR, returns, volume ratios |
-| `micha7/features/base_feature.py` | 30–50 | ABC only |
-| `micha7/features/feature_dag.py` | 80–120 | Topological sort + executor |
-| `micha7/features/f1–f7.py` (×7) | 60–100 each | ~490–700 combined |
-| `micha7/features/scoring.py` | 100–150 | Aggregation + score history |
-| `micha7/state/state_manager.py` | 150–200 | Atomic writes + migration |
-| `micha7/state/wal.py` | 80–120 | WAL read/write/replay |
-| `micha7/state/pivot_detector.py` | 120–180 | State machine |
-| `micha7/trade/entry_planner.py` | 100–150 | Targets + stop + R:R |
-| `micha7/trade/risk_manager.py` | 80–120 | Standalone position sizing |
-| `micha7/backtest/runner.py` | 150–250 | Backtest orchestration |
-| `micha7/backtest/report.py` | 100–150 | Metrics assembly |
-| **TOTAL** | **~1840–2870** | All standalone — no StockWise files modified |
+| File | Estimated LOC | Justification |
+|------|---------------|---------------|
+| `micha7/__init__.py` | ~10 | Version only |
+| `micha7/__main__.py` | ~30 | CLI entry point |
+| `micha7/config.py` | ~150 | ConfigLoader + Logger |
+| `micha7/data.py` | ~300 | Provider(s) + DataAdapter + shared metrics |
+| `micha7/features.py` | ~650 | DAG + 7 features + ScoringEngine; **split trigger: 800 LOC (IMP-004)** |
+| `micha7/state.py` | ~350 | StateManager + WAL + PivotDetector |
+| `micha7/trade.py` | ~200 | EntryPlanner + RiskManager |
+| `micha7/analyzer.py` | ~150 | Thin facade |
+| `micha7/backtest.py` | ~250 | BacktestRunner + BacktestReport |
+| **TOTAL** | **~2090** | All standalone — no StockWise files modified |
 
 ---
 
@@ -298,7 +215,7 @@ All configurable parameters live in `config.json` at the standalone project root
 - `config.json` — committed; contains keys with safe defaults (no sensitive thresholds)
 - `config.local.json` — gitignored; overrides sensitive values for your machine
 
-`config_loader.py` merges both at startup: local values override schema defaults.
+`config.py` (ConfigLoader) merges both at startup: local values override schema defaults.
 
 | Category | Examples | File |
 |----------|----------|------|
@@ -318,36 +235,15 @@ All configurable parameters live in `config.json` at the standalone project root
 ```
 micha7/
 └── tests/
-    ├── conftest.py                     ← MockDataProvider fixture, sample_ohlcv loader
-    ├── fixtures/
-    │   └── sample_ohlcv.csv            ← Deterministic 90-day OHLCV (committed)
-    │
-    ├── unit/
-    │   ├── test_config_loader.py
-    │   ├── test_data_adapter.py
-    │   ├── test_yfinance_provider.py
-    │   ├── test_shared_metrics.py
-    │   ├── test_feature_dag.py
-    │   ├── test_f1_candle.py           ← One file per feature
-    │   ├── test_f2_trend.py
-    │   ├── test_f3_volume.py
-    │   ├── test_f4_ma_distance.py
-    │   ├── test_f5_gaps.py
-    │   ├── test_f6_sr_levels.py
-    │   ├── test_f7_cci.py
-    │   ├── test_scoring.py
-    │   ├── test_state_manager.py       ← Atomic + recovery tests
-    │   ├── test_wal.py
-    │   ├── test_pivot_detector.py      ← State machine tests
-    │   ├── test_entry_planner.py
-    │   ├── test_risk_manager.py
-    │   ├── test_backtest_runner.py
-    │   └── test_backtest_report.py
-    │
-    └── integration/
-        ├── test_full_pipeline.py       ← DataAdapter → Score → EntryPlan
-        ├── test_backtest_e2e.py        ← Full backtest on fixtures
-        └── test_state_recovery.py     ← Crash → restart → consistent state
+    ├── __init__.py
+    ├── conftest.py             ← MockDataProvider fixture, deterministic OHLCV data
+    ├── test_smoke.py           ← Package imports, version format (green baseline)
+    ├── test_config.py          ← ConfigLoader, Logger
+    ├── test_data.py            ← DataAdapter, YFinanceProvider, shared metrics
+    ├── test_features.py        ← FeatureDAG, F1–F7, ScoringEngine
+    ├── test_state.py           ← StateManager, WAL, PivotDetector
+    ├── test_trade.py           ← EntryPlanner, RiskManager
+    └── test_integration.py    ← Full pipeline + backtest E2E + state recovery
 ```
 
 **Test naming convention:** `test_{component}_{scenario}_{expected_outcome}`

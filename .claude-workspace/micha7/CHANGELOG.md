@@ -8,6 +8,24 @@
 
 ## 2026-06-01
 
+### 2026-06-01T09:40:00Z — [CODE] Minimal skeleton + PROJECT_STRUCTURE.md correction
+**Author:** Claude Code (implementation session) + Eyal
+**Files Modified:**
+- PROJECT_STRUCTURE.md (corrected to 9-source-file minimal flat layout — v2.1.0)
+**Files Created:**
+- micha7/pyproject.toml, .gitignore, README.md
+- micha7/micha7/ (__init__.py, __main__.py)
+- micha7/tests/ (__init__.py, conftest.py, test_smoke.py)
+- micha7/state/.gitkeep, micha7/outputs/.gitkeep
+
+**Action:** Replaced the 26-file draft layout with a minimal 9-source-file flat layout (one file per pipeline layer) per project policy. Created the importable skeleton; `python -m micha7 --version` works and 2 smoke tests pass.
+
+**Rationale:** Minimize file count (project policy + ADR-010). Establish a green TDD baseline before any business logic.
+
+**Verification:** pytest → 2 passed; python -m micha7 --version → micha7_analyzer 0.1.0; PROJECT_STRUCTURE.md consistent with skeleton.
+
+---
+
 ### 2026-06-01T08:50:00Z — [DOC] PROJECT_STRUCTURE.md Sections 2–7 migrated to standalone
 **Author:** Claude (architect session) + Eyal
 **Files Modified:**
@@ -243,8 +261,8 @@ Every action in this project requires a changelog entry:
 
 ## Statistics
 
-- **Total Entries:** 10
-- **Categories Used:** ARCH, DOC, DECISION
+- **Total Entries:** 11
+- **Categories Used:** ARCH, DOC, DECISION, CODE
 - **Files Tracked:** 11 (documentation)
 - **Architecture Issues Resolved:** 47/47 (100%)
 - **ADRs Created:** 15
