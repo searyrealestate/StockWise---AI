@@ -228,28 +228,51 @@ def test_detect_gaps_none_on_continuous(tmp_path, sample_ohlcv):
 
 
 def test_compute_atr_small_known_series():
-    """Period=3; first valid ATR == mean of first 3 True Ranges."""
+    """Canonical Wilder ATR on the 6-row reference series (period=3).
+
+    Hand-computed expected values (independent of implementation):
+
+    TR_0 = high_0 - low_0             = 10 - 9         = 1.0
+    TR_1 = max(12-10, |12-9.5|, |10-9.5|) = max(2, 2.5, 0.5) = 2.5
+    TR_2 = max(11-10, |11-11|,  |10-11|)  = max(1, 0,   1)   = 1.0
+    TR_3 = max(13-11, |13-10.5|,|11-10.5|)= max(2, 2.5, 0.5) = 2.5
+    TR_4 = max(12-10, |12-12|,  |10-12|)  = max(2, 0,   2)   = 2.0
+    TR_5 = max(14-12, |14-11|,  |12-11|)  = max(2, 3,   1)   = 3.0
+
+    ATR[0] = NaN   (warmup)
+    ATR[1] = NaN   (warmup)
+    ATR[2] = (1.0 + 2.5 + 1.0) / 3 = 1.5          (SMA seed)
+    ATR[3] = (1.5 * 2 + 2.5) / 3   = 5.5 / 3 ≈ 1.8333...
+    ATR[4] = (ATR[3] * 2 + 2.0) / 3
+    ATR[5] = (ATR[4] * 2 + 3.0) / 3
+    """
     dates = pd.date_range("2025-01-01", periods=6, freq="D")
     df = pd.DataFrame(
         {
-            "open":  [10.0, 11.0, 12.0, 11.0, 10.0, 11.0],
-            "high":  [12.0, 13.0, 14.0, 13.0, 12.0, 13.0],
-            "low":   [ 9.0, 10.0, 11.0, 10.0,  9.0, 10.0],
-            "close": [11.0, 12.0, 13.0, 12.0, 11.0, 12.0],
-            "volume":[1000, 1000, 1000, 1000, 1000, 1000],
+            "open":  [10.0, 11.0, 10.5, 12.0, 11.0, 13.0],
+            "high":  [10.0, 12.0, 11.0, 13.0, 12.0, 14.0],
+            "low":   [ 9.0, 10.0, 10.0, 11.0, 10.0, 12.0],
+            "close": [ 9.5, 11.0, 10.5, 12.0, 11.0, 13.0],
+            "volume": [1000, 1000, 1000, 1000, 1000, 1000],
         },
         index=dates,
     )
     atr = compute_atr(df, period=3)
-    # Warmup: first value (no prev_close) is NaN
-    assert math.isnan(atr.iloc[0])
-    # True ranges for rows 1-3 (period=3):
-    # row 1: TR = max(13-10, |13-11|, |10-11|) = max(3,2,1) = 3
-    # row 2: TR = max(14-11, |14-12|, |11-12|) = max(3,2,1) = 3
-    # row 3: TR = max(13-11, |13-13|, |10-13|) = max(2,0,3) = 3
-    # mean of first 3 TRs = 3.0
-    first_valid = atr.dropna().iloc[0]
-    assert abs(first_valid - 3.0) < 1e-9
+
+    # Warmup rows are NaN
+    assert math.isnan(atr.iloc[0]), "ATR[0] must be NaN (warmup)"
+    assert math.isnan(atr.iloc[1]), "ATR[1] must be NaN (warmup)"
+
+    # SMA seed: exact literal
+    assert atr.iloc[2] == pytest.approx(1.5, abs=1e-12), (
+        f"ATR[2] should be 1.5 (SMA seed), got {atr.iloc[2]}"
+    )
+
+    # First Wilder step: (1.5 * 2 + 2.5) / 3 = 5.5 / 3
+    expected_atr3 = 5.5 / 3  # ≈ 1.8333...
+    assert atr.iloc[3] == pytest.approx(expected_atr3, abs=1e-12), (
+        f"ATR[3] should be {expected_atr3:.10f}, got {atr.iloc[3]}"
+    )
 
 
 def test_compute_atr_deterministic(sample_ohlcv):

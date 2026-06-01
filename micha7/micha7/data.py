@@ -147,32 +147,47 @@ _REQUIRED_COLUMNS = {"open", "high", "low", "close", "volume"}
 
 
 def compute_atr(df: pd.DataFrame, period: int) -> pd.Series:
-    """Compute Average True Range (Wilder SMA over *period* bars).
+    """Compute canonical Wilder Average True Range.
 
-    True Range = max(high-low, |high - prev_close|, |low - prev_close|).
-    The first row has no prev_close so its TR is NaN; warmup rows up to
-    (and including) row *period* - 1 are NaN.
+    True Range rules:
+      TR_0   = high_0 - low_0  (first bar has no previous close)
+      TR_t   = max(high_t - low_t,
+                   abs(high_t  - close_{t-1}),
+                   abs(low_t   - close_{t-1}))   for t >= 1
 
-    Returns a Series aligned with df.index.
+    ATR rules (Wilder, SMA-seeded):
+      ATR[i]          = NaN                             for i < period - 1
+      ATR[period - 1] = mean(TR[0 .. period - 1])       (simple average seed)
+      ATR[t]          = (ATR[t-1] * (period - 1) + TR[t]) / period
+                                                         for t >= period
+
+    Alpha = 1/period (true Wilder, NOT the EWM span convention 2/(period+1)).
+    Pure function — same input always produces identical output (ADR-012).
+
+    Returns a pd.Series aligned to df.index.
     """
-    high = df["high"]
-    low = df["low"]
-    close = df["close"]
-    prev_close = close.shift(1)
+    highs = df["high"].to_numpy()
+    lows = df["low"].to_numpy()
+    closes = df["close"].to_numpy()
+    n = len(highs)
 
-    tr = pd.concat(
-        [
-            high - low,
-            (high - prev_close).abs(),
-            (low - prev_close).abs(),
-        ],
-        axis=1,
-    ).max(axis=1)
+    import numpy as np
 
-    # First TR is NaN (no prev_close); use SMA for the initial period seed,
-    # then Wilder smoothing (equivalent to EMA with alpha=1/period).
-    atr = tr.ewm(span=period, min_periods=period, adjust=False).mean()
-    return atr
+    trs = np.empty(n, dtype=float)
+    trs[0] = highs[0] - lows[0]
+    for i in range(1, n):
+        hl = highs[i] - lows[i]
+        hc = abs(highs[i] - closes[i - 1])
+        lc = abs(lows[i] - closes[i - 1])
+        trs[i] = max(hl, hc, lc)
+
+    atr_vals = np.full(n, float("nan"))
+    if n >= period:
+        atr_vals[period - 1] = trs[:period].mean()
+        for i in range(period, n):
+            atr_vals[i] = (atr_vals[i - 1] * (period - 1) + trs[i]) / period
+
+    return pd.Series(atr_vals, index=df.index, name="atr")
 
 
 def compute_returns(df: pd.DataFrame) -> pd.Series:

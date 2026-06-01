@@ -8,6 +8,20 @@
 
 ## 2026-06-01
 
+### 2026-06-01T11:00:00Z — [FIX] compute_atr: canonical Wilder ATR (SMA-seeded)
+**Author:** Claude Code (implementation session) + Eyal
+**Files Modified:**
+- micha7/micha7/data.py (compute_atr rewritten: TR_0 = high-low; SMA seed; Wilder recursion alpha=1/period)
+- micha7/tests/test_data.py (ATR test asserts literal canonical values)
+
+**Action:** Architect review found compute_atr used ewm(span=period) (alpha=2/(period+1)) while its docstring claimed Wilder (alpha=1/period) with an SMA seed — a code/doc contradiction and a non-canonical ATR. Replaced with canonical Wilder ATR (SMA-seeded). Test now asserts hand-computed literal values (ATR[2]=1.5, ATR[3]≈1.8333 for the 6-row period=3 reference).
+
+**Rationale:** ATR feeds F4 (distance in ATR units) and the EntryPlanner stop. Correctness must be locked before features depend on it. Same-author TDD risked a self-confirming test.
+
+**Verification:** STEP 0 verification compared actual vs hand-computed; pytest GREEN (38); ATR test uses literal expected values.
+
+---
+
 ### 2026-06-01T10:35:00Z — [CODE] data.py: provider contract, yfinance, adapter, metrics
 **Author:** Claude Code (implementation session) + Eyal
 **Files Created:**
@@ -293,8 +307,8 @@ Every action in this project requires a changelog entry:
 
 ## Statistics
 
-- **Total Entries:** 13
-- **Categories Used:** ARCH, DOC, DECISION, CODE
+- **Total Entries:** 14
+- **Categories Used:** ARCH, DOC, DECISION, CODE, FIX
 - **Files Tracked:** 11 (documentation)
 - **Architecture Issues Resolved:** 47/47 (100%)
 - **ADRs Created:** 15
