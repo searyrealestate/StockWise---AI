@@ -8,6 +8,19 @@
 
 ## 2026-06-01
 
+### 2026-06-01T08:50:00Z — [DOC] PROJECT_STRUCTURE.md Sections 2–7 migrated to standalone
+**Author:** Claude (architect session) + Eyal
+**Files Modified:**
+- PROJECT_STRUCTURE.md (Sections 2–7 rewritten for standalone package layout)
+
+**Action:** Completed the standalone migration started in Prompt 0. Sections 2–7 (Module Responsibilities, Class Hierarchy, Naming, Import Graph, LOC, Config) and Sections 8–9 (Test organization, .gitignore) rewritten to match the `micha7/` package layout. All StockWise infrastructure references (`data_source_manager`, `portfolio_risk`, `notification_manager`, `feature_engine`) removed.
+
+**Rationale:** Section 1 (Prompt 0) and Sections 2–7 were contradictory — Section 1 described standalone, the rest described the old StockWise-coupled design. A self-contradictory structure document would mislead implementation.
+
+**Verification:** grep for StockWise module names returns zero hits in PROJECT_STRUCTURE.md.
+
+---
+
 ### 2026-06-01T08:30:00Z — [DECISION] ADR-014 + ADR-015: Standalone-First + DataProvider Interface
 **Author:** Claude (architect session) + Eyal
 **Files Modified:**
@@ -230,7 +243,7 @@ Every action in this project requires a changelog entry:
 
 ## Statistics
 
-- **Total Entries:** 9
+- **Total Entries:** 10
 - **Categories Used:** ARCH, DOC, DECISION
 - **Files Tracked:** 11 (documentation)
 - **Architecture Issues Resolved:** 47/47 (100%)
