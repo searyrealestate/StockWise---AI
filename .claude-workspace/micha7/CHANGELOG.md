@@ -8,6 +8,23 @@
 
 ## 2026-06-01
 
+### 2026-06-01T10:35:00Z — [CODE] data.py: provider contract, yfinance, adapter, metrics
+**Author:** Claude Code (implementation session) + Eyal
+**Files Created:**
+- micha7/micha7/data.py (BaseDataProvider, YFinanceProvider, DataAdapter, MarketData, compute_atr, compute_returns)
+- micha7/tests/test_data.py (TDD cases, fully offline)
+**Files Modified:**
+- micha7/config.json (added data block)
+- micha7/tests/conftest.py (deterministic OHLCV fixtures + mock_provider)
+
+**Action:** Built the data layer (pipeline stage 1). DataAdapter.fetch validates (Fail-Loud), normalizes, detects gaps (non-fatal), and computes ATR + returns, returning a MarketData object. yfinance is wrapped behind BaseDataProvider with retry; swappable per ADR-015.
+
+**Rationale:** Clean, validated OHLCV is the prerequisite for feature extraction. Provider abstraction keeps the pipeline source-agnostic.
+
+**Verification:** pytest GREEN (data + config + smoke); ATR matches hand-computed reference; all tests offline.
+
+---
+
 ### 2026-06-01T10:05:00Z — [CODE] config.py: ConfigLoader + structured JSON Logger
 **Author:** Claude Code (implementation session) + Eyal
 **Files Created:**
@@ -276,7 +293,7 @@ Every action in this project requires a changelog entry:
 
 ## Statistics
 
-- **Total Entries:** 12
+- **Total Entries:** 13
 - **Categories Used:** ARCH, DOC, DECISION, CODE
 - **Files Tracked:** 11 (documentation)
 - **Architecture Issues Resolved:** 47/47 (100%)

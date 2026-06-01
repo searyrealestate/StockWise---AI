@@ -8,5 +8,15 @@
     "format": "json",
     "directory": "outputs/logs",
     "console": true
+  },
+  "data": {
+    "atr_period": 14,
+    "min_rows": 30,
+    "max_gap_days": 5,
+    "yfinance": {
+      "retry_count": 3,
+      "retry_backoff_seconds": 1.0,
+      "auto_adjust": true
+    }
   }
 }
