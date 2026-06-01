@@ -1,70 +1,89 @@
 # micha7_analyzer — Project Structure
 
-> **Version:** 1.0.0
-> **Last Modified:** 2026-05-21T05:35:00Z
+> **Version:** 2.0.0
+> **Last Modified:** 2026-06-01T08:30:00Z
 
 ---
 
-## 1. File Layout
+## 1. File Layout — Standalone Project
 
-### New Files (4)
-
-```
-StockWise - AI/
-├── micha7_analyzer.py           ← NEW (main module)
-├── micha7_state_manager.py      ← NEW (persistence layer)
-├── micha7_visualizer.py         ← NEW (output layer)
-├── micha7_scheduler.py          ← NEW (entry layer)
-└── tests/
-    └── test_micha7_integration.py  ← NEW (E2E tests)
-```
-
-### Modified Files (3)
+### Project Root
 
 ```
 StockWise - AI/
-├── system_config.py             ← +MICHA7_CONFIG block
-├── feature_engine.py            ← +candle patterns, +S/R, +shared ATR
-└── unit_tests.py                ← +TestMicha7* classes
+└── micha7/                         ← Standalone project root
+    ├── pyproject.toml              ← Independent dependencies
+    ├── config.json                 ← All parameters (no hardcoded)
+    ├── README.md
+    ├── .gitignore
+    │
+    ├── micha7/                     ← Python package
+    │   ├── __init__.py
+    │   ├── analyzer.py             ← Micha7Analyzer (facade)
+    │   ├── config_loader.py
+    │   ├── logger.py
+    │   │
+    │   ├── data/
+    │   │   ├── __init__.py
+    │   │   ├── base_provider.py    ← BaseDataProvider (ABC)
+    │   │   ├── yfinance_provider.py
+    │   │   ├── data_adapter.py
+    │   │   └── shared_metrics.py   ← ATR, returns, etc.
+    │   │
+    │   ├── features/
+    │   │   ├── __init__.py
+    │   │   ├── base_feature.py
+    │   │   ├── feature_dag.py
+    │   │   ├── f1_candle.py
+    │   │   ├── f2_trend.py
+    │   │   ├── f3_volume.py
+    │   │   ├── f4_ma_distance.py
+    │   │   ├── f5_gaps.py
+    │   │   ├── f6_sr_levels.py
+    │   │   ├── f7_cci.py
+    │   │   └── scoring.py          ← ScoringEngine
+    │   │
+    │   ├── state/
+    │   │   ├── __init__.py
+    │   │   ├── state_manager.py    ← Atomic + schema versioning
+    │   │   ├── wal.py              ← Write-Ahead Log
+    │   │   └── pivot_detector.py   ← State machine
+    │   │
+    │   ├── trade/
+    │   │   ├── __init__.py
+    │   │   ├── entry_planner.py
+    │   │   └── risk_manager.py     ← Standalone (no portfolio_risk)
+    │   │
+    │   └── backtest/
+    │       ├── __init__.py
+    │       ├── runner.py
+    │       └── report.py
+    │
+    ├── tests/
+    │   ├── conftest.py             ← Shared fixtures (mock provider, sample data)
+    │   ├── unit/                   ← Per-module unit tests
+    │   ├── integration/            ← E2E flows
+    │   └── fixtures/               ← Deterministic test data (sample_ohlcv.csv)
+    │
+    ├── state/                      ← Runtime (gitignored)
+    │   ├── live/
+    │   ├── paper/
+    │   ├── backtest/
+    │   └── _system/
+    │
+    └── outputs/                    ← Runtime (gitignored)
+        ├── charts/
+        └── reports/
 ```
 
-### Workspace Files (.claude-workspace/micha7/)
+### Key Differences from Previous Layout (ADR-001 → ADR-014)
 
-```
-.claude-workspace/micha7/
-├── README.md                    ← Documentation hub
-├── ARCHITECTURE.md              ← System architecture
-├── PROJECT_STRUCTURE.md         ← This file
-├── DECISIONS.md                 ← Architecture Decision Records
-├── PHASES.md                    ← Phased rollout plan
-├── CHANGELOG.md                 ← Action log
-├── SECURITY.md                  ← Git policy
-├── GLOSSARY.md                  ← Domain terms
-└── *.local.md                   ← Private notes (gitignored)
-```
-
-### Runtime Directories (created on first run)
-
-```
-state/micha7/
-├── live/
-│   ├── {SYMBOL}.json           ← Per-symbol state
-│   └── _wal.log                 ← Write-Ahead Log
-├── paper/
-│   └── ...                      ← Same structure
-├── backtest/
-│   └── ...                      ← Same structure
-└── _system/
-    ├── circuit_breaker.json
-    └── calendar_cache.json
-
-outputs/micha7/
-├── charts/
-│   ├── {SYMBOL}_{DATE}.html    ← Generated HTML charts
-│   └── {SYMBOL}_{DATE}.pine    ← TradingView Pine Scripts
-└── reports/
-    └── daily_{DATE}.json        ← Daily summary
-```
+| Previous | Current |
+|----------|---------|
+| `micha7_*.py` files in StockWise root | All code under `micha7/` subfolder |
+| Modified `feature_engine.py`, `system_config.py` | No StockWise file modifications |
+| Used StockWise DSM, portfolio_risk | Standalone DataProvider + RiskManager |
+| Tests in `unit_tests.py` | Dedicated `tests/` directory with pytest |
 
 ---
 

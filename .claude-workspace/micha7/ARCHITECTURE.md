@@ -1,8 +1,8 @@
 # micha7_analyzer — Architecture Specification (Public)
 
-> **Version:** 1.1.0
+> **Version:** 2.0.0
 > **Created:** 2026-05-21T05:35:00Z
-> **Last Modified:** 2026-05-21T05:55:00Z
+> **Last Modified:** 2026-06-01T08:30:00Z
 > **Status:** Architecture Complete — Implementation Pending
 > **Maturity Score:** 98.2%
 
@@ -31,10 +31,10 @@
 
 ### What micha7 IS
 
-- A standalone analysis pipeline
+- A standalone analysis pipeline (works without StockWise)
 - A signal generator (not an executor)
 - A template for future deterministic analyzers
-- A consumer of parent system infrastructure
+- A DataProvider-agnostic consumer (uses interface, not concrete provider)
 
 ### What micha7 is NOT
 
@@ -43,18 +43,17 @@
 - An ML/probabilistic system
 - A position management system (delegates to existing infrastructure)
 
-### Integration Surface
+### Integration Surface (Phase 1: Standalone)
 
-| Parent Component | Usage | Modification |
-|------------------|-------|--------------|
-| Data Source Manager | Read OHLCV | None |
-| Feature Engine | Extend with new methods | Additive only |
-| Portfolio Risk | Position sizing | None |
-| Notification Manager | Telegram alerts | None |
-| JSON I/O utilities | All file I/O | None |
-| System Config | Configuration block | Additive only |
+| Component | Source | Modification |
+|-----------|--------|--------------|
+| DataProvider (BaseDataProvider) | micha7 internal | — |
+| YFinanceProvider | micha7 internal | — |
+| Standalone RiskManager | micha7 internal | — |
+| (Future) StockWise DSM | StockWise (optional, Phase 6+) | None — wrapped in adapter |
+| (Future) StockWise Portfolio Risk | StockWise (optional, Phase 6+) | None — wrapped in adapter |
 
-**Untouched components (deliberately isolated):** Template matcher, strategy engine, trust matrix, shadow ledger.
+**Untouched components (Phase 1):** No StockWise modules. micha7 is fully isolated.
 
 ---
 

@@ -9,7 +9,7 @@ This document records *why* architectural choices were made. Each decision inclu
 
 ## ADR-001: Standalone Module on StockWise Infrastructure
 **Date:** 2026-05-21
-**Status:** Accepted
+**Status:** Superseded by ADR-014
 
 ### Context
 Three options for integrating micha7 with StockWise AI:
@@ -31,6 +31,9 @@ Three options for integrating micha7 with StockWise AI:
 - ✅ Easy to test in isolation
 - ✅ No risk of breaking existing templates
 - ⚠️ Some duplication of utility patterns (mitigated by reusing StockWise utilities)
+
+  ### Superseded By
+  ADR-014 (2026-06-01) — Standalone-First Architecture
 
 ---
 
@@ -327,6 +330,68 @@ User requested documentation strategy that allows resuming work in new chat sess
 - ✅ Continuity across chat sessions
 - ✅ Security boundaries enforced by file naming convention
 - ⚠️ Discipline required to keep `.local.md` files updated
+
+---
+
+## ADR-014: Standalone-First Architecture; StockWise Integration Deferred
+**Date:** 2026-06-01
+**Status:** Accepted (supersedes ADR-001)
+
+### Context
+ADR-001 defined micha7 as a "standalone module on StockWise infrastructure."
+Further analysis revealed three issues:
+1. Strong coupling to StockWise blocks development when main project unavailable
+2. Backtest requires hands-on testing — DSM dependency slows iteration
+3. Integration is low-ROI before having a proven system
+
+### Decision
+micha7 in Phase 1 = **fully standalone**. No StockWise dependencies.
+Optional StockWise integration will be added in a later phase via Adapter Pattern.
+
+### Rationale
+- Enables fast, isolated development
+- TDD and CI/CD are simpler (no DSM/portfolio_risk mocks needed)
+- If micha7 proves itself → integration is easy via adapter
+
+### Alternatives Considered
+- **Continue with ADR-001:** Requires duplicating StockWise infrastructure in tests
+- **Hybrid:** Too complex to maintain
+
+### Consequences
+- ✅ Fast development, fewer dependencies
+- ✅ micha7 runs on any machine without StockWise
+- ⚠️ Need standalone implementations of: data fetching, risk validation
+- ⚠️ Future integration = additional work (Phase 6+)
+
+---
+
+## ADR-015: DataProvider Interface; yfinance as Phase 1 Implementation
+**Date:** 2026-06-01
+**Status:** Accepted
+
+### Context
+Phase 1 requires a single data source. We considered: Alpaca, IBKR, yfinance, StockWise DSM.
+Decision: IBKR for future real trading; Phase 1 = yfinance.
+
+### Decision
+Implementation via **Abstract Interface**:
+- `BaseDataProvider` (ABC) — defines contract
+- `YFinanceProvider` — active implementation in Phase 1
+- Future implementations: `IBKRProvider`, `StockWiseDSMProvider`, `AlpacaProvider`
+
+### Rationale
+- Allows future data source replacement without changing Analyzer
+- Tests are simple — `MockDataProvider` for unit tests
+- yfinance is strong enough for historical backtest data
+
+### Alternatives Considered
+- **Direct yfinance calls:** Tight coupling, hard to replace
+- **Multi-provider from day 1:** Over-engineering for Phase 1
+
+### Consequences
+- ✅ Phase 1 develops fast (yfinance: pip install + import)
+- ✅ Phase 4 (paper) / Phase 5 (live) — add IBKRProvider without touching analysis
+- ⚠️ yfinance can be unstable — add retry logic in YFinanceProvider
 
 ---
 

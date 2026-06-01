@@ -1,7 +1,7 @@
 # micha7_analyzer — Phased Rollout Plan
 
 > **Version:** 1.0.0
-> **Last Modified:** 2026-05-21T05:35:00Z
+> **Last Modified:** 2026-06-01T08:30:00Z
 > **Current Phase:** 0 (Architecture Complete) → Ready for Phase 1
 
 ---
@@ -42,27 +42,30 @@
 ### Goal
 Build the core analysis pipeline and validate it against historical data.
 
-### Scope (IN)
-- DataAdapter (StockWise DSM wrapper + validation + ATR)
+### Scope (IN) — Standalone Implementation
+- DataProvider interface (BaseDataProvider ABC)
+- YFinanceProvider (concrete implementation)
+- DataAdapter (validation, normalization, shared metrics)
 - FeatureExtractor (DAG-based, all 7 features)
 - ScoringEngine (aggregation + history)
 - PivotDetector (state machine, in-memory for backtest)
 - EntryPlanner (3 targets + stop + R:R)
-- RiskManager (uses portfolio_risk)
+- **Standalone RiskManager** (no portfolio_risk dependency)
 - StateManager (atomic + WAL + schema versioning)
 - BacktestRunner (orchestrates above)
-- Unit tests for each component
+- Unit tests for each component (TDD per TESTING_PROTOCOL.md)
 - Integration test for full pipeline
 
-### Scope (OUT — deferred to later phases)
+### Scope (OUT — deferred)
+- ❌ StockWise integration (Phase 6+ via adapter)
+- ❌ Live execution (Phase 5)
+- ❌ Paper trading (Phase 4)
+- ❌ HTML visualizer (Phase 3)
+- ❌ Pine Script generator (Phase 3)
 - ❌ Scheduler in production mode (Phase 2)
 - ❌ Trading calendar integration (Phase 2)
 - ❌ Circuit breaker live activation (Phase 2)
 - ❌ Telegram notifications (Phase 2)
-- ❌ HTML visualizer (Phase 3)
-- ❌ Pine Script generator (Phase 3)
-- ❌ Paper trading (Phase 4)
-- ❌ Live trading (Phase 5)
 
 ### Validation Gate (Exit Criteria)
 | Metric | Target | How Measured |

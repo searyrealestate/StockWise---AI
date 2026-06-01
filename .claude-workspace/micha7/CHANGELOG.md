@@ -6,6 +6,32 @@
 
 ---
 
+## 2026-06-01
+
+### 2026-06-01T08:30:00Z — [DECISION] ADR-014 + ADR-015: Standalone-First + DataProvider Interface
+**Author:** Claude (architect session) + Eyal
+**Files Modified:**
+- DECISIONS.md (ADR-001 superseded; ADR-014, ADR-015 added)
+- ARCHITECTURE.md (Section 2: System Boundaries, Integration Surface — v2.0.0)
+- PROJECT_STRUCTURE.md (Section 1: Standalone layout — v2.0.0)
+- PHASES.md (Phase 1 scope clarified — standalone, no StockWise deps)
+
+**Action:** Architectural pivot — micha7 in Phase 1 is fully standalone. StockWise integration deferred to Phase 6+ via Adapter Pattern. Data source = yfinance via BaseDataProvider interface.
+
+**Rationale:**
+- Faster development (no DSM mocks, no StockWise availability dependency)
+- Simpler testing (TDD against MockDataProvider)
+- Lower coupling — micha7 can be developed and validated independently
+- Future StockWise integration becomes an optional adapter once core is proven
+
+**Verification:**
+- Documentation-only change, no code modified
+- Cross-references between 5 updated files verified
+- ADR-001 explicitly marked Superseded, with link to ADR-014
+- All Phase 1 references to DSM/portfolio_risk/notification_manager removed
+
+---
+
 ## 2026-05-21
 
 ### 2026-05-21T05:55:00Z — [DOC] Documentation expanded with Agile + Template Engine + Improvement Roadmap
@@ -204,11 +230,11 @@ Every action in this project requires a changelog entry:
 
 ## Statistics
 
-- **Total Entries:** 8
+- **Total Entries:** 9
 - **Categories Used:** ARCH, DOC, DECISION
 - **Files Tracked:** 11 (documentation)
 - **Architecture Issues Resolved:** 47/47 (100%)
-- **ADRs Created:** 13
+- **ADRs Created:** 15
 - **Phases Completed:** 1/5+ (Phase 0)
 - **Documentation Maturity:** 100%
 - **Architecture Maturity:** 98.2%
