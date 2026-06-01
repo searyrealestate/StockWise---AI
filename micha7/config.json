@@ -1,0 +1,12 @@
+{
+  "meta": {
+    "name": "micha7_analyzer",
+    "config_version": "1.0.0"
+  },
+  "logging": {
+    "level": "INFO",
+    "format": "json",
+    "directory": "outputs/logs",
+    "console": true
+  }
+}

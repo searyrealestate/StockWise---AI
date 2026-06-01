@@ -8,6 +8,21 @@
 
 ## 2026-06-01
 
+### 2026-06-01T10:05:00Z — [CODE] config.py: ConfigLoader + structured JSON Logger
+**Author:** Claude Code (implementation session) + Eyal
+**Files Created:**
+- micha7/config.json (schema + non-sensitive defaults)
+- micha7/micha7/config.py (ConfigLoader, ConfigError, get_logger)
+- micha7/tests/test_config.py (TDD: 17 cases)
+
+**Action:** Built the configuration + logging foundation. ConfigLoader merges config.local.json over config.json and validates type/range with defaults (Fail-Loud on invalid). Logger emits single-line JSON (timestamp UTC, component, level, event, context, correlation_id) for simulator-readable logs.
+
+**Rationale:** Zero hardcoded values requires a loader before any component. Structured logs required for debugging and simulator consumption.
+
+**Verification:** pytest GREEN (config + smoke); sample log line parses as JSON with UTC Z timestamp.
+
+---
+
 ### 2026-06-01T09:40:00Z — [CODE] Minimal skeleton + PROJECT_STRUCTURE.md correction
 **Author:** Claude Code (implementation session) + Eyal
 **Files Modified:**
@@ -261,7 +276,7 @@ Every action in this project requires a changelog entry:
 
 ## Statistics
 
-- **Total Entries:** 11
+- **Total Entries:** 12
 - **Categories Used:** ARCH, DOC, DECISION, CODE
 - **Files Tracked:** 11 (documentation)
 - **Architecture Issues Resolved:** 47/47 (100%)

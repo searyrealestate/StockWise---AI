@@ -4,7 +4,8 @@ state/*
 outputs/*
 !outputs/.gitkeep
 
-# Private config values (config.json schema is committed; values are local)
+# config.json schema is committed; only local overrides are private
+!config.json
 config.local.json
 
 # Logs and temp
