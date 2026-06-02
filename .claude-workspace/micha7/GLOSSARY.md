@@ -1,7 +1,7 @@
 # micha7_analyzer — Glossary
 
-> **Version:** 1.0.0
-> **Last Modified:** 2026-05-21T05:35:00Z
+> **Version:** 1.1.0
+> **Last Modified:** 2026-06-02T22:52:37Z
 
 Domain-specific terms used throughout the project. Alphabetical.
 
@@ -10,10 +10,10 @@ Domain-specific terms used throughout the project. Alphabetical.
 ## A
 
 **ARMED (state)**
-A state in the PivotDetector state machine indicating that a signal has been detected (score ≥ threshold) and the system is now actively watching for entry conditions to be met.
+PivotDetector state entered when score ≥ 6/7 (D-03, D-04). System awaits price reaching a support level with a reversal candle to form a complete pivot trigger (D-10). ARMED persists across EOD runs until pivot fires or invalidation conditions are met (score drops < 4/7, or max ARMED duration exceeded).
 
-**ATR (Average True Range)**
-A volatility indicator. Used in micha7 for normalizing distances (e.g., distance from MA20 in ATR units).
+**ATR (Wilder)**
+Average True Range using Wilder's smoothing: SMA seed at bar (period−1), then recursive ATR[t] = (ATR[t−1]×(period−1) + TR[t]) / period. Alpha = 1/period (NOT 2/(period+1)). Period = 14. Used exclusively in F4 for normalizing distance from MA20. NOT used for stop loss sizing (D-19).
 
 **Atomic Write**
 A file write operation that either completes fully or not at all. Implemented via temp file + POSIX rename pattern.
@@ -24,6 +24,9 @@ A file write operation that either completes fully or not at all. Implemented vi
 
 **Backtest**
 Running the analysis pipeline against historical data to evaluate performance without risk to real capital.
+
+**Bullish/Bearish Feature**
+The output state of each F1–F7 computation. One of three values: BULLISH (✓ favorable), BEARISH (✗ unfavorable), EMPTY (— neutral or insufficient data). Phase 1 (long-only): only BULLISH count drives the score; BEARISH is treated as EMPTY for scoring purposes but logged separately (ADR-016, D-06, D-07). Replaces the previous speculative signed integer model (−1/0/+1).
 
 **Bearish Engulfing**
 A candle pattern where a red candle's body completely contains the previous (smaller) green candle's body. Bearish reversal signal.
@@ -99,11 +102,14 @@ Validation technique. Step through code path to verify expected behavior. Used i
 
 ## G
 
-**Gap**
-Difference between previous day's close and current day's open. A gap "above the head" = current price is below an unfilled gap (acts as magnet pulling price up).
+**Gap (Calendar)**
+A missing trading period in OHLCV data — e.g., a weekend, holiday, or data outage. Detected by `DataAdapter.detect_calendar_gaps()` (renamed from detect_gaps, D-17). Non-fatal; logged as a data quality warning. NOT the same as a price gap. Not a feature input.
+
+**Gap (Price)**
+A discontinuity between one bar's close and the next bar's open. "Gap above the head" = an unfilled upward price gap in a price range above the current close (acts as a magnetic target for price action; 80% of gaps historically close). F5 feature (D-17). Distinct from Calendar Gap. See business_logic.local.md §F5.
 
 **Gap Detector**
-Component identifying open gaps in the price chart that may attract future price action (statistically, 80% of gaps eventually close).
+See **Gap (Calendar)** and **Gap (Price)**. The term "Gap Detector" is deprecated in favor of the two distinct concepts above.
 
 ---
 
@@ -117,6 +123,13 @@ Shortened trading session (typically closing at 13:00 ET) on certain holidays (e
 
 **Harami**
 A candle pattern where current candle's body is small and contained within the previous candle's body. Reversal signal.
+
+---
+
+## I
+
+**IN_POSITION (state)**
+PivotDetector state indicating an open long position has been entered following a pivot trigger (D-04). The system monitors price against Target 1, Target 2, Target 3 (D-12) and the stop level (D-11) on each EOD run. Transitions to EXITED when a target is reached or stop is hit.
 
 ---
 
@@ -189,8 +202,11 @@ StockWise terminology for probabilistic, ML-based components. micha7 explicitly 
 **Pine Script**
 TradingView's scripting language for custom indicators and strategies. micha7 generates Pine Script for TV integration.
 
+**Pivot (entry trigger)**
+A composite entry event requiring ALL THREE conditions simultaneously (D-10): (a) price is far from MA20 ≥ 2.0 ATR, (b) price touches the nearest support level (from F6), (c) a reversal candle pattern is present (F1 BULLISH). When all three conditions hold, PivotDetector transitions ARMED → TRIGGERED and EntryPlanner generates the trade plan.
+
 **PivotDetector**
-State machine component that tracks signals through their lifecycle (WAITING → ARMED → TRIGGERED → IN_POSITION).
+State machine component that tracks signals through their lifecycle: WAITING → ARMED → TRIGGERED → IN_POSITION → EXITED (D-04). Five states total (corrected from earlier 4-state description).
 
 **Portfolio Risk**
 Existing StockWise module that manages position sizing and exposure limits. micha7 reuses it.
@@ -219,7 +235,7 @@ Key price levels identified by historical behavior. Micha's methodology heavily 
 Including `schema_version` in state files to allow automatic migration when format changes.
 
 **Score**
-The aggregate of all 7 feature scores, ranging from -7 to +7. ≥+5 = strong long signal.
+The aggregate of the 7 feature results, represented as bullish_count/7 (fraction) and bullish_count/7×100% (percentage). Phase 1: 6/7 or 7/7 (86–100%) triggers ARMED state. Previous signed-integer model (-7 to +7) superseded by ADR-016.
 
 **Shooting Star**
 A candle with long upper wick (≥2× body) and small body at the bottom. Bearish reversal signal.
@@ -240,8 +256,15 @@ Popular charting and trading platform. Target for Pine Script integration.
 **Trend**
 Direction of price movement over the lookback period. In micha7: window of 20 days.
 
+**Traffic Light Score**
+Discretization of the continuous bullish_count/7 score into three operational zones (D-02):
+🔴 0–3/7 (0–43%) = WAITING, no action.
+🟡 4–5/7 (57–71%) = WAITING, log full breakdown.
+🟢 6–7/7 (86–100%) = ARMED trigger.
+Used by PivotDetector and ScoringEngine for state transitions.
+
 **TRIGGERED (state)**
-PivotDetector state when all 4 pivot conditions are met and entry should occur.
+PivotDetector state entered when all 3 pivot conditions are simultaneously satisfied (D-10): far from MA20 + support touch + reversal candle. EntryPlanner generates the trade plan. Symbol remains TRIGGERED for up to N trading days awaiting entry price fill before returning to ARMED.
 
 ---
 
