@@ -395,6 +395,109 @@ Implementation via **Abstract Interface**:
 
 ---
 
+## ADR-016: Bullish/Bearish Scoring Model (Replaces Signed Integer Model)
+**Date:** 2026-06-03
+**Status:** Accepted
+
+### Context
+Previous architecture assumed signed integer scoring (-1, 0, +1 per feature), with a total
+score range of -7 to +7. Transcript analysis (2026-06-03) revealed Micha uses a
+bullish/bearish/empty triplet model, not signed integers. The public docs ("score -7 to +7")
+were speculative. Phase 1 is long-only (ADR, D-05), which means bearish scoring would
+over-penalize and miss valid setups.
+
+### Decision
+Each F1–F7 returns one of: BULLISH, BEARISH, EMPTY.
+Phase 1 scoring: `score = bullish_count / 7 × 100%` (bearish treated as empty).
+bearish_count is logged separately for diagnostics (D-07).
+Thresholds: 🔴 0–3/7, 🟡 4–5/7, 🟢 6–7/7 (D-02).
+
+### Rationale
+- Aligns with Micha's verbal methodology (transcript line ~107, ~117)
+- Simpler than signed math for traffic-light thresholds
+- Bearish-as-empty avoids over-rejection in long-only mode
+- Logged bearish_count preserves diagnostic value and future short-mode path
+
+### Alternatives Considered
+- **Keep signed -7..+7:** Wrong — contradicts source methodology
+- **Full symmetric scoring:** Premature for Phase 1 long-only
+
+### Consequences
+- ✅ Matches source methodology exactly
+- ✅ Traffic light maps directly to bullish_count
+- ⚠️ Asymmetric model requires additional logic for future short mode
+
+### Supersedes
+Implicit score range assumption in GLOSSARY.md ("score -7..+7", pre-2026-06-03)
+
+---
+
+## ADR-017: No R:R Filter (R:R Logged as Metric Only)
+**Date:** 2026-06-03
+**Status:** Accepted
+
+### Context
+GLOSSARY.md:202 stated "R:R ≥ 2.0 minimum" as a hard entry filter.
+Transcript analysis: Micha does NOT use R:R as a filter. He sizes his stop
+structurally (~1% below support, transcript line ~77) and takes 3 structural
+targets (resistance/gap/resistance, transcript line ~65). No minimum R:R
+threshold was mentioned.
+
+### Decision
+- R:R is NOT an entry filter
+- R:R is computed per trade: `(target1 - entry) / (entry - stop)`
+- R:R is logged in BacktestReport as a quality metric
+- Users can filter the report by R:R for analysis, but no trades are blocked
+
+### Rationale
+- Direct alignment with Micha's transcript (source authority)
+- Structural stops + structural targets naturally produce reasonable R:R
+- Keeping R:R as a metric preserves diagnostic value without distorting signals
+
+### Consequences
+- ✅ Faithful to source methodology
+- ✅ R:R still visible in backtest report for quality review
+- ⚠️ Some trades may have R:R < 2.0; quality assessed empirically in backtest
+
+### Supersedes
+GLOSSARY.md:202 entry ("R:R ≥ 2.0 minimum" hard gate)
+
+---
+
+## ADR-018: Local-First Trade Journal (Google Sheets Deferred to Phase 4+)
+**Date:** 2026-06-03
+**Status:** Accepted
+
+### Context
+User requested Google Sheets logging for all trades, recommendations, and statistics.
+Phase 1 is backtest-only and standalone (ADR-014). Google Sheets API introduces:
+network dependency, OAuth flow, service account credentials, rate limits, and async
+complexity — all inconsistent with ADR-002 (Deterministic) and ADR-014 (Standalone).
+
+### Decision
+Phase 1: Local-First journal — JSON + CSV files in `outputs/`.
+Phase 4+: Adapter that syncs local journal to Google Sheets (separate module, separate ADR).
+
+Journal schema (Phase 1):
+- `trades.json` — one object per closed trade
+- `recommendations.json` — one object per ARMED/TRIGGERED signal
+- `summary.csv` — flat export for manual Sheets upload
+- `backtest_report.json` — aggregate metrics (PF, WR, max DD, etc.)
+
+### Rationale
+- Preserves standalone property of Phase 1 (ADR-014)
+- JSON is queryable, structured, deterministic (ADR-002)
+- CSV manually uploadable to Sheets (zero-dependency fallback)
+- Defers cloud auth complexity until paper trading requires live data flow
+
+### Consequences
+- ✅ No new cloud dependencies in Phase 1
+- ✅ CSV manually importable to Google Sheets at any time
+- ✅ JSON queryable locally for any analysis
+- ⚠️ Phase 4+ requires Sheets adapter + credentials management
+
+---
+
 ## Decision Template (for future ADRs)
 
 ```markdown
