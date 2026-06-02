@@ -6,6 +6,51 @@
 
 ---
 
+## 2026-06-03 — Methodology Verification + 7-Document Update
+
+### 2026-06-02T22:52:37Z — [DOC] Methodology verification and documentation update
+**Author:** Claude Code (architect session) + Eyal
+
+#### Discovery
+- Located and read source transcript of Micha's methodology (videoplayback_chacklist7.txt)
+- Confirmed system type: technical analysis checklist, EOD, deterministic
+- All previous business logic in public docs was speculative by prior Claude sessions;
+  replaced with verified content extracted directly from transcript
+
+#### Architectural Decisions Added
+- ADR-016: Bullish/Bearish scoring model (replaces signed integer -7..+7)
+- ADR-017: No R:R filter (R:R logged as metric only; supersedes GLOSSARY R:R claim)
+- ADR-018: Local-First TradeJournal (JSON+CSV Phase 1; Google Sheets deferred to Phase 4+)
+
+#### New Documents Created
+- `business_logic.local.md` — Phase 1 methodology spec (~500 lines): F1-F7 rules,
+  scoring model, traffic light thresholds, 5-state machine, pivot detection, entry/stop/targets,
+  anti-patterns, open questions, validation plan, transcript references
+- `IMPLEMENTATION_PLAN.local.md` — Prompt sequence 3.1 through 6.3 (16 prompts),
+  per-prompt template, decision cross-reference, risk register, definition of done
+- `KNOWN_BUGS.md` — B-01 through B-13: 4 active issues, 3 test coverage gaps,
+  6 tech debt items, 1 resolved (B-00: ATR canonical fix in 71882a9)
+- `decisions_registry.local.md` — Flat D-01..D-20 lookup table for quick cross-reference
+
+#### Updated Documents
+- DECISIONS.md: ADR-016, ADR-017, ADR-018 appended
+- GLOSSARY.md v1.1.0: 6 new entries (Bullish/Bearish Feature, Gap (Calendar), Gap (Price),
+  IN_POSITION, Pivot, Traffic Light Score); ARMED and ATR entries corrected; Score updated
+- ARCHITECTURE.md: §3 Phase column added; §5 rounding caveat; §9 superseded notice;
+  §13 state machine reference added
+
+#### Bug Tracking
+- 13 issues catalogued across 3 severity levels
+- B-00 resolved in commit 71882a9 (ATR canonical fix)
+- B-03, B-05, B-11 scheduled for Prompt 2.5 mini-fixes
+- B-07 planned for Prompt 4.1 (state.py)
+
+#### Next Steps
+- Prompt 2.5: Mini-fixes (B-03 rename, B-05 min_rows=100, B-11 NaT check)
+- Prompt 3.1: Begin features.py per IMPLEMENTATION_PLAN.local.md
+
+---
+
 ## 2026-06-01
 
 ### 2026-06-01T11:00:00Z — [FIX] compute_atr: canonical Wilder ATR (SMA-seeded)
@@ -307,11 +352,13 @@ Every action in this project requires a changelog entry:
 
 ## Statistics
 
-- **Total Entries:** 14
+- **Total Entries:** 15
 - **Categories Used:** ARCH, DOC, DECISION, CODE, FIX
-- **Files Tracked:** 11 (documentation)
+- **Files Tracked:** 15 (11 public + 4 private .local.md)
 - **Architecture Issues Resolved:** 47/47 (100%)
-- **ADRs Created:** 15
+- **ADRs Created:** 18
+- **Known Bugs Tracked:** 13 (B-01..B-13; 1 resolved)
+- **Decisions Registry:** 20 (D-01..D-20)
 - **Phases Completed:** 1/5+ (Phase 0)
 - **Documentation Maturity:** 100%
-- **Architecture Maturity:** 98.2%
+- **Architecture Maturity:** Reassessment pending Phase 1 backtest
