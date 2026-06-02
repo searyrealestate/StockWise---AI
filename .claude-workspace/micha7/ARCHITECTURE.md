@@ -64,41 +64,43 @@ The system is organized in 4 layers, each with clear responsibilities.
 ### Layer 1: Entry Layer
 **Responsibility:** Decides *when* to run analysis and *whether* it's safe.
 
-| Component | Purpose |
-|-----------|---------|
-| TradingCalendar | Knows when market is open |
-| Scheduler | Triggers analysis at correct times (modes: EOD/Live/Paper/Backtest) |
-| CircuitBreaker | 4-level safety system |
+| Component | Purpose | Phase |
+|-----------|---------|-------|
+| TradingCalendar | Knows when market is open | Phase 2 |
+| Scheduler | Triggers analysis at correct times (modes: EOD/Live/Paper/Backtest) | Phase 2 |
+| CircuitBreaker | 4-level safety system | Phase 2 |
 
 ### Layer 2: Analysis Layer
 **Responsibility:** The analysis pipeline from raw data to trade plan.
 
-| Component | Purpose |
-|-----------|---------|
-| DataAdapter | Wraps DSM; validates; pre-calculates shared metrics |
-| FeatureExtractor | Computes features in DAG order |
-| ScoringEngine | Aggregates features → score; tracks history |
-| PivotDetector | State machine for entry timing |
-| EntryPlanner | Computes entry/stop/targets |
-| RiskManager | Validates against portfolio constraints |
+| Component | Purpose | Phase |
+|-----------|---------|-------|
+| DataAdapter | Validates, normalizes, computes shared metrics | Phase 1 ✅ |
+| FeatureExtractor | Computes features in DAG order | Phase 1 |
+| ScoringEngine | Aggregates features → bullish_count score; tracks history | Phase 1 |
+| PivotDetector | 5-state machine for entry timing | Phase 1 |
+| EntryPlanner | Computes entry/stop/targets | Phase 1 |
+| RiskManager | Validates against portfolio constraints | Phase 1 |
 
 ### Layer 3: Persistence Layer
 **Responsibility:** Durable state with crash safety.
 
-| Component | Purpose |
-|-----------|---------|
-| StateManager | Atomic writes, schema versioning, migration, recovery |
-| Namespace Separation | Modes isolated |
+| Component | Purpose | Phase |
+|-----------|---------|-------|
+| StateManager | Atomic writes, schema versioning, migration, recovery | Phase 1 |
+| Namespace Separation | Modes isolated | Phase 1 |
 
 ### Layer 4: Output Layer
 **Responsibility:** Distribute signals via unified data model.
 
-| Component | Purpose |
-|-----------|---------|
-| ChartSpec Generator | Single Source of Truth for visualizations |
-| HTML Renderer | Local interactive charts |
-| Pine Script Generator | TradingView integration |
-| SignalEmitter | Routes signals to consumers |
+| Component | Purpose | Phase |
+|-----------|---------|-------|
+| TradeJournal (local) | JSON + CSV trade log (ADR-018) | Phase 1 |
+| ChartSpec Generator | Single Source of Truth for visualizations | Phase 3 |
+| HTML Renderer | Local interactive charts | Phase 3 |
+| Pine Script Generator | TradingView integration | Phase 3 |
+| SignalEmitter | Routes signals to consumers | Phase 2 |
+| TradeJournal (Sheets) | Google Sheets sync (ADR-018) | Phase 4+ |
 
 ---
 
@@ -139,7 +141,7 @@ The system is organized in 4 layers, each with clear responsibilities.
 | Declarative feature ordering | ✅ Implemented |
 | Atomic state transitions | ✅ Implemented |
 | No random seeds in core | ✅ Verified |
-| Consistent rounding rules | ✅ In config |
+| Consistent rounding rules | ⚠️ Deferred (no rounding block in config yet; tracked in IMPROVEMENT_ROADMAP.md) |
 
 ### Recoverability
 
@@ -243,6 +245,12 @@ micha7_analyzer is the **first** of a family. See `TEMPLATE_ENGINE.md` for the c
 
 ## 9. Maturity Assessment
 
+> **⚠️ SUPERSEDED:** This maturity score (98.2%) was computed against the pre-2026-06-03
+> architecture, which incorrectly described business logic (signed integer scoring, R:R filter,
+> etc.). The methodology has been corrected to match Micha's actual transcript (see
+> `business_logic.local.md`). Score will be reassessed at end of Phase 1 after backtest
+> validation. Treat this table as historical context only.
+
 | Criterion | Weight | Score | Notes |
 |-----------|--------|-------|-------|
 | Functional Completeness | 15% | 100% | All required parameters covered |
@@ -307,3 +315,21 @@ This document is updated when:
 11. `CHANGELOG.md` — What happened when
 
 **Then** request access to `.local.md` files for implementation details.
+
+---
+
+## 13. State Machine Reference
+
+See `business_logic.local.md §5` for the full state machine specification.
+
+**Brief summary:** 5 states: WAITING → ARMED → TRIGGERED → IN_POSITION → EXITED.
+
+| State | Trigger in | Trigger out |
+|-------|-----------|-------------|
+| WAITING | Default / after EXITED / invalidation | Score ≥ 6/7 → ARMED |
+| ARMED | Score ≥ 6/7 | Pivot conditions met → TRIGGERED; invalidation → WAITING |
+| TRIGGERED | All 3 pivot conditions (D-10) | Entry filled → IN_POSITION; timeout → ARMED |
+| IN_POSITION | Entry order filled | Target or stop hit → EXITED |
+| EXITED | Target or stop | Symbol returns to WAITING for next setup |
+
+Persistence: all transitions are atomically persisted via StateManager + WAL (ADR-005, ADR-006).
