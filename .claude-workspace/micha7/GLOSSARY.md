@@ -57,7 +57,10 @@ The core methodology: scoring each stock on 7 deterministic parameters and aggre
 Multi-level safety system that pauses or stops the system when problematic patterns are detected (consecutive losses, drawdown, etc.).
 
 **Confidence**
-Normalized absolute score (`|score|/7`) ranging 0.0-1.0. Higher = stronger signal.
+The bullish-count score as a fraction of total features: `bullish_count / 7`,
+ranging 0.0-1.0. Reported alongside the X/7 fraction and traffic light state
+(D-01, D-02). Higher = stronger signal. Pre-2026-06-03 definition used
+signed integer model (`|score|/7`); replaced per ADR-016.
 
 ---
 
@@ -216,7 +219,10 @@ Existing StockWise module that manages position sizing and exposure limits. mich
 ## R
 
 **R:R (Risk:Reward Ratio)**
-(Target distance) / (Stop distance). Trades require R:R ≥ 2.0 minimum.
+(Target distance) / (Stop distance). Computed per trade and logged in
+BacktestReport for diagnostics. NOT used as an entry filter — see ADR-017
+and D-13. Previously (pre-2026-06-03) was a hard gate; this was speculation
+not present in source methodology (transcript verified 2026-06-03).
 
 **Resistance**
 Price level where selling pressure historically exceeds buying. Often the upper boundary of a range.
