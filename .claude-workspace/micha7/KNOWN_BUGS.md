@@ -32,7 +32,6 @@
 | **B-01** | 🟢 Low | `data.py` | `compute_atr` uses a Python loop (not vectorized). For large backtests with many symbols, this will be slow. | Benchmark in Prompt 6.2; vectorize only if 90-day run >5 seconds (premature optimization otherwise). |
 | **B-04** | 🟢 Low | `data.py` docstring | Historical docstring claimed ATR was used for stop sizing. Corrected by D-19 (ATR for F4 distance only). No code change needed; already resolved in 71882a9. | Resolved by D-19 documentation. |
 | **B-06** | 🟢 Low | `data.py` | `compute_returns` is coupled to `auto_adjust=True`. If raw prices are used, returns will be incorrect around split dates. | Acknowledged; auto_adjust=True makes this a non-issue for current usage (D-18). No fix needed. |
-| **B-12** | 🟡 Medium | `data.py:_log()` | `DataAdapter._log()` silently does nothing when `self._logger is None`. Logging failures should be at least print-to-stderr in debug mode; current behavior hides events. | Fix to stderr fallback or fail-loud in Prompt 4.x (after state.py adds proper logger wiring) |
 | **B-13** | 🟢 Low | `data.py:YFinanceProvider` | Retry backoff is linear (constant sleep `retry_backoff_seconds`), not exponential. Docstring says "retry with backoff" which implies exponential. | Fix docstring to say "linear backoff". Consider exponential backoff option in config. Cosmetic. |
 
 ---
@@ -45,6 +44,7 @@
 | **B-03** | `detect_gaps()` / `MarketData.gaps` created naming collision with F5 price gaps. | Renamed to `detect_calendar_gaps()` / `calendar_gaps`; log event renamed `calendar_gap_detected` (D-17). | 22edc9d |
 | **B-05** | `min_rows=30` insufficient for S/R detection (need ~100 bars). | Raised to 100 in `config.json` + `_DEFAULT_MIN_ROWS`; Fail-Loud range guard `[1, 10000]` added (D-16). | 22edc9d |
 | **B-11** | `validate()` did not check for `NaT` in `DatetimeIndex`; corrupted index would pass. | Added `df.index.isna().any()` check before duplicate check; raises `DataValidationError`. | 22edc9d |
+| **B-12** | `DataAdapter._log()` silently dropped events when `self._logger is None`. | Falls back to `logging.getLogger("micha7.data")` module logger — identical pattern to features.py. Resolved early (was planned for 4.x). | FIX-002 |
 
 ---
 

@@ -6,6 +6,19 @@
 
 ---
 
+## 2026-06-06 — B-12 Fix: data.py logging fallback
+
+### 2026-06-06T16:03:19Z — [FIX] B-12 — DataAdapter._log() module-logger fallback
+**Author:** Claude Code (executor) + Eyal
+#### Fixed
+- B-12: DataAdapter._log() no longer silent when logger=None; falls back to module logger
+  `micha7.data` (mirrors features.py from Prompt 3.1). Resolved early (was planned for 4.x).
+#### Tests
+- Added: test_log_falls_back_to_module_logger_when_none
+- Total: 78 → 79 passing
+
+---
+
 ## 2026-06-06 — Prompt 3.1: Feature Infrastructure
 
 ### 2026-06-06T15:39:14Z — [CODE] features.py — BaseFeature ABC + FeatureDAG

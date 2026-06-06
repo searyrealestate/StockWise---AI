@@ -8,12 +8,15 @@ normalized MarketData object. Providers are swappable via BaseDataProvider
 
 from __future__ import annotations
 
+import logging
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
 import pandas as pd
+
+_module_logger = logging.getLogger("micha7.data")
 
 
 # ---------------------------------------------------------------------------
@@ -379,6 +382,6 @@ class DataAdapter:
     # ------------------------------------------------------------------
 
     def _log(self, level: str, event: str, message: str, context: dict) -> None:
-        if self._logger is not None:
-            log_fn = getattr(self._logger, level.lower(), self._logger.info)
-            log_fn(message, extra={"event": event, "context": context})
+        logger = self._logger if self._logger is not None else _module_logger
+        log_fn = getattr(logger, level.lower(), logger.info)
+        log_fn(message, extra={"event": event, "context": context})

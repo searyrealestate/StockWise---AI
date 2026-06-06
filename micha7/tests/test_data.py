@@ -383,3 +383,27 @@ def test_config_min_rows_out_of_range_raises(tmp_path):
         loader.load()
         with pytest.raises(ConfigError):
             DataAdapter(provider=None, loader=loader)
+
+
+# ---------------------------------------------------------------------------
+# B-12: _log() module-logger fallback
+# ---------------------------------------------------------------------------
+
+
+def test_log_falls_back_to_module_logger_when_none(tmp_path, caplog):
+    """_log() must emit via 'micha7.data' when no logger is injected (B-12).
+
+    Before the fix this test FAILS because _log() was silent when logger=None.
+    """
+    import logging
+
+    loader = _loader_with_defaults(tmp_path)
+    adapter = DataAdapter(provider=None, loader=loader)
+
+    with caplog.at_level(logging.DEBUG, logger="micha7.data"):
+        adapter._log("INFO", "test_event", "hello from b12", {"x": 1})
+
+    log_text = " ".join(r.getMessage() for r in caplog.records)
+    assert "hello from b12" in log_text, (
+        "_log() must emit to 'micha7.data' module logger when self._logger is None"
+    )
