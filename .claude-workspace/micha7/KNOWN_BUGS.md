@@ -42,9 +42,9 @@
 | ID | Description | Resolution | Commit |
 |----|-------------|------------|--------|
 | **B-00** | `compute_atr` used `ewm(span=period)` (alpha=2/(period+1)) instead of canonical Wilder (alpha=1/period, SMA seed). Self-confirming test masked the error. | Rewritten to canonical Wilder ATR. Test now uses hand-computed literal values. | 71882a9 |
-| **B-03** | `detect_gaps()` / `MarketData.gaps` created naming collision with F5 price gaps. | Renamed to `detect_calendar_gaps()` / `calendar_gaps`; log event renamed `calendar_gap_detected` (D-17). | TBD |
-| **B-05** | `min_rows=30` insufficient for S/R detection (need ~100 bars). | Raised to 100 in `config.json` + `_DEFAULT_MIN_ROWS`; Fail-Loud range guard `[1, 10000]` added (D-16). | TBD |
-| **B-11** | `validate()` did not check for `NaT` in `DatetimeIndex`; corrupted index would pass. | Added `df.index.isna().any()` check before duplicate check; raises `DataValidationError`. | TBD |
+| **B-03** | `detect_gaps()` / `MarketData.gaps` created naming collision with F5 price gaps. | Renamed to `detect_calendar_gaps()` / `calendar_gaps`; log event renamed `calendar_gap_detected` (D-17). | 22edc9d |
+| **B-05** | `min_rows=30` insufficient for S/R detection (need ~100 bars). | Raised to 100 in `config.json` + `_DEFAULT_MIN_ROWS`; Fail-Loud range guard `[1, 10000]` added (D-16). | 22edc9d |
+| **B-11** | `validate()` did not check for `NaT` in `DatetimeIndex`; corrupted index would pass. | Added `df.index.isna().any()` check before duplicate check; raises `DataValidationError`. | 22edc9d |
 
 ---
 
