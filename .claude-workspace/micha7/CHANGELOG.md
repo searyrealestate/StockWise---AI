@@ -6,6 +6,20 @@
 
 ---
 
+## 2026-06-06 — Day 5: Decisions D-21..D-25 (Day 4 ratification)
+
+### 2026-06-06T20:46:19Z — [DECISION] D-21..D-25 added to decisions_registry
+**Author:** Claude (architect session) + Eyal
+#### Added
+- D-21: CoT gates steps 2-7 of the 8-step workflow; reasoning must align with AC (PF≥1.5/WR≥55%)
+- D-22: F6 (Support/Resistance) implemented before F1 — topological-by-dependency; F6 = R-01
+- D-23: Q1-Q4 (hammer_wick_ratio, cci_thresholds, sr_lookback_N + sr_cluster_atr, gap_max_age_bars) seeded in config.json before any feature impl (zero hardcoded)
+- D-24: micha7-coder pairs ONLY with eyal-dev-standards (4 StockWise-core conflicts identified empirically)
+- D-25: DoD per feature = 5 conditions (Tests≥5 monotonic, Config-driven, Deps declared, Structured logging, py_compile PASS); CHANGELOG enforced at commit level, not as a feature-DoD condition
+**Verification:** decisions_registry.local.md contains D-21..D-25; cross-references Day 4 handoff
+
+---
+
 ## 2026-06-06 — B-12 Fix: data.py logging fallback
 
 ### 2026-06-06T16:03:19Z — [FIX] B-12 — DataAdapter._log() module-logger fallback
