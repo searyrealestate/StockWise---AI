@@ -202,23 +202,23 @@ def test_normalize_sorts_index_ascending(tmp_path, sample_ohlcv):
 
 
 # ---------------------------------------------------------------------------
-# Adapter — detect_gaps()
+# Adapter — detect_calendar_gaps()
 # ---------------------------------------------------------------------------
 
 
-def test_detect_gaps_finds_large_gap(tmp_path, sample_ohlcv_with_gap):
+def test_detect_calendar_gaps_finds_large_gap(tmp_path, sample_ohlcv_with_gap):
     loader = _loader_with_defaults(tmp_path)
     adapter = DataAdapter(provider=None, loader=loader)
-    gaps = adapter.detect_gaps(sample_ohlcv_with_gap)
+    gaps = adapter.detect_calendar_gaps(sample_ohlcv_with_gap)
     assert len(gaps) >= 1
     assert all("from" in g and "to" in g and "gap_days" in g for g in gaps)
     assert any(g["gap_days"] > 5 for g in gaps)
 
 
-def test_detect_gaps_none_on_continuous(tmp_path, sample_ohlcv):
+def test_detect_calendar_gaps_none_on_continuous(tmp_path, sample_ohlcv):
     loader = _loader_with_defaults(tmp_path)
     adapter = DataAdapter(provider=None, loader=loader)
-    gaps = adapter.detect_gaps(sample_ohlcv)
+    gaps = adapter.detect_calendar_gaps(sample_ohlcv)
     assert gaps == []
 
 
@@ -306,4 +306,80 @@ def test_fetch_returns_marketdata(tmp_path, mock_provider, sample_ohlcv):
     assert md.row_count == len(sample_ohlcv)
     assert len(md.atr) == md.row_count
     assert len(md.returns) == md.row_count
-    assert md.gaps == []
+    assert md.calendar_gaps == []
+
+
+# ---------------------------------------------------------------------------
+# B-11: NaT in index
+# ---------------------------------------------------------------------------
+
+
+def test_validate_rejects_nat_in_index(tmp_path):
+    """A NaT entry in the DatetimeIndex must raise DataValidationError (B-11)."""
+    loader = _loader_with_defaults(tmp_path)
+    adapter = DataAdapter(provider=None, loader=loader)
+
+    # Build a ≥100-row valid OHLCV
+    dates = list(pd.bdate_range(start="2025-01-02", periods=100))
+    pattern = [
+        {"open": 100.0, "high": 105.0, "low": 98.0,  "close": 103.0, "volume": 1_000_000},
+        {"open": 103.0, "high": 107.0, "low": 101.0, "close": 106.0, "volume": 1_200_000},
+        {"open": 106.0, "high": 108.0, "low": 103.0, "close": 104.0, "volume":   900_000},
+        {"open": 104.0, "high": 106.0, "low":  99.0, "close": 100.0, "volume": 1_100_000},
+        {"open": 100.0, "high": 102.0, "low":  97.0, "close": 101.0, "volume":   800_000},
+    ]
+    rows = [pattern[i % 5] for i in range(100)]
+    df = pd.DataFrame(rows, index=pd.DatetimeIndex(dates))
+
+    # Inject NaT at position 10
+    idx = df.index.tolist()
+    idx[10] = pd.NaT
+    df.index = pd.DatetimeIndex(idx)
+
+    with pytest.raises(DataValidationError, match="NaT"):
+        adapter.validate(df)
+
+
+# ---------------------------------------------------------------------------
+# B-05: min_rows range guard
+# ---------------------------------------------------------------------------
+
+
+def test_config_min_rows_out_of_range_raises(tmp_path):
+    """min_rows outside [1, 10000] must raise ConfigError during adapter init (B-05)."""
+    import json
+
+    from micha7.config import ConfigError, ConfigLoader
+
+    for bad_value in (0, 20000):
+        cfg = tmp_path / f"config_bad_{bad_value}.json"
+        cfg.write_text(
+            json.dumps(
+                {
+                    "meta": {"name": "micha7_analyzer", "config_version": "1.0.0"},
+                    "logging": {
+                        "level": "INFO",
+                        "format": "json",
+                        "directory": str(tmp_path / "logs"),
+                        "console": False,
+                    },
+                    "data": {
+                        "atr_period": 14,
+                        "min_rows": bad_value,
+                        "max_gap_days": 5,
+                        "yfinance": {
+                            "retry_count": 3,
+                            "retry_backoff_seconds": 0.0,
+                            "auto_adjust": True,
+                        },
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        loader = ConfigLoader(
+            config_path=cfg, local_path=tmp_path / "config.local.json"
+        )
+        loader.load()
+        with pytest.raises(ConfigError):
+            DataAdapter(provider=None, loader=loader)

@@ -11,8 +11,6 @@
 | ID | Severity | File | Description | Decision | Status |
 |----|----------|------|-------------|----------|--------|
 | **B-02** | 🟡 Medium | `data.py:108` | `auto_adjust=True` alters historical OHLC prices (adjusts for splits/dividends). This makes prices differ from raw broker data. | Accepted per D-18: matches TradingView display. Document clearly; no fix. | **Accepted** |
-| **B-03** | 🔴 High | `data.py:273` | **Gap name collision:** `DataAdapter.detect_gaps()` detects calendar gaps (missing trading days), but F5 is called "gaps" and detects price gaps. Same word, different concepts. Future code reading will be confusing. | D-17: rename method. | **OPEN — rename to `detect_calendar_gaps()` in Prompt 2.5** |
-| **B-05** | 🟡 Medium | `data.py:217` | `min_rows=30` is insufficient for robust S/R detection. S/R detection needs ~100 bars to find meaningful pivot highs/lows. With 30 bars, results will be noisy or empty. | D-16: raise to 100. | **OPEN — update `config.json` data.min_rows in Prompt 2.5** |
 | **B-07** | 🔴 High | `n/a` | State persistence not yet implemented. All state is in-memory only. Without StateManager + WAL, crashes lose all ARMED/TRIGGERED state. | Planned: Prompt 4.1. | **PLANNED — Prompt 4.1** |
 
 ---
@@ -34,7 +32,6 @@
 | **B-01** | 🟢 Low | `data.py` | `compute_atr` uses a Python loop (not vectorized). For large backtests with many symbols, this will be slow. | Benchmark in Prompt 6.2; vectorize only if 90-day run >5 seconds (premature optimization otherwise). |
 | **B-04** | 🟢 Low | `data.py` docstring | Historical docstring claimed ATR was used for stop sizing. Corrected by D-19 (ATR for F4 distance only). No code change needed; already resolved in 71882a9. | Resolved by D-19 documentation. |
 | **B-06** | 🟢 Low | `data.py` | `compute_returns` is coupled to `auto_adjust=True`. If raw prices are used, returns will be incorrect around split dates. | Acknowledged; auto_adjust=True makes this a non-issue for current usage (D-18). No fix needed. |
-| **B-11** | 🟡 Medium | `data.py:validate()` | `validate()` does not check for `NaT` (Not a Time) values in the DatetimeIndex. A corrupted index with NaT would pass validation. | Add `if df.index.isna().any(): raise DataValidationError(...)` — fix in Prompt 2.5 |
 | **B-12** | 🟡 Medium | `data.py:_log()` | `DataAdapter._log()` silently does nothing when `self._logger is None`. Logging failures should be at least print-to-stderr in debug mode; current behavior hides events. | Fix to stderr fallback or fail-loud in Prompt 4.x (after state.py adds proper logger wiring) |
 | **B-13** | 🟢 Low | `data.py:YFinanceProvider` | Retry backoff is linear (constant sleep `retry_backoff_seconds`), not exponential. Docstring says "retry with backoff" which implies exponential. | Fix docstring to say "linear backoff". Consider exponential backoff option in config. Cosmetic. |
 
@@ -45,6 +42,9 @@
 | ID | Description | Resolution | Commit |
 |----|-------------|------------|--------|
 | **B-00** | `compute_atr` used `ewm(span=period)` (alpha=2/(period+1)) instead of canonical Wilder (alpha=1/period, SMA seed). Self-confirming test masked the error. | Rewritten to canonical Wilder ATR. Test now uses hand-computed literal values. | 71882a9 |
+| **B-03** | `detect_gaps()` / `MarketData.gaps` created naming collision with F5 price gaps. | Renamed to `detect_calendar_gaps()` / `calendar_gaps`; log event renamed `calendar_gap_detected` (D-17). | TBD |
+| **B-05** | `min_rows=30` insufficient for S/R detection (need ~100 bars). | Raised to 100 in `config.json` + `_DEFAULT_MIN_ROWS`; Fail-Loud range guard `[1, 10000]` added (D-16). | TBD |
+| **B-11** | `validate()` did not check for `NaT` in `DatetimeIndex`; corrupted index would pass. | Added `df.index.isna().any()` check before duplicate check; raises `DataValidationError`. | TBD |
 
 ---
 

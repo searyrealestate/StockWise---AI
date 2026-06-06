@@ -11,7 +11,7 @@
   },
   "data": {
     "atr_period": 14,
-    "min_rows": 30,
+    "min_rows": 100,
     "max_gap_days": 5,
     "yfinance": {
       "retry_count": 3,

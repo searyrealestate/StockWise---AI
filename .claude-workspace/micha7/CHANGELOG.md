@@ -6,6 +6,22 @@
 
 ---
 
+## 2026-06-06 — Prompt 2.5 Mini-Fixes
+
+### 2026-06-06T00:00:00Z — [FIX] B-03 + B-05 + B-11
+**Author:** Claude Code (executor) + Eyal
+#### Fixed
+- B-03: `detect_gaps()` → `detect_calendar_gaps()`; `MarketData.gaps` → `MarketData.calendar_gaps`; log event `data_gap_detected` → `calendar_gap_detected` (D-17)
+- B-05: `data.min_rows` 30 → 100 (`config.json` + `_DEFAULT_MIN_ROWS`) + range guard `min_val=1, max_val=10000` (D-16)
+- B-11: `validate()` rejects `NaT` in `DatetimeIndex`
+#### Breaking
+- Log event renamed `data_gap_detected` → `calendar_gap_detected` (log/simulator parsers must update)
+#### Tests
+- Added: `test_validate_rejects_nat_in_index`, `test_config_min_rows_out_of_range_raises`
+- Renamed: `test_detect_gaps_*` → `test_detect_calendar_gaps_*` | Total 38 → 40
+
+---
+
 ## 2026-06-03 — Methodology Verification + 7-Document Update
 
 ### 2026-06-02T22:52:37Z — [DOC] Methodology verification and documentation update

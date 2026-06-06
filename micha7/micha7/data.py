@@ -46,7 +46,7 @@ class MarketData:
     df: pd.DataFrame
     atr: pd.Series
     returns: pd.Series
-    gaps: list[dict] = field(default_factory=list)
+    calendar_gaps: list[dict] = field(default_factory=list)
     row_count: int = 0
 
     def __post_init__(self) -> None:
@@ -204,7 +204,7 @@ def compute_returns(df: pd.DataFrame) -> pd.Series:
 # ---------------------------------------------------------------------------
 
 _DEFAULT_ATR_PERIOD = 14
-_DEFAULT_MIN_ROWS = 30
+_DEFAULT_MIN_ROWS = 100
 _DEFAULT_MAX_GAP_DAYS = 5
 
 
@@ -229,7 +229,7 @@ class DataAdapter:
                 "data.atr_period", default=_DEFAULT_ATR_PERIOD, expected_type=int
             )
             self._min_rows = loader.get(
-                "data.min_rows", default=_DEFAULT_MIN_ROWS, expected_type=int
+                "data.min_rows", default=_DEFAULT_MIN_ROWS, expected_type=int, min_val=1, max_val=10000
             )
             self._max_gap_days = loader.get(
                 "data.max_gap_days", default=_DEFAULT_MAX_GAP_DAYS, expected_type=int
@@ -252,7 +252,7 @@ class DataAdapter:
         raw = self._provider.get_ohlcv(symbol, start, end)
         df = self.normalize(raw)
         self.validate(df)
-        gaps = self.detect_gaps(df)
+        calendar_gaps = self.detect_calendar_gaps(df)
         atr = compute_atr(df, self._atr_period)
         returns = compute_returns(df)
 
@@ -263,7 +263,7 @@ class DataAdapter:
             df=df,
             atr=atr,
             returns=returns,
-            gaps=gaps,
+            calendar_gaps=calendar_gaps,
             row_count=len(df),
         )
 
@@ -332,6 +332,8 @@ class DataAdapter:
         # Index integrity
         if not isinstance(df.index, pd.DatetimeIndex):
             _fail("Index is not a DatetimeIndex")
+        if df.index.isna().any():                                   # B-11
+            _fail("NaT (Not a Time) value(s) found in index")       # B-11
         if df.index.duplicated().any():
             _fail("Duplicate index entries detected")
         if not df.index.is_monotonic_increasing:
@@ -343,16 +345,17 @@ class DataAdapter:
                 f"Too few rows: {len(df)} < min_rows={self._min_rows}"
             )
 
-    def detect_gaps(self, df: pd.DataFrame) -> list[dict]:
+    def detect_calendar_gaps(self, df: pd.DataFrame) -> list[dict]:
         """Return a list of calendar gaps exceeding max_gap_days.
 
         Each gap: {"from": date_str, "to": date_str, "gap_days": int}.
         Non-fatal — caller receives the list and decides how to handle.
+        Distinct from F5 price gaps (D-17).
         """
         if len(df) < 2:
             return []
 
-        gaps: list[dict] = []
+        calendar_gaps: list[dict] = []
         dates = df.index.normalize()  # strip time component
         for i in range(1, len(dates)):
             delta = (dates[i] - dates[i - 1]).days
@@ -362,14 +365,14 @@ class DataAdapter:
                     "to": str(dates[i].date()),
                     "gap_days": delta,
                 }
-                gaps.append(gap)
+                calendar_gaps.append(gap)
                 self._log(
                     "WARNING",
-                    "data_gap_detected",
-                    f"Gap of {delta} days between {gap['from']} and {gap['to']}",
+                    "calendar_gap_detected",
+                    f"Calendar gap of {delta} days between {gap['from']} and {gap['to']}",
                     gap,
                 )
-        return gaps
+        return calendar_gaps
 
     # ------------------------------------------------------------------
     # Internal
