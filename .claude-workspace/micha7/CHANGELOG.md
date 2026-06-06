@@ -6,6 +6,23 @@
 
 ---
 
+## 2026-06-06 — Prompt 3.1: Feature Infrastructure
+
+### 2026-06-06T15:39:14Z — [CODE] features.py — BaseFeature ABC + FeatureDAG
+**Author:** Claude Code (executor) + Eyal
+#### Added
+- `features.py`: FeatureScore (str-Enum: BULLISH/BEARISH/EMPTY), FeatureResult (@dataclass), BaseFeature (ABC with abstract compute()), FeatureDAG (Kahn topological layering, cycle detection, deterministic level execution), FeatureDAGError
+- `tests/test_features.py`: 38 tests (contract, registration, topo levels, cycles, execution, logging)
+#### Notes
+- Generic DAG — features self-declare dependencies (F6→F1, F2→F3 wired in 3.2/3.4)
+- Deterministic: feature_ids sorted within each level
+- N-level layering subsumes the required 2-level structure
+- Module-level fallback logger (`micha7.features`) ensures events visible to caplog without injected logger
+#### Tests
+- Total: 40 → 78 passing
+
+---
+
 ## 2026-06-06 — Prompt 2.5 Mini-Fixes
 
 ### 2026-06-06T00:00:00Z — [FIX] B-03 + B-05 + B-11
