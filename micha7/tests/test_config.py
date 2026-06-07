@@ -6,6 +6,7 @@ All tests written BEFORE implementation — expect RED on first run.
 import io
 import json
 import logging
+import pathlib
 import re
 
 import pytest
@@ -224,3 +225,87 @@ def test_correlation_id_propagates(loader, tmp_path):
     data = json.loads(stream.getvalue().strip().split("\n")[0])
     assert data["correlation_id"] == "abc-123"
     logger.removeHandler(handler)
+
+
+# ---------------------------------------------------------------------------
+# Feature config — defaults and range validation (D-23, Q1-Q4)
+# ---------------------------------------------------------------------------
+
+_REAL_CONFIG_PATH = pathlib.Path(__file__).parent.parent / "config.json"
+
+
+@pytest.fixture()
+def features_loader(tmp_path):
+    """ConfigLoader backed by the real micha7/config.json (no local override)."""
+    cl = ConfigLoader(
+        config_path=_REAL_CONFIG_PATH,
+        local_path=tmp_path / "config.local.json",
+    )
+    cl.load()
+    return cl
+
+
+def test_features_candle_hammer_wick_ratio(features_loader):
+    val = features_loader.get(
+        "features.candle.hammer_wick_ratio",
+        expected_type=float,
+        min_val=1.5,
+        max_val=4.0,
+    )
+    assert val == 2.0
+
+
+def test_features_cci_overbought(features_loader):
+    val = features_loader.get(
+        "features.cci.overbought",
+        expected_type=int,
+        min_val=50,
+        max_val=200,
+    )
+    assert val == 100
+
+
+def test_features_cci_oversold(features_loader):
+    val = features_loader.get(
+        "features.cci.oversold",
+        expected_type=int,
+        min_val=-200,
+        max_val=-50,
+    )
+    assert val == -100
+
+
+def test_features_sr_lookback_n(features_loader):
+    val = features_loader.get(
+        "features.sr.lookback_n",
+        expected_type=int,
+        min_val=2,
+        max_val=20,
+    )
+    assert val == 5
+
+
+def test_features_sr_cluster_atr(features_loader):
+    val = features_loader.get(
+        "features.sr.cluster_atr",
+        expected_type=float,
+        min_val=0.1,
+        max_val=2.0,
+    )
+    assert val == 0.5
+
+
+def test_features_gap_max_age_bars(features_loader):
+    val = features_loader.get(
+        "features.gap.max_age_bars",
+        expected_type=int,
+        min_val=5,
+        max_val=250,
+    )
+    assert val == 60
+
+
+def test_features_param_out_of_range_raises(features_loader):
+    # max_age_bars=60; min_val=100 → 60 < 100 → ConfigError
+    with pytest.raises(ConfigError):
+        features_loader.get("features.gap.max_age_bars", min_val=100)

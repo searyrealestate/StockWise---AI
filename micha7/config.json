@@ -18,5 +18,11 @@
       "retry_backoff_seconds": 1.0,
       "auto_adjust": true
     }
+  },
+  "features": {
+    "candle": { "hammer_wick_ratio": 2.0 },
+    "cci":    { "overbought": 100, "oversold": -100 },
+    "sr":     { "lookback_n": 5, "cluster_atr": 0.5 },
+    "gap":    { "max_age_bars": 60 }
   }
 }

@@ -6,6 +6,23 @@
 
 ---
 
+## 2026-06-07 — Prompt 2.6: Seed Q1-Q4 feature config
+
+### 2026-06-07T09:00:00Z — [CONFIG] features.{candle,cci,sr,gap} seeded in config.json
+**Author:** Claude Code (executor) + Eyal
+#### Added
+- config.json "features" block: candle.hammer_wick_ratio=2.0;
+  cci.overbought=100/oversold=-100; sr.lookback_n=5/cluster_atr=0.5;
+  gap.max_age_bars=60 (D-23, Q1-Q4). Zero hardcoded.
+#### Tests
+- test_config.py: per-key type+range + out-of-range raises
+- Total: 79 -> 86
+#### Notes
+- Ranges above are the validation contract for F1/F5/F6/F7
+**Verification:** pytest GREEN; config.json parses as valid JSON
+
+---
+
 ## 2026-06-06 — Day 5: Decisions D-21..D-25 (Day 4 ratification)
 
 ### 2026-06-06T20:46:19Z — [DECISION] D-21..D-25 added to decisions_registry
