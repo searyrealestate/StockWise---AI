@@ -6,6 +6,22 @@
 
 ---
 
+## 2026-06-08 — Prompt 2.7: Ratify D-26 + L-002..L-004
+
+### 2026-06-08T07:30:00Z — [DOC] D-26 efficiency rules + 3 CC environment lessons
+**Author:** Claude Code (executor) + Eyal
+#### Added
+- D-26 in decisions_registry.local.md — three efficiency rules adopted:
+  (a) File Manifest Upfront, (b) Read Delegation to CC, (c) Rigor Scaled to Risk
+- L-002, L-003, L-004 in ~/.claude/memory.md — Day 5 CC environment lessons:
+  nested fence truncation, shell-var non-persistence, 1M-context auto-switch
+#### Code/Tests
+- Zero code changes; 86/86 tests remain GREEN
+#### Verification
+- pytest GREEN (86); git status clean post-commit; D-26 visible in registry; L-002..L-004 visible in memory.md
+
+---
+
 ## 2026-06-07 — Prompt 2.6: Seed Q1-Q4 feature config
 
 ### 2026-06-07T09:00:00Z — [CONFIG] features.{candle,cci,sr,gap} seeded in config.json
