@@ -6,6 +6,24 @@
 
 ---
 
+## 2026-06-08 — Prompt 2.8: IMPLEMENTATION_PLAN §1 reorder + 3.2 dep fix (D-22 sync)
+
+### 2026-06-08T07:45:00Z — [DOC] §1 prompt sequence reordered topologically + 3.2 dep updated
+**Author:** Claude Code (executor) + Eyal
+#### Changed
+- IMPLEMENTATION_PLAN.local.md §1: prompt-sequence table reordered to topological execution order (3.1 → 3.7 → 3.2 → 3.3 → 3.4 → 3.5 → 3.6 → 3.8 → 3.9 → 4.1 → 4.2 → 5.1 → 5.2 → 6.1 → 6.2 → 6.3)
+- Note added above table: "Execution order is topological (by dependency), not by prompt number. Per D-22, F6 (Prompt 3.7) executes before F1 (Prompt 3.2)."
+- Prompt 3.2 Dependencies: `3.1, F6 context stub` → `3.1, 3.7`
+- Prompt 3.7 row annotated as R-01 (highest implementation risk)
+#### Code/Tests
+- Zero code changes; 86/86 tests remain GREEN
+#### Verification
+- pytest GREEN (86); §1 first row after 3.1 is 3.7; 3.2 Dependencies cell contains "3.7"
+#### Rationale
+- D-22 (ratified Day 5) requires F6 before F1; §1 was still in numeric order, which would mislead future Day 7+ sessions and conflict with the upcoming Prompt 3.7 (F6 = R-01) implementation.
+
+---
+
 ## 2026-06-08 — Prompt 2.7: Ratify D-26 + L-002..L-004
 
 ### 2026-06-08T07:30:00Z — [DOC] D-26 efficiency rules + 3 CC environment lessons

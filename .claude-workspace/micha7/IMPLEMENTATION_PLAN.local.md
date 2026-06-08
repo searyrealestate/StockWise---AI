@@ -7,17 +7,19 @@
 
 ## 1. Prompt Sequence
 
-Each row is one Claude Code implementation prompt. Dependencies must be green before starting.
+> **Execution order is topological (by dependency), not by prompt number.**
+> Per D-22, F6 (Prompt 3.7) executes before F1 (Prompt 3.2) because F1 depends on F6.
+> Each row is one Claude Code implementation prompt. Dependencies must be green before starting.
 
 | Prompt # | Module | What Gets Built | Dependencies | Min Acceptance |
 |----------|--------|-----------------|--------------|----------------|
 | **3.1** | features.py | BaseFeature ABC + FeatureDAG (topological sort, cycle detection, 2-level execution) | config, data | 35+ tests; DAG cycle test; Level 1 parallel, Level 2 sequential |
-| **3.2** | features.py | F1 Candle (Engulfing, Hammer, Harami, Doji, Shooting Star) | 3.1, F6 context stub | 5+ tests per pattern; Hammer wick-ratio parameterized |
+| **3.7** | features.py | F6 S/R (swing pivot detection, level clustering, raw_levels returned) — **R-01 (highest implementation risk)** | 3.1 | 5+ tests; D-09 return structure; proximity test; hand-annotated AAPL chart verification |
+| **3.2** | features.py | F1 Candle (Engulfing, Hammer, Harami, Doji, Shooting Star) | 3.1, 3.7 | 5+ tests per pattern; Hammer wick-ratio parameterized |
 | **3.3** | features.py | F2 Trend (MA20, slope, configurable lookback) | 3.1 | 5+ tests; slope direction test; SMA not EMA confirmed |
-| **3.4** | features.py | F3 Volume (volume_ratio, decay detection) | 3.1, 3.3 (F2 context) | 5+ tests; decay test; volume_ratio threshold parameterized |
+| **3.4** | features.py | F3 Volume (volume_ratio, decay detection) | 3.1, 3.3 | 5+ tests; decay test; volume_ratio threshold parameterized |
 | **3.5** | features.py | F4 Distance (ATR-normalized, raw_distance returned) | 3.1 | 5+ tests; raw_distance sign verified; D-08 return structure |
 | **3.6** | features.py | F5 Price gaps (unfilled gap detection; distinct from calendar gap) | 3.1 | 5+ tests; D-17 gap naming; no-gap fixture + gap fixture |
-| **3.7** | features.py | F6 S/R (swing pivot detection, level clustering, raw_levels returned) | 3.1 | 5+ tests; D-09 return structure; proximity test |
 | **3.8** | features.py | F7 CCI(14) (Lambert formula, ±100 thresholds) | 3.1 | 5+ tests; ±100 zone; period=14 not 20 |
 | **3.9** | features.py | ScoringEngine (bullish/bearish/empty aggregation, traffic light, D-06/D-07) | 3.2–3.8 | Score fraction + pct; traffic light mapping; bearish_count logged |
 | **4.1** | state.py | StateManager + WriteAheadLog (atomic writes, schema versioning, recovery) | features | Atomic test; WAL replay test; schema migration test |
@@ -29,7 +31,7 @@ Each row is one Claude Code implementation prompt. Dependencies must be green be
 | **6.3** | (new file) journal.py | Local-First TradeJournal (JSON + CSV output; D-20) | backtest | JSON parseable; CSV importable; recommendations logged |
 
 **Total prompts:** 16
-**Note:** Prompt numbering resumes from 3.x to match the existing 2.x (config, data) series.
+**Note:** Rows above are sorted by execution order (topological). Prompt numbers (3.1, 3.7, 3.2, ...) are preserved for cross-reference with decisions_registry, business_logic.local.md, and KNOWN_BUGS.md.
 
 ---
 
