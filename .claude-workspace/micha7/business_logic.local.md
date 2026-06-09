@@ -29,6 +29,8 @@
 
 ## 2. The 7-Parameter Checklist
 
+**Feature Contract (ADR-019):** Every feature (F1–F7) returns a `FeatureResult` with `score` (BULLISH/BEARISH/EMPTY), `raw` data dict, and implements `render(md, result, context) -> list[Primitive]` for ChartSpec population. Primitive vocabulary: `marker`, `hline`, `line`, `box`, `subpane_series`, `label` — each with `style` + optional `valid_from`. See ADR-019.
+
 Each parameter (F1–F7) outputs one of three states:
 - ✓ **BULLISH** — condition favors a long entry
 - ✗ **BEARISH** — condition is unfavorable
@@ -184,6 +186,8 @@ and whether price is near a support level (entry timing).
 - Keep top 5 support levels + top 5 resistance levels
 - Proximity threshold: |price - level| < 0.5 ATR → BULLISH if support, BEARISH if resistance
   (Open question Q3: exact algorithm — must test against Micha's hand-drawn lines)
+
+**Lookahead rule (D-27):** A pivot at bar T is validated only at current_bar_index >= T + lookback_n; F6 never reads bars beyond current_bar_index.
 
 **Note:** F6 provides S/R context to F1 (Candle). F6 must compute before F1 (DAG dependency, ADR-003).
 
@@ -430,33 +434,52 @@ Extracted from transcript warnings:
 
 ---
 
-## 11. Open Questions (Deferred to Architect)
+## 11. Closed Questions (resolved Day 7)
 
-These require either additional transcript research or architect decision before implementation:
+All four open questions from Phase 1 design are now closed. See `decisions_registry.local.md` for full decision text.
 
-**Q1: Exact wick ratio for Hammer/Shooting Star**
+**Q1: Exact wick ratio for Hammer/Shooting Star — CLOSED**
 - Transcript says "wick significantly larger than body" (transcript line ~44)
-- Current working assumption: wick ≥ 2× body length
-- Risk: too strict misses setups; too loose gives false positives
-- Resolution: parameterize as `hammer_wick_ratio` in config.json; sweep in backtest
+- Resolution: parameterized as `hammer_wick_ratio` in config.json; default 0.3 per B-16 web_search; finalized in Prompt 3.2
+- Status: config param seeded; value locked in Prompt 3.2
 
-**Q2: CCI exact threshold**
-- Transcript implies ±100 ("when CCI is very low" / "when CCI is very high")
-- Working assumption: <-100 = BULLISH, >+100 = BEARISH
-- Risk: standard ±100 may need tuning per symbol universe
-- Resolution: parameterize as `cci_oversold` and `cci_overbought` in config.json
+**Q2: CCI exact threshold — CLOSED → D-37**
+- Resolution: D-37 (TradingView CCI canonical) — ±100; period=20; source=hlc3; mean-abs-dev
+- `cci.length=20`, `cci.source="hlc3"` seeded in config.json (Prompt 2.9b)
+- Prior working assumption of period=14 superseded by D-37
 
-**Q3: S/R detection algorithm vs Micha's visual lines**
-- PHASES.md explicitly flags this as the highest-risk feature (§Risks)
-- Transcript shows Micha drawing S/R by eye on TradingView
-- Working approach: swing pivot (N=5 bar lookback, cluster within 0.5 ATR)
-- Resolution: test against hand-annotated AAPL chart; tune N and cluster threshold
+**Q3: S/R detection algorithm vs Micha's visual lines — CLOSED → D-30, D-33**
+- Resolution: D-30 — pivots on High/Low; strength=touch count within cluster_atr×ATR; agglomerative single-linkage clustering; cluster price=simple mean; top_k=proximity-filtered then by strength; no levels→EMPTY
+- Resolution: D-33 — single ATR[current_bar_index] reference for both strength counting and clustering
+- Validation: hand-annotated AAPL test (R-01 mitigation) — Eyal marks 5-10 levels; F6 must miss <20%
 
-**Q4: Max age of price gap (F5)**
-- Transcript does not specify when a gap is "too old"
-- Working assumption: scan last 60 bars
-- Risk: old gaps may not function as magnets in current market
-- Resolution: parameterize as `gap_max_age_bars` in config.json
+**Q4: Max age of price gap (F5) — CLOSED**
+- Resolution: parameterized as `gap_max_age_bars` in config.json; seeded in Prompt 2.9b
+- Default scan: 60 bars (configurable)
+
+---
+
+## 14. Day 7 Foundation Decisions
+
+Cross-reference to `decisions_registry.local.md` for full decision text. One-line summary per decision:
+
+| ID | Domain | One-line summary |
+|----|--------|-----------------|
+| D-27 | Lookahead | Pivot at T validated only at current_bar_index >= T + lookback_n; F6 never reads beyond current bar |
+| D-28 | Data | data.min_rows raised 100 → 200; ensures validated-pivot history depth |
+| D-29 | Determinism | Float equality: abs(a-b) < threshold + 1e-9; cluster price = round(2) cents; tie-break = price asc then bar_index asc |
+| D-30 | F6 algorithm | Pivots on High/Low; strength=touch count; agglomerative single-linkage clustering; centroid price; proximity top_k; no levels=EMPTY |
+| D-33 | F6 algorithm | Single ATR reference: both strength counting and clustering use ATR[current_bar_index] |
+| D-34 | Timeframe | EOD-faithful: last COMPLETE bar only; current forming bar is partial/live, excluded from F1-F7 |
+| D-35 | Visualization | S/R lines drawn from valid_from = pivot_bar_index + lookback_n; candles always full |
+| D-36 | Validation | TradingView as external oracle for F2/F7 values (test fixtures); values only, not repaint behavior |
+| D-37 | F7 algorithm | CCI canonical (TradingView): source=hlc3, length=20, mean-abs-dev, ±100 thresholds |
+| D-38 | Workflow | Every CC prompt ends with REVIEW & GOAL-CONFORMANCE GATE; ACTUAL command output only; STOP on any FAIL |
+
+ADR additions:
+- **ADR-019:** Unified Feature Contract — every FeatureResult carries score + raw + render() → list[Primitive] (→ ChartSpec)
+- **ADR-020:** Visualization Architecture v2 — single HTML per symbol via LWC v5; Pine Script track dropped (amends ADR-009)
+- **ADR-021:** EOD-Faithful Real-Time Snapshot — analysis through last COMPLETE bar; forming bar excluded from F1-F7
 
 ---
 

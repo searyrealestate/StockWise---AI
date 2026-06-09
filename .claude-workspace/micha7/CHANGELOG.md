@@ -6,6 +6,25 @@
 
 ---
 
+## 2026-06-09 — Prompt 2.9a: Foundation Hardening (decisions + ADRs + bugs)
+
+### 2026-06-09T08:00:00Z — [DOC] D-27..D-38, ADR-019/020/021, KNOWN_BUGS B-14..B-37
+**Author:** Claude Code (executor) + Eyal
+#### Added
+- decisions_registry: D-27..D-38 (D-31/D-32 deferred)
+- DECISIONS.md: ADR-019 (unified feature contract), ADR-020 (viz arch v2, amends ADR-009), ADR-021 (EOD-faithful snapshot)
+- KNOWN_BUGS.md: B-14..B-37 (24 issues)
+- business_logic.local.md: §14 Day 7 decisions, Feature Contract note, F6 lookahead rule, Q1-Q4 closed
+- IMPLEMENTATION_PLAN.local.md: Prompts 2.9a/2.9b/2.10; §2 REVIEW gate; 3.8 -> CCI(20); R-07 resolved; R-01 hand-annotated mitigation
+#### Code/Tests
+- Zero code changes; 86/86 tests remain GREEN
+#### Verification
+- pytest GREEN (86); D-38 in registry; 24 B-rows in KNOWN_BUGS; ADR-019/020/021 in DECISIONS.md; §14 in business_logic; REVIEW gate in IMPL_PLAN §2
+#### Rationale
+- Persist Day 6-7 decisions into canonical docs before F6; eliminate CCI period contradiction (D-37); install review gate against partial CC execution
+
+---
+
 ## 2026-06-08 — Prompt 2.8: IMPLEMENTATION_PLAN §1 reorder + 3.2 dep fix (D-22 sync)
 
 ### 2026-06-08T07:45:00Z — [DOC] §1 prompt sequence reordered topologically + 3.2 dep updated

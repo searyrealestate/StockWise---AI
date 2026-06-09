@@ -36,6 +36,59 @@
 
 ---
 
+## Discovered Day 6-7 (B-14..B-37)
+
+### 🔴 Critical — Block F6 (B-14..B-17)
+
+| ID | Severity | File | Description | Decision / Resolution | Status |
+|----|----------|------|-------------|----------------------|--------|
+| **B-14** | 🔴 Critical | `features.py F6` | Lookahead bias in pivot detection — F6 spec must add "validated at T+N" rule | Pivot at T counted only at T+N; F6 receives `current_bar_index` (D-27) | Open→3.7 |
+| **B-15** | 🔴 Critical | `trade.py EntryPlanner` | Targets contract unclear (D-12) — what when T2/T3 missing? | `targets: list[float]` (1-3 elements) instead of fixed tuple | Open→5.1 |
+| **B-16** | 🔴 Critical | `features.py F1` | F1 Hammer upper wick not defined in spec — needs `upper_wick_max_ratio` | web_search for canonical definition + config param (default 0.3) | Open→3.2 |
+| **B-17** | 🔴 Critical | `features.py F5` | F5 gap definition ambiguous (strict vs open; fill check by low or close) | web_search + 2 config flags: `gap_strict_mode`, `gap_fill_check` | Open→3.6 |
+
+### 🟡 High — Break in Production (B-18..B-22)
+
+| ID | Severity | File | Description | Decision / Resolution | Status |
+|----|----------|------|-------------|----------------------|--------|
+| **B-18** | 🟡 High | `data.py` | Trading calendar not handled (holidays → MA20 inaccurate) | `pandas_market_calendars` or `business_days_only` config | Open→6.1 |
+| **B-19** | 🟡 High | `config.json, data.py` | min_rows=100 + N=5 = pivot last validated at T-5 only | D-28: raise min_rows to 200 | Resolved→2.9b |
+| **B-20** | 🟡 High | `data.py` | Data freshness not checked | `validate_freshness(max_staleness_days=3)` in validate() | Open→2.9b |
+| **B-21** | 🟡 High | `features.py F6` | Float comparison in clustering → nondeterminism cross-machine | `np.isclose(atol=1e-9)` + round to cents (D-29) | Open→3.7 |
+| **B-22** | 🟡 High | `SKILL_RULES_SUMMARY.md` | `eyal-dev-standards` skill never seen by Claude Code | Eyal uploads SKILL.md; Claude summarizes in `.claude-workspace/micha7/SKILL_RULES_SUMMARY.md` | Resolved |
+
+### 🟢 Medium — Not Blocking (B-23..B-25)
+
+| ID | Severity | File | Description | Decision / Resolution | Status |
+|----|----------|------|-------------|----------------------|--------|
+| **B-23** | 🟢 Medium | `backtest.py` | Symbol delisting / mergers / IPO < 100d | try/except + log + skip in 6.2 | Open→6.2 |
+| **B-24** | 🟢 Medium | `analyzer.py` | No liquidity threshold → F3 noise on small stocks | `min_avg_volume_20d` gate in 6.1 (default 1M) | Open→6.1 |
+| **B-25** | 🟢 Medium | `features.py F5` | Earnings gaps counted as pivots | Phase 2: yfinance earnings + flag | Deferred→Phase 2 |
+
+### 🔵 Architectural (B-26..B-27)
+
+| ID | Severity | File | Description | Decision / Resolution | Status |
+|----|----------|------|-------------|----------------------|--------|
+| **B-26** | 🔵 Arch | `features.py` | Missing unified raw contract for all F (only F4 and F6 defined) | ADR-019 — full raw contract for F1..F7 | Resolved→ADR-019 |
+| **B-27** | 🔵 Arch | `tests/conftest.py` | Test fixtures not realistic — needed for F6 too, not just F1 | Move B-08/B-09/B-10 fix from Prompt 3.2 to Prompt 3.7 | Open→3.7 |
+
+### Day 7 Additional Bugs (B-28..B-37)
+
+| ID | Severity | File | Description | Decision / Resolution | Status |
+|----|----------|------|-------------|----------------------|--------|
+| **B-28** | 🔴 High | `features.py F6` | "Find closest pair" tie-break undefined → non-determinism | Tie-break price asc then bar_index asc (D-29) | Open→3.7 |
+| **B-29** | 🔴 High | `features.py F6` | max([])/min([]) crash when a side has no level | Guard None | Open→3.7 |
+| **B-30** | 🟡 Med | `features.py F6` | strength uses ATR[touch] but clustering uses ATR[current] | Single ATR[current] (D-33) | Open→3.7 |
+| **B-31** | 🟡 Med | `features.py F6` | Summing strengths double-counts shared touch bars | Recompute strength vs centroid (unique bars) | Open→3.7 |
+| **B-32** | 🟡 Med | `chart.py, viewer` | Full-width S/R line hides T+N validation | valid_from=pivot+N, draw from there (D-35) | Open→2.10/3.7 |
+| **B-33** | 🟡 Med | `viewer` | v5 ESM+file:// breaks | Vendor standalone UMD | Open→2.10 |
+| **B-34** | 🟡 Med | `chart.py` | BEARISH collapsed for scoring but must be shown | render() uses true direction | Open→2.10 |
+| **B-35** | 🟡 Med | `features.py F3/F7` | Warmup NaN desyncs sub-pane | Whitespace points, full-length arrays | Open→3.4/3.8 |
+| **B-36** | 🟢 Low | `viewer` | v5 markers are a plugin | Verify bundle includes createSeriesMarkers | Open→3.2 |
+| **B-37** | 🟢 Low | `features.py F6` | Role-reversal not handled | Phase 1 document; Phase 2 flip | Note |
+
+---
+
 ## Resolved Bugs
 
 | ID | Description | Resolution | Commit |

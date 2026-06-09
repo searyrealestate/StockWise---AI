@@ -220,7 +220,7 @@ StockWise had a known issue: trust cache bleed between backtest and live runs. S
 
 ## ADR-009: Dual-Track Visualization (Local + TradingView)
 **Date:** 2026-05-21
-**Status:** Accepted
+**Status:** Accepted (Pine Script track amended by ADR-020)
 
 ### Context
 User explicitly requested TradingView integration. Need local visualization for development too.
@@ -495,6 +495,69 @@ Journal schema (Phase 1):
 - ✅ CSV manually importable to Google Sheets at any time
 - ✅ JSON queryable locally for any analysis
 - ⚠️ Phase 4+ requires Sheets adapter + credentials management
+
+---
+
+## ADR-019: Unified Feature Contract (extends ADR-004 ChartSpec)
+**Date:** 2026-06-13
+**Status:** Accepted
+
+### Context
+Raw contract defined only for F4 (D-08) and F6 (D-09); ADR-004 defined ChartSpec but not who populates it; viz needs were ad-hoc.
+
+### Decision
+Every FeatureResult carries `score` + `raw` (for ScoringEngine/EntryPlanner). Each feature also exposes `render(md, result, context) -> list[Primitive]` which populates the ChartSpec (ADR-004). Primitive vocabulary: `marker`, `hline`, `line`, `box`, `subpane_series`, `label`; each carries `style` (color, label) + optional `valid_from`.
+
+### Rationale
+Scoring data and drawing instructions are separate concerns; `render()` keeps the viewer generic (built once); supersedes the viz_hints-in-raw idea (D-08/D-09 raw schemas stay valid).
+
+### Consequences
+- ✅ Viewer built once; new feature only adds `render()`
+- ✅ Scoring and drawing decoupled
+- ⚠️ Each feature implements `render()`
+
+---
+
+## ADR-020: Visualization Architecture v2 (amends ADR-009)
+**Date:** 2026-06-13
+**Status:** Accepted (amends ADR-009)
+
+### Context
+ADR-009 chose Dual-Track HTML(LWC) + Pine Script. Day 7: TradingView display via Lightweight Charts only; Pine cannot render our Python-computed values without reimplementation + repaint/lookahead risk (B-32).
+
+### Decision
+Drop the Pine Script track. Phase 1 viz = one self-contained HTML per symbol via Lightweight Charts v5 (pin v5.1.0, Simulator alignment), vendored standalone UMD (ESM+file:// unsupported, B-33). Snapshot (not playback). Compute on 200 bars (D-28); display default 40 (`viewer.default_bars`), full by zoom. S/R drawn from `valid_from` (D-35). BEARISH rendered though scoring collapses it (B-34, D-07). ChartSpec (ADR-004) shaped Simulator-consumable (JSON only, no code coupling, D-24).
+
+### Rationale
+One renderer simpler; LWC already in ADR-009; Pine = risk + duplication for zero Phase-1 value.
+
+### Consequences
+- ✅ Offline, deterministic, generic viewer
+- ✅ Near-free future Simulator bridge
+- ⚠️ Pine/native deferred
+
+### Supersedes
+Pine track of ADR-009; the "Plotly" idea in ARCHITECTURE_INSIGHTS (never an ADR).
+
+---
+
+## ADR-021: EOD-Faithful Real-Time Snapshot (clarifies D-14)
+**Date:** 2026-06-13
+**Status:** Accepted
+
+### Context
+Eyal wants morning/midday/close checks; D-14 is EOD-only.
+
+### Decision
+Analyzer always computes through the last COMPLETE daily bar; current forming bar shown as partial/live, excluded from F1–F7 until it closes.
+
+### Rationale
+Stable reliable output at any time; faithful to EOD swing methodology; no intraday flicker.
+
+### Consequences
+- ✅ Check anytime, stable
+- ✅ Methodology-faithful
+- ⚠️ Intraday-timeframe analysis out of scope (Phase 2+)
 
 ---
 

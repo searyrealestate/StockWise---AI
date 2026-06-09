@@ -14,13 +14,16 @@
 | Prompt # | Module | What Gets Built | Dependencies | Min Acceptance |
 |----------|--------|-----------------|--------------|----------------|
 | **3.1** | features.py | BaseFeature ABC + FeatureDAG (topological sort, cycle detection, 2-level execution) | config, data | 35+ tests; DAG cycle test; Level 1 parallel, Level 2 sequential |
+| **2.9a** | docs | Decisions & Docs (append D-27–D-37 to decisions_registry; update IMPLEMENTATION_PLAN cross-ref table) | — | Registry rows D-27–D-37 present; plan cross-ref updated |
+| **2.9b** | config.json, data.py | Config + validate_freshness (min_rows → 200; cci.length=20, cci.source="hlc3"; D-28, D-37) | — | config keys present; validate_freshness passes; min_rows=200 |
+| **2.10** | viewer.py, chart.py | Visualizer Setup (LWC v5 standalone HTML per symbol; ADR-020; S/R from valid_from; bearish rendered) | 6.1 | HTML renders offline; S/R drawn from valid_from (D-35); bearish primitives present (D-07) |
 | **3.7** | features.py | F6 S/R (swing pivot detection, level clustering, raw_levels returned) — **R-01 (highest implementation risk)** | 3.1 | 5+ tests; D-09 return structure; proximity test; hand-annotated AAPL chart verification |
 | **3.2** | features.py | F1 Candle (Engulfing, Hammer, Harami, Doji, Shooting Star) | 3.1, 3.7 | 5+ tests per pattern; Hammer wick-ratio parameterized |
 | **3.3** | features.py | F2 Trend (MA20, slope, configurable lookback) | 3.1 | 5+ tests; slope direction test; SMA not EMA confirmed |
 | **3.4** | features.py | F3 Volume (volume_ratio, decay detection) | 3.1, 3.3 | 5+ tests; decay test; volume_ratio threshold parameterized |
 | **3.5** | features.py | F4 Distance (ATR-normalized, raw_distance returned) | 3.1 | 5+ tests; raw_distance sign verified; D-08 return structure |
 | **3.6** | features.py | F5 Price gaps (unfilled gap detection; distinct from calendar gap) | 3.1 | 5+ tests; D-17 gap naming; no-gap fixture + gap fixture |
-| **3.8** | features.py | F7 CCI(14) (Lambert formula, ±100 thresholds) | 3.1 | 5+ tests; ±100 zone; period=14 not 20 |
+| **3.8** | features.py | F7 CCI(20), hlc3 source, mean-abs-dev, ±100 (D-37) | 3.1 | 5+ tests; ±100 zone; period=20, source=hlc3, mean-abs-dev (D-37) |
 | **3.9** | features.py | ScoringEngine (bullish/bearish/empty aggregation, traffic light, D-06/D-07) | 3.2–3.8 | Score fraction + pct; traffic light mapping; bearish_count logged |
 | **4.1** | state.py | StateManager + WriteAheadLog (atomic writes, schema versioning, recovery) | features | Atomic test; WAL replay test; schema migration test |
 | **4.2** | state.py | PivotDetector (5-state machine; D-04, D-10 composite trigger) | 4.1, features | All 5 states tested; pivot composite condition test; invalidation test |
@@ -88,6 +91,23 @@ Fixed timestamps — do not generate.
 - No StockWise imports
 - No network calls in unit tests
 - All tests offline
+
+## 🔍 REVIEW & GOAL-CONFORMANCE GATE (run after implementation, BEFORE staging)
+RULE: every number/claim below MUST come from ACTUAL command output in this session — never from memory or summary.
+
+1. GOAL restated (one line): <the prompt's goal>.
+
+2. Per acceptance criterion — run its verifying command, paste the REAL output, mark PASS/FAIL:
+   | # | Criterion | Command | Actual output | PASS/FAIL |
+
+3. COMPLETENESS: run `git status --short`. Confirm EVERY file in the File Manifest appears, and NO file outside it changed. List any missing or extra.
+
+4. GOAL CONFORMANCE: in 2-3 sentences, point to CONCRETE evidence that the stated GOAL is achieved (not just "tests pass"). If you cannot point to evidence, mark FAIL.
+
+5. REGRESSION: paste actual `pytest -q micha7/tests/` count; must equal the expected count.
+
+6. VERDICT: ALL PASS -> stage only (no commit), print the commit command.
+   ANY FAIL, or any STEP skipped -> STOP. Stage nothing. Report exactly what is missing.
 ```
 
 ---
@@ -123,13 +143,13 @@ Fixed timestamps — do not generate.
 
 | Risk ID | Description | Probability | Impact | Mitigation |
 |---------|-------------|-------------|--------|------------|
-| R-01 | F6 S/R algorithm doesn't match Micha's visual lines | High | High | Test against hand-annotated AAPL chart; parameterize N and cluster threshold; add to acceptance criteria |
+| R-01 | F6 S/R algorithm doesn't match Micha's visual lines | High | High | Test against hand-annotated AAPL chart; parameterize N and cluster threshold; add to acceptance criteria. Hand-annotated AAPL test: Eyal marks 5-10 levels; F6 must miss < 20%. |
 | R-02 | F1 wick-ratio thresholds wrong | Medium | Medium | `hammer_wick_ratio` in config.json; backtest sweep 1.5x, 2x, 2.5x |
 | R-03 | Stop too tight (1% may not work for volatile symbols) | Medium | Medium | ATR-based fallback as config option; flag in KNOWN_BUGS.md after backtest |
 | R-04 | features.py exceeds 800 LOC split trigger | Medium | Low | Monitor LOC at each feature prompt; split if F6 or ScoringEngine push it over; IMP-004 |
 | R-05 | compute_atr Python loop is slow for large backtests | Low | Medium | Benchmark in Prompt 6.2; vectorize if 90-day run > 5 seconds (B-01) |
 | R-06 | PivotDetector composite condition too strict — no trades | Medium | High | Tune D-10 thresholds in backtest; log condition-by-condition breakdown |
-| R-07 | CCI period 14 too sensitive vs standard 20 | Low | Low | Parameterize; compare 14 vs 20 in backtest report |
+| R-07 | CCI period 14 too sensitive vs standard 20 | Low | Low | Resolved — CCI fixed at 20 (canonical, D-37). |
 
 ---
 
