@@ -32,6 +32,10 @@ class DataValidationError(DataError):
     """Raised when OHLCV data fails validation (Fail-Loud)."""
 
 
+class DataFreshnessError(DataValidationError):
+    """Raised when the latest bar is staler than max_staleness_days vs as_of (B-20)."""
+
+
 class DataFetchError(DataError):
     """Raised when a provider exhausts all retries without success."""
 
@@ -207,8 +211,9 @@ def compute_returns(df: pd.DataFrame) -> pd.Series:
 # ---------------------------------------------------------------------------
 
 _DEFAULT_ATR_PERIOD = 14
-_DEFAULT_MIN_ROWS = 100
+_DEFAULT_MIN_ROWS = 200
 _DEFAULT_MAX_GAP_DAYS = 5
+_DEFAULT_MAX_STALENESS_DAYS = 3
 
 
 class DataAdapter:
@@ -237,10 +242,15 @@ class DataAdapter:
             self._max_gap_days = loader.get(
                 "data.max_gap_days", default=_DEFAULT_MAX_GAP_DAYS, expected_type=int
             )
+            self._max_staleness_days = loader.get(
+                "data.max_staleness_days", default=_DEFAULT_MAX_STALENESS_DAYS,
+                expected_type=int, min_val=0, max_val=365,
+            )
         else:
             self._atr_period = _DEFAULT_ATR_PERIOD
             self._min_rows = _DEFAULT_MIN_ROWS
             self._max_gap_days = _DEFAULT_MAX_GAP_DAYS
+            self._max_staleness_days = _DEFAULT_MAX_STALENESS_DAYS
 
     # ------------------------------------------------------------------
     # Public API
@@ -255,6 +265,7 @@ class DataAdapter:
         raw = self._provider.get_ohlcv(symbol, start, end)
         df = self.normalize(raw)
         self.validate(df)
+        self.validate_freshness(df, as_of=end)
         calendar_gaps = self.detect_calendar_gaps(df)
         atr = compute_atr(df, self._atr_period)
         returns = compute_returns(df)
@@ -347,6 +358,30 @@ class DataAdapter:
             _fail(
                 f"Too few rows: {len(df)} < min_rows={self._min_rows}"
             )
+
+    def validate_freshness(self, df: pd.DataFrame, as_of: str) -> None:
+        """Deterministic freshness guard — compares last bar to as_of, never datetime.now() (ADR-002, B-20).
+
+        Raises DataFreshnessError when (as_of - last_bar).days > max_staleness_days.
+        """
+        if len(df) == 0:
+            raise DataFreshnessError("Cannot assess freshness of empty data")
+        as_of_ts = pd.Timestamp(as_of).normalize()
+        last_bar = df.index[-1].normalize()
+        staleness = (as_of_ts - last_bar).days
+        if staleness > self._max_staleness_days:
+            msg = (
+                f"Stale data: last bar {last_bar.date()} is {staleness} days "
+                f"before as_of {as_of_ts.date()} "
+                f"(max_staleness_days={self._max_staleness_days})"
+            )
+            self._log("WARNING", "data_freshness_failed", msg, {
+                "last_bar": str(last_bar.date()),
+                "as_of": str(as_of_ts.date()),
+                "staleness_days": staleness,
+                "max_staleness_days": self._max_staleness_days,
+            })
+            raise DataFreshnessError(msg)
 
     def detect_calendar_gaps(self, df: pd.DataFrame) -> list[dict]:
         """Return a list of calendar gaps exceeding max_gap_days.

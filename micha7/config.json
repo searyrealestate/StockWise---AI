@@ -11,8 +11,9 @@
   },
   "data": {
     "atr_period": 14,
-    "min_rows": 100,
+    "min_rows": 200,
     "max_gap_days": 5,
+    "max_staleness_days": 3,
     "yfinance": {
       "retry_count": 3,
       "retry_backoff_seconds": 1.0,
@@ -21,8 +22,21 @@
   },
   "features": {
     "candle": { "hammer_wick_ratio": 2.0 },
-    "cci":    { "overbought": 100, "oversold": -100 },
-    "sr":     { "lookback_n": 5, "cluster_atr": 0.5 },
-    "gap":    { "max_age_bars": 60 }
+    "cci": {
+      "length": 14,
+      "source": "hlc3",
+      "overbought": 100,
+      "oversold": -100
+    },
+    "sr": {
+      "lookback_n": 5,
+      "cluster_atr": 0.5,
+      "top_k": 5,
+      "proximity_window_atr": 10.0,
+      "score_proximity_atr": 0.5,
+      "float_epsilon": 1e-9,
+      "price_round_decimals": 2
+    },
+    "gap": { "max_age_bars": 60 }
   }
 }

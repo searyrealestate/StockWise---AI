@@ -6,6 +6,26 @@
 
 ---
 
+## 2026-06-22 — Prompt 2.9b: Config seeds + deterministic validate_freshness
+
+### 2026-06-22T12:00:00Z — [CONFIG][CODE][TEST] B-20 freshness guard + F6/F7 config seeds
+**Author:** Claude Code (executor) + Eyal
+#### Changed
+- `config.json` — `data.min_rows`: 100 → 200; `data.max_staleness_days`: 3 (NEW); `features.cci.length`: 14 (NEW, D-43); `features.cci.source`: "hlc3" (NEW, D-37); `features.sr.top_k`: 5; `features.sr.proximity_window_atr`: 10.0; `features.sr.score_proximity_atr`: 0.5; `features.sr.float_epsilon`: 1e-9; `features.sr.price_round_decimals`: 2 (all NEW). Existing keys untouched.
+- `micha7/data.py` — `_DEFAULT_MIN_ROWS`: 100 → 200; `_DEFAULT_MAX_STALENESS_DAYS`: 3 (NEW constant); `DataFreshnessError(DataValidationError)` (NEW exception, B-20); `DataAdapter.__init__`: reads `data.max_staleness_days` with range [0, 365]; `validate_freshness(df, as_of)` (NEW method, deterministic — compares last bar to as_of, never datetime.now(), ADR-002); `fetch()`: calls `validate_freshness(df, as_of=end)` after `validate(df)`.
+- `micha7/tests/test_data.py` — `_loader_with_defaults` data dict: +`max_staleness_days: 365` (permissive guard for existing fetch test); +`_make_fresh_df` helper; +`_strict_loader` helper; 11 new tests.
+#### Tests
+- Added: test_max_staleness_days_loads_default, test_max_staleness_days_loads_custom, test_max_staleness_days_out_of_range_raises, test_validate_freshness_passes_when_fresh, test_validate_freshness_raises_when_stale, test_validate_freshness_boundary, test_validate_freshness_deterministic_uses_as_of_not_now, test_fetch_raises_on_stale_data, test_min_rows_default_is_200, test_cci_seed_keys_load, test_sr_seed_keys_load
+- Total: 86 → 97 passing
+#### Logging
+- `validate_freshness` emits WARNING event `data_freshness_failed` with context `{last_bar, as_of, staleness_days, max_staleness_days}` before raising (simulator-readable).
+#### Verification
+- `python -m py_compile micha7/data.py tests/test_data.py` → OK
+- `python -m json.tool config.json` → valid JSON
+- `pytest tests/ -q` → 97/97 GREEN
+
+---
+
 ## 2026-06-09 — Prompt 2.9a: Foundation Hardening (decisions + ADRs + bugs)
 
 ### 2026-06-09T08:00:00Z — [DOC] D-27..D-38, ADR-019/020/021, KNOWN_BUGS B-14..B-37

@@ -14,6 +14,7 @@ from micha7.data import (
     BaseDataProvider,
     DataAdapter,
     DataFetchError,
+    DataFreshnessError,
     DataValidationError,
     MarketData,
     YFinanceProvider,
@@ -48,6 +49,7 @@ def _loader_with_defaults(tmp_path):
                     "atr_period": 14,
                     "min_rows": 30,
                     "max_gap_days": 5,
+                    "max_staleness_days": 365,
                     "yfinance": {
                         "retry_count": 3,
                         "retry_backoff_seconds": 0.0,
@@ -407,3 +409,243 @@ def test_log_falls_back_to_module_logger_when_none(tmp_path, caplog):
     assert "hello from b12" in log_text, (
         "_log() must emit to 'micha7.data' module logger when self._logger is None"
     )
+
+
+# ---------------------------------------------------------------------------
+# 2.9b: max_staleness_days config + DataFreshnessError + validate_freshness
+# ---------------------------------------------------------------------------
+
+
+def _make_fresh_df(last_date: str, nrows: int = 30) -> pd.DataFrame:
+    """Build a minimal valid OHLCV DataFrame ending on *last_date*."""
+    dates = pd.bdate_range(end=last_date, periods=nrows)
+    pattern = [
+        {"open": 100.0, "high": 105.0, "low": 98.0,  "close": 103.0, "volume": 1_000_000},
+        {"open": 103.0, "high": 107.0, "low": 101.0, "close": 106.0, "volume": 1_200_000},
+        {"open": 106.0, "high": 108.0, "low": 103.0, "close": 104.0, "volume":   900_000},
+        {"open": 104.0, "high": 106.0, "low":  99.0, "close": 100.0, "volume": 1_100_000},
+        {"open": 100.0, "high": 102.0, "low":  97.0, "close": 101.0, "volume":   800_000},
+    ]
+    rows = [pattern[i % 5] for i in range(nrows)]
+    return pd.DataFrame(rows, index=pd.DatetimeIndex(dates))
+
+
+def _strict_loader(tmp_path, max_staleness_days: int = 3, min_rows: int = 30):
+    """Return a loader with strict max_staleness_days and configurable min_rows."""
+    import json
+
+    from micha7.config import ConfigLoader
+
+    cfg = tmp_path / f"config_strict_ms{max_staleness_days}.json"
+    cfg.write_text(
+        json.dumps({
+            "meta": {"name": "micha7_analyzer", "config_version": "1.0.0"},
+            "logging": {"level": "INFO", "format": "json",
+                        "directory": str(tmp_path / "logs"), "console": False},
+            "data": {
+                "atr_period": 14,
+                "min_rows": min_rows,
+                "max_gap_days": 5,
+                "max_staleness_days": max_staleness_days,
+                "yfinance": {"retry_count": 3, "retry_backoff_seconds": 0.0, "auto_adjust": True},
+            },
+        }),
+        encoding="utf-8",
+    )
+    loader = ConfigLoader(config_path=cfg, local_path=tmp_path / "config.local.json")
+    loader.load()
+    return loader
+
+
+def test_max_staleness_days_loads_default(tmp_path):
+    """When max_staleness_days absent from config, adapter._max_staleness_days == 3."""
+    import json
+
+    from micha7.config import ConfigLoader
+
+    cfg = tmp_path / "config_no_ms.json"
+    cfg.write_text(
+        json.dumps({
+            "meta": {"name": "micha7_analyzer", "config_version": "1.0.0"},
+            "logging": {"level": "INFO", "format": "json",
+                        "directory": str(tmp_path / "logs"), "console": False},
+            "data": {
+                "atr_period": 14, "min_rows": 30, "max_gap_days": 5,
+                # max_staleness_days intentionally absent — must default to 3
+                "yfinance": {"retry_count": 3, "retry_backoff_seconds": 0.0, "auto_adjust": True},
+            },
+        }),
+        encoding="utf-8",
+    )
+    loader = ConfigLoader(config_path=cfg, local_path=tmp_path / "config.local.json")
+    loader.load()
+    adapter = DataAdapter(provider=None, loader=loader)
+    assert adapter._max_staleness_days == 3
+
+
+def test_max_staleness_days_loads_custom(tmp_path):
+    """Config sets max_staleness_days=7 → adapter reads 7."""
+    loader = _strict_loader(tmp_path, max_staleness_days=7)
+    adapter = DataAdapter(provider=None, loader=loader)
+    assert adapter._max_staleness_days == 7
+
+
+def test_max_staleness_days_out_of_range_raises(tmp_path):
+    """max_staleness_days outside [0, 365] must raise ConfigError at adapter init."""
+    import json
+
+    from micha7.config import ConfigError, ConfigLoader
+
+    for bad_value in (-1, 500):
+        cfg = tmp_path / f"config_ms_bad_{bad_value}.json"
+        cfg.write_text(
+            json.dumps({
+                "meta": {"name": "micha7_analyzer", "config_version": "1.0.0"},
+                "logging": {"level": "INFO", "format": "json",
+                            "directory": str(tmp_path / "logs"), "console": False},
+                "data": {
+                    "atr_period": 14, "min_rows": 30, "max_gap_days": 5,
+                    "max_staleness_days": bad_value,
+                    "yfinance": {"retry_count": 3, "retry_backoff_seconds": 0.0, "auto_adjust": True},
+                },
+            }),
+            encoding="utf-8",
+        )
+        loader = ConfigLoader(config_path=cfg, local_path=tmp_path / "config.local.json")
+        loader.load()
+        with pytest.raises(ConfigError):
+            DataAdapter(provider=None, loader=loader)
+
+
+def test_validate_freshness_passes_when_fresh(tmp_path):
+    """validate_freshness does not raise when last bar == as_of."""
+    loader = _loader_with_defaults(tmp_path)
+    adapter = DataAdapter(provider=None, loader=loader)
+    adapter._max_staleness_days = 3
+    df = _make_fresh_df("2025-03-31", nrows=30)
+    # staleness = 0 → no raise
+    adapter.validate_freshness(df, as_of="2025-03-31")
+
+
+def test_validate_freshness_raises_when_stale(tmp_path):
+    """validate_freshness raises DataFreshnessError with 'Stale' in message."""
+    loader = _loader_with_defaults(tmp_path)
+    adapter = DataAdapter(provider=None, loader=loader)
+    adapter._max_staleness_days = 3
+    df = _make_fresh_df("2020-01-10", nrows=30)
+    with pytest.raises(DataFreshnessError, match="Stale"):
+        adapter.validate_freshness(df, as_of="2025-01-10")
+
+
+def test_validate_freshness_boundary(tmp_path):
+    """staleness == max passes; staleness == max+1 raises."""
+    loader = _loader_with_defaults(tmp_path)
+    adapter = DataAdapter(provider=None, loader=loader)
+    adapter._max_staleness_days = 3
+    df = _make_fresh_df("2020-01-10", nrows=30)
+    # staleness == 3 → passes
+    adapter.validate_freshness(df, as_of="2020-01-13")
+    # staleness == 4 → raises
+    with pytest.raises(DataFreshnessError):
+        adapter.validate_freshness(df, as_of="2020-01-14")
+
+
+def test_validate_freshness_deterministic_uses_as_of_not_now(tmp_path):
+    """validate_freshness compares to as_of, not datetime.now().
+
+    last bar 2020-01-10, as_of '2020-01-13', max=3 → staleness=3 → passes.
+    If the method compared to today (~2026-06-22) staleness >> 3 and this would raise.
+    """
+    loader = _loader_with_defaults(tmp_path)
+    adapter = DataAdapter(provider=None, loader=loader)
+    adapter._max_staleness_days = 3
+    df = _make_fresh_df("2020-01-10", nrows=30)
+    # Must not raise — proves comparison is to as_of, not datetime.now()
+    adapter.validate_freshness(df, as_of="2020-01-13")
+
+
+def test_fetch_raises_on_stale_data(tmp_path):
+    """fetch() propagates DataFreshnessError when provider returns stale data."""
+    # 200-row provider ending far in the past; strict loader; much-later end
+    stale_df = _make_fresh_df("2020-01-10", nrows=200)
+
+    class _StaleProvider(BaseDataProvider):
+        def get_ohlcv(self, symbol, start, end):
+            return stale_df.copy()
+
+    loader = _strict_loader(tmp_path, max_staleness_days=3, min_rows=200)
+    adapter = DataAdapter(provider=_StaleProvider(), loader=loader)
+    with pytest.raises(DataFreshnessError):
+        adapter.fetch("TEST", "2020-01-01", "2025-01-15")
+
+
+def test_min_rows_default_is_200():
+    """_DEFAULT_MIN_ROWS must be 200 (changed from 100 in 2.9b, B-20)."""
+    from micha7.data import _DEFAULT_MIN_ROWS
+    assert _DEFAULT_MIN_ROWS == 200
+
+
+def test_cci_seed_keys_load(tmp_path):
+    """features.cci.length=14 and features.cci.source='hlc3' load with type/range validation."""
+    import json
+
+    from micha7.config import ConfigLoader
+
+    cfg = tmp_path / "config_cci_seed.json"
+    cfg.write_text(
+        json.dumps({
+            "meta": {"name": "micha7_analyzer", "config_version": "1.0.0"},
+            "logging": {"level": "INFO", "format": "json",
+                        "directory": str(tmp_path / "logs"), "console": False},
+            "data": {
+                "atr_period": 14, "min_rows": 30, "max_gap_days": 5,
+                "yfinance": {"retry_count": 3, "retry_backoff_seconds": 0.0, "auto_adjust": True},
+            },
+            "features": {
+                "cci": {"length": 14, "source": "hlc3", "overbought": 100, "oversold": -100},
+            },
+        }),
+        encoding="utf-8",
+    )
+    loader = ConfigLoader(config_path=cfg, local_path=tmp_path / "config.local.json")
+    loader.load()
+    assert loader.get("features.cci.length", expected_type=int, min_val=2, max_val=200) == 14
+    assert loader.get("features.cci.source") == "hlc3"
+
+
+def test_sr_seed_keys_load(tmp_path):
+    """features.sr seed keys load with correct values and range constraints."""
+    import json
+
+    from micha7.config import ConfigLoader
+
+    cfg = tmp_path / "config_sr_seed.json"
+    cfg.write_text(
+        json.dumps({
+            "meta": {"name": "micha7_analyzer", "config_version": "1.0.0"},
+            "logging": {"level": "INFO", "format": "json",
+                        "directory": str(tmp_path / "logs"), "console": False},
+            "data": {
+                "atr_period": 14, "min_rows": 30, "max_gap_days": 5,
+                "yfinance": {"retry_count": 3, "retry_backoff_seconds": 0.0, "auto_adjust": True},
+            },
+            "features": {
+                "sr": {
+                    "lookback_n": 5, "cluster_atr": 0.5,
+                    "top_k": 5,
+                    "proximity_window_atr": 10.0,
+                    "score_proximity_atr": 0.5,
+                    "float_epsilon": 1e-9,
+                    "price_round_decimals": 2,
+                },
+            },
+        }),
+        encoding="utf-8",
+    )
+    loader = ConfigLoader(config_path=cfg, local_path=tmp_path / "config.local.json")
+    loader.load()
+    assert loader.get("features.sr.top_k", expected_type=int, min_val=1, max_val=50) == 5
+    assert loader.get("features.sr.proximity_window_atr", min_val=0.5, max_val=100.0) == 10.0
+    assert loader.get("features.sr.score_proximity_atr", min_val=0.0, max_val=10.0) == 0.5
+    assert loader.get("features.sr.float_epsilon", min_val=0.0) == pytest.approx(1e-9)
+    assert loader.get("features.sr.price_round_decimals", expected_type=int, min_val=0, max_val=10) == 2
